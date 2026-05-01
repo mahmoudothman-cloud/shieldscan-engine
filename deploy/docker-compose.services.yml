@@ -1,0 +1,73 @@
+# shieldscan-engine — persistent Docker service definitions
+#
+# Used for local development + CI integration runs. M7 task implementations
+# (MobSF, ZAP, Trivy, SQLMap runners) consume these services via the
+# DockerServiceRunner type from internal/tools/docker_service.go.
+#
+# Local dev usage:
+#   docker-compose -f deploy/docker-compose.services.yml up -d
+#
+# Image pins MUST match VERSIONS.md §2.5 — the validation test
+# deploy/docker_compose_test.go grep-checks pinned tags.
+#
+# In production, tags should be replaced with image@sha256:<digest>
+# per VERSIONS.md guidance to prevent image substitution attacks.
+
+version: '3.8'
+
+services:
+  mobsf:
+    image: opensecurity/mobile-security-framework-mobsf:v4.4.6
+    container_name: shieldscan-mobsf
+    ports:
+      - "8000:8000"
+    environment:
+      MOBSF_API_KEY: ${MOBSF_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  zap:
+    image: zaproxy/zap-stable:2.16.0
+    container_name: shieldscan-zap
+    command: zap.sh -daemon -port 8080 -host 0.0.0.0 -config api.disablekey=true
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/JSON/core/view/version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  trivy:
+    image: aquasec/trivy:0.58.0
+    container_name: shieldscan-trivy
+    command: server --listen 0.0.0.0:4954
+    ports:
+      - "4954:4954"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4954/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  sqlmap:
+    image: paoloo/sqlmap:1.9
+    container_name: shieldscan-sqlmap
+    ports:
+      - "8775:8775"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8775/version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped

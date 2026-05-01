@@ -60,6 +60,27 @@ func TestConfig_WorkerConcurrencyDefault(t *testing.T) {
 	require.Error(t, err, "non-numeric rejected")
 }
 
+// TestConfig_DrainGraceDefault pins the SHIELDSCAN_DRAIN_GRACE_SECONDS
+// default + override (per Task 5.6 H.9). Symmetric with concurrency
+// validation: invalid values rejected at load.
+func TestConfig_DrainGraceDefault(t *testing.T) {
+	t.Setenv("SHIELDSCAN_REDIS_URL", "redis://localhost:6379/0")
+	t.Setenv("SHIELDSCAN_DRAIN_GRACE_SECONDS", "")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	assert.Equal(t, 60, cfg.DrainGraceSeconds, "Task 5.6 default")
+
+	t.Setenv("SHIELDSCAN_DRAIN_GRACE_SECONDS", "120")
+	cfg, err = Load()
+	require.NoError(t, err)
+	assert.Equal(t, 120, cfg.DrainGraceSeconds)
+
+	t.Setenv("SHIELDSCAN_DRAIN_GRACE_SECONDS", "0")
+	_, err = Load()
+	require.Error(t, err)
+}
+
 // TestConfig_RedisURLRequired pins the only required env var.
 // Without SHIELDSCAN_REDIS_URL the worker has nothing to consume from
 // and Load() returns an error.

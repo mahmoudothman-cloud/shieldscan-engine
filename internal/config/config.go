@@ -54,6 +54,16 @@ type Config struct {
 
 	// SentryDSN enables Sentry telemetry when non-empty.
 	SentryDSN string
+
+	// DrainGraceSeconds is the maximum time main() waits for in-flight
+	// jobs to drain after SIGTERM/SIGINT before forcing exit. Default
+	// 60s — long enough for typical scan completion; short enough that
+	// container orchestrators don't kill the process first.
+	//
+	// Per Task 5.5 H.6: 5.5 ships graceful drain only via wg.Wait();
+	// 5.6 main() adds the bounded grace period via select on
+	// runDone vs time.After(DrainGraceSeconds).
+	DrainGraceSeconds int
 }
 
 // Load reads environment variables and returns a populated Config.
@@ -91,6 +101,15 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("SHIELDSCAN_WORKER_CONCURRENCY must be >= 1 (got %d)", concurrency)
 	}
 	cfg.WorkerConcurrency = concurrency
+
+	drainGrace, err := envInt("SHIELDSCAN_DRAIN_GRACE_SECONDS", 60)
+	if err != nil {
+		return nil, fmt.Errorf("SHIELDSCAN_DRAIN_GRACE_SECONDS: %w", err)
+	}
+	if drainGrace < 1 {
+		return nil, fmt.Errorf("SHIELDSCAN_DRAIN_GRACE_SECONDS must be >= 1 (got %d)", drainGrace)
+	}
+	cfg.DrainGraceSeconds = drainGrace
 
 	if cfg.RedisURL == "" {
 		return nil, errors.New("SHIELDSCAN_REDIS_URL is required")

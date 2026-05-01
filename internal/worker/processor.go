@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 
 	"github.com/odyssey/shieldscan-engine/internal/events"
@@ -63,6 +64,32 @@ type Processor struct {
 	cancelSubFn    func(context.Context, string) (cancelSubscriber, error)
 	completionsPub completionsPublisher
 	log            zerolog.Logger
+}
+
+// NewProcessorFromRedis is a convenience constructor that wires a
+// Processor against a single *redis.Client. Builds the
+// IdempotencyClaim + CompletionsPublisher + per-scan factory
+// closures internally.
+//
+// Used by cmd/worker/main.go (5.6) for production wiring; tests use
+// NewProcessor directly with custom mock factories.
+//
+// Why this exists: ProcessorDeps's factory fields take unexported
+// interface types (progressPublisher, cancelSubscriber) so tests in
+// this package can inject mocks. main.go can't construct values of
+// those unexported types from outside the package, so this
+// convenience constructor handles the wiring inside the package.
+func NewProcessorFromRedis(registry *Registry, client *goredis.Client, log zerolog.Logger) *Processor {
+	return NewProcessor(ProcessorDeps{
+		Registry:            registry,
+		IdempotencyClaim:    rdsh.NewIdempotencyClaim(client),
+		ProgressPublisherFn: func(scanID string) progressPublisher { return rdsh.NewProgressPublisher(client, scanID) },
+		CancelSubscriberFn: func(ctx context.Context, scanID string) (cancelSubscriber, error) {
+			return rdsh.NewCancelSubscriber(ctx, client, scanID)
+		},
+		CompletionsPublisher: rdsh.NewCompletionsPublisher(client),
+		Logger:               log,
+	})
 }
 
 // NewProcessor constructs a Processor from injected deps. Required

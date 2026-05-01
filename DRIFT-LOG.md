@@ -8,6 +8,166 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+### 2026-05-01 — Task 5.6: worker startup + heartbeat + main.go integration
+
+**Files shipped:** `internal/worker/heartbeat.go` + test (5 tests) · `internal/worker/startup.go` + test (6 tests) · `cmd/worker/main.go` (refactored — Phase 0 ping + signal handling) · `cmd/worker/run.go` (NEW — `runMain(ctx, deps)` extraction per H.12) + test (6 tests) · `deploy/docker-compose.services.yml` + `deploy/docker_compose_test.go` (5 tests) · `internal/worker/processor.go` extension (`NewProcessorFromRedis` convenience constructor) · `internal/config/config.go` extension (`DrainGraceSeconds` field) + test.
+
+**25 net-new tests at 5.6 close** (vs planned 17 — extras: NonExecutableBinaryWarns, NativeBinaryFoundLogsSuccess, RawDoesNotContainSecrets, ShortUUID_Distinct, GenerateWorkerID_Format, DrainGraceDefault). Engine total: **135 tests** across 8 packages. Race-clean, vet-clean, golangci-lint v2 reports 0 issues. Worker binary builds cleanly.
+
+**Worker-lifetime services pattern: 2 instances now (Worker, Heartbeat)**, not yet promoted to DEVELOPMENT-PATTERNS.md per user's H.4 nuance. ADR-021 Rule 3 carve-out covers the pattern; explicit DEVELOPMENT-PATTERNS.md entry awaits a third instance (potential candidates: M6+ metrics emitter, M7.5 warm pool manager, idempotency-cleanup service).
+
+**Force-cancel grace period via select on runDone vs time.After.** Default 60s via `SHIELDSCAN_DRAIN_GRACE_SECONDS` env var (per H.9). Pattern: SIGTERM → workerCtx cancels → main observes → race Worker.Run completion vs grace timer; `os.Exit(2)` if timer wins.
+
+**No forcing-function self-catch on this task specifically.** The 5.5 discrimination semantics retrospective was the M5 highlight; 5.6 is integration-heavy and the patterns are established.
+
+### 2026-05-01 — Task 5.6: Heartbeat as worker-lifetime service
+
+**Pin.** `internal/worker.Heartbeat` is a standalone type implementing the ADR-021 Rule 3 worker-lifetime services carve-out. Receives `workerRootCtx` from `main()` (via `runMain(ctx, deps)`); never constructs `context.Background()` itself.
+
+**Two ctx-aware exit paths** in `Run` loop: `<-ctx.Done()` returns `ctx.Err()`; `<-ticker.C` with write-failure logs at WARN and continues. goleak in `cmd/worker/run_test.go` TestMain verifies leak-clean across tests.
+
+**Currently the second worker-lifetime service after Worker itself.** Pattern not yet promoted to DEVELOPMENT-PATTERNS.md pending third instance. Documented in Heartbeat godoc + this entry. ADR-021 Rule 3 already covers the pattern; explicit DEVELOPMENT-PATTERNS.md entry can wait.
+
+### 2026-05-01 — Task 5.6: TTL-only worker expiry (no Del on shutdown)
+
+**Decision.** `Heartbeat.Run` does NOT `DEL` the worker key on shutdown. Symmetric handling: clean shutdown and crash both rely on TTL expiry (60s default).
+
+**Trade-off acknowledged.** 60s "ghost worker" entries appear in ops dashboards after restart. Operationally low-noise — orchestrator logic should already tolerate the case where a worker key exists but no jobs are being claimed (the orchestrator's worker-routing layer reads the key to decide where to dispatch; a ghost worker briefly looks "available" but jobs queued to it stall and re-dispatch via the ghost-queued janitor).
+
+**Trigger to revisit:** ops dashboards genuinely confused by ghost entries causing incorrect operational decisions (not just the entries' existence). At MVP scale with single-digit workers, the trigger almost certainly never fires. Acceptable.
+
+### 2026-05-01 — Task 5.6: Phase 2 fail-soft at 5.6 (forward-pin to M7)
+
+**Pin.** Startup Phase 2 (Docker services healthcheck) is fail-soft at 5.6 because empty registry means no services to check. Pattern documented in `Startup.checkDockerServices` godoc.
+
+**Trigger to switch from fail-soft to fail-fast:** M7 task constructors register `*DockerServiceRunner` instances with `HealthPath` set, AND the corresponding tool is operationally required (not optional). Each M7 task scope-proposal decides per-tool whether the service warrants fail-fast on health check.
+
+**Same pattern applies to Phase 1** (native binaries). Fail-soft until M6 task constructors register tools that are required vs optional.
+
+**5.6 ships the 4-phase scaffolding;** M6/M7 task scope proposals decide phase semantics per their tool's operational requirements.
+
+### 2026-05-01 — Task 5.6: /health HTTP endpoint deferred to OPS milestone
+
+**Pin.** Worker `/health` HTTP endpoint deferred to OPS milestone. Plan literal §5.6 mentioned `health.go` as a separate file; 5.6 implementation does NOT include it.
+
+**Trigger to revisit:** ops needs runtime worker health observable from outside the worker process. Concrete signals:
+- Kubernetes liveness/readiness probes need an HTTP endpoint (when M5+ deploys to K8s).
+- Pull-based monitoring infrastructure (Prometheus scraping) needs an exposition endpoint.
+- Orchestrator-side worker-routing logic needs a runtime health signal beyond TTL expiry.
+
+**Current 5.6 health surface:**
+- Phase 0 Redis ping at startup (fail-fast if Redis unreachable).
+- Heartbeat key TTL (orchestrator infers worker liveness from TTL refresh).
+
+These cover MVP without an HTTP `/health` endpoint.
+
+### 2026-05-01 — Task 5.6: empty-registry startup behavior
+
+**Pin.** 5.6 ships with empty `Registry`; M6+ task constructors populate engines via the `worker.NewRegistry(map[string]tools.ToolRunner{...})` call site in `cmd/worker/run.go`.
+
+**Startup logs an explicit WARN** when `Registry.Engines()` returns empty so operators don't silently run a no-op worker. The warning message:
+
+> "worker started with empty registry; no jobs will be processed until tool runners are registered. Tool runners are registered by M6+ task constructors (e.g., NativeRunner for Nuclei in M6.1). If this is unexpected, check that your worker binary was built with the desired M6+ task code."
+
+**Without this warning,** an operator running the 5.6 binary in production would see jobs queue up and never process, with no clear diagnostic. The warning makes the no-tools state actionable.
+
+### 2026-05-01 — Task 5.6: runMain extraction for testability
+
+**Pattern.** `cmd/worker/main.go` delegates the bulk of its assembly + lifecycle to `cmd/worker/run.go`'s `runMain(ctx, deps) int`. main() loads config + builds Redis client + sets up signal-derived ctx; runMain handles dependency wiring, startup phases, Worker spawning, and shutdown drain.
+
+**Why.** Integration tests (`cmd/worker/run_test.go`) exercise the full assembly without invoking signal handling. Test fixtures construct `runMainDeps` directly; tests call `runMain(ctx, deps)` and verify exit codes + Redis-side state.
+
+**main() is small** (under 60 lines after refactor). Responsibilities: config load, log setup, signal context, Redis client + Phase 0 ping, call runMain, exit with returned code. All assembly lives in runMain.
+
+**Side benefit.** runMain serves as documentation of the worker's full dependency graph; reading it shows the entire engine integration in one function.
+
+### 2026-05-01 — Task 5.6: NewProcessorFromRedis convenience constructor
+
+**Pin.** `internal/worker.NewProcessorFromRedis(registry, *redis.Client, log)` added at 5.6 to avoid main package needing to construct values of `worker`'s unexported interface types (`progressPublisher`, `cancelSubscriber`).
+
+**Why this exists.** `ProcessorDeps`'s factory fields take unexported interface types so tests in the worker package can inject mocks. main.go can't construct values of those unexported types from outside the package, so this convenience constructor handles the wiring inside the package.
+
+**Trade-off.** Two constructors (`NewProcessor` for tests, `NewProcessorFromRedis` for production) is mild duplication. Considered alternatives: (a) export the interfaces (renaming would conflict with `redis` package's concrete types of the same names), (b) provide a public DepsBuilder type (over-engineered). Two-constructor approach has the smallest API surface.
+
+### 2026-05-01 — Task 5.6: miniredis BRPOP-ctx-cancel limitation re-encountered in cmd/worker tests
+
+**Repeat occurrence of 5.4's documented limitation.** miniredis's BRPOP runs synchronously and does NOT honor ctx-cancel mid-flight (5.4 DRIFT-LOG entry). cmd/worker integration tests that cancel ctx wait up to `Worker.brpopTimeout = 5s` for the BRPOP to time out naturally before runMain's drain logic activates.
+
+**Effect on test runtime.** Three of six cmd/worker tests run in ~5s each; total cmd/worker test package runtime ~16s. Acceptable for CI; documented here so future eyes don't optimize away the test latency without understanding why it exists.
+
+**Real Redis behavior unchanged.** Worker.Run's ctx-cancel path is correct — go-redis aborts in-flight BRPOP via connection close on real Redis. The test slowness is purely a miniredis artifact.
+
+### 2026-05-01 — M5 milestone-boundary close
+
+**M5 — Go Worker Foundation — closes after Task 5.6.**
+
+| Item | Detail |
+|---|---|
+| Tasks shipped | 5.1 scaffold + ADRs · 5.2 ToolRunner + NativeRunner · 5.3 DockerServiceRunner · 5.4 Redis primitives · 5.5 worker processor · 5.6 startup + heartbeat + main.go integration |
+| Task ordering followed | 5.1 → 5.2 → 5.3 → 5.4 → 5.5 → 5.6 (linear; no reordering) |
+| Engine commits | 6 (one per task) |
+| Docs commits (shieldscan-docs) | 4 (Checkpoint 2 §6.2 recount · Checkpoint 4 VERSIONS sync · Task 5.1 docs sweep + ADRs · post-5.1 VERSIONS adjustments) |
+| Test count | 0 (M5 open) → 16 (5.1) → 35 (5.2) → 59 (5.3) → 88 (5.4) → 110 (5.5) → **135 (5.6 / M5 close)** |
+| Engine packages | 8: cmd/worker · deploy · internal/{buildguard, config, events, redis, tools, worker} |
+| ADRs added | ADR-016 (raw Redis, not Asynq) · ADR-017 (findings inline + sequencing) · ADR-018 (Streams correction in plan §5.4) · ADR-021 (ctx discipline) |
+| ADRs reserved | 019 (cancel Pub/Sub confirmation) · 020 (worker concurrency model) — both promotable from DRIFT-LOG on trigger |
+| DEVELOPMENT-PATTERNS.md (engine-side) | 1 pattern: trigger-based deferral (8+ cited instances at promotion time) |
+| Cross-repo wire-format fixtures | 2: `internal/events/testdata/job_dispatch_python_v1.json` + `job_completed_python_v1.json` (with .md provenance) |
+
+**Self-catches across M5** (validating forcing-function discipline):
+
+| Task | Catch | Mechanism |
+|---|---|---|
+| 5.1 | `exec.Command` in own buildguard test | `noctx` linter |
+| 5.2 | `ExitCodeIsError` zero-value semantic inverted | TDD writing surfaced design bug |
+| 5.4 | ctx-cancel-vs-BRPOP-redis.Nil race losing cancel signal | Debugging miniredis ctx-cancel test |
+| 5.5 | discrimination semantics conflation (worker-shutdown vs user-cancel) | Articulating the decision table BEFORE writing conditionals |
+
+The 5.5 retrospective: when conditional logic has 4+ outcomes with different semantic meanings, force-articulate the decision table BEFORE writing the conditionals. The table catches conflations that conditionals silently allow.
+
+**Carry-forwards to M6** (Native Tool Runners):
+- Each M6.1-6.7 task constructs a `NativeRunner` instance + registers it via the `worker.NewRegistry(map[string]tools.ToolRunner{...})` map literal in `cmd/worker/run.go`.
+- testdata conventions established in 5.1 (`testdata/README.md`); M6.1 Nuclei is the first real consumer with synthetic JSONL fixtures.
+- Phase 1 fail-soft → fail-fast trigger lands per-tool at M6 task scope-proposal time.
+- ProgressEmitter interface extension trigger fires at M6.3 Recon (per 5.2 H.4 deferral).
+
+**Carry-forwards to M7** (Persistent Docker Service Runners):
+- Each M7.1-7.6 task constructs a `*DockerServiceRunner` + populates Registry + adds entry to Startup.DockerSvcs.
+- Phase 2 fail-soft → fail-fast trigger lands per-tool.
+- M7.5 Nmap warm pool is the trigger for shipping Phase 3 (warm pool init).
+
+**Carry-forwards to M8** (Recon-First Pipeline + Scan Type → Tool Matrix):
+- WorkerConcurrency env-var configurability ready for fan-out tuning.
+- errgroup adoption trigger evaluated at M8.1 scope proposal (per ADR-021 deferral).
+
+**Carry-forwards to M9** (AI Pipeline):
+- ADR-017 Option-C R2 staging trigger evaluated when ingest-time problems surface with deep-scan batches.
+
+**Carry-forwards to OPS milestone:**
+- Worker `/health` HTTP endpoint (deferred per 5.6 H.6).
+- Runtime `HealthCheckLoop` per TOOL-ARCH §11.2.
+- Worker-degraded marking + orchestrator-side worker-routing logic.
+- Stream-key cleanup TTL (carry-forward from ADR-014).
+- Per-request DB session checkout for SSE (carry-forward from M4 Task 4.4).
+- Ghost-queued janitor (M4 Task 4.2 carry-forward; needed for ADR-017 sequenced-event recovery).
+
+**Patterns established in M5** (now part of project DNA):
+
+1. **Architectural-commitments preamble** before scope proposal — preempts integration surprise.
+2. **Decision tables before conditionals** when ≥4 outcomes have distinct semantics (5.5 self-catch).
+3. **Trigger-based deferral** (DEVELOPMENT-PATTERNS.md section 1).
+4. **Cross-repo wire-format fixtures** (5.4 — `testdata/*.json` + `.md` provenance).
+5. **Two-layer timeout** (worker shutdown + runner-internal timeout; never three).
+6. **Per-job CancelSubscriber** (vs per-worker fan-out) at MVP scale.
+7. **Frozen Registry** (defensive copy at construction; no mutex).
+8. **Full-orchestration Execute closure** for HTTP-based runners (5.3) — asymmetric with NativeRunner's BuildArgs+ParseOutput is correct because HTTP is multi-step.
+9. **Worker-lifetime services** with workerRootCtx from main (Worker, Heartbeat — 2 instances; pattern not yet promoted).
+10. **runMain extraction** for testability of process-entry assembly.
+
+**M5 health:** clean execution. Six commits, six self-catches captured, test count grew 0 → 135 with no rework or test deletion. Architectural decisions surfaced at scope-proposal time; design bugs caught by forcing functions before commit. The pattern-density of M5 (4 ADRs + DEVELOPMENT-PATTERNS.md creation + 4 self-catches across 6 tasks) reflects that this milestone built foundational infrastructure for all M6+ tool integration work.
+
+**Ready for M6.** First task: M6.1 Nuclei. The full integration path is alive — JobConsumer.Pop → IdempotencyClaim.Claim → Registry.Get → NativeRunner.Run → CompletionsPublisher.Publish — and M6.1 is the first task that exercises it end-to-end with a real tool.
+
 ### 2026-05-01 — Task 5.5: worker processor + concurrency + cancel-watcher
 
 **Files shipped:** `internal/worker/registry.go` (Registry, frozen at construction) · `internal/worker/processor.go` (Processor + Process method + cancel-watcher + JobDispatch translation helpers) · `internal/worker/worker.go` (Worker BRPOP loop + concurrency semaphore + WaitGroup-based graceful drain) · `internal/worker/{registry,processor,worker}_test.go` (3+13+8 = 24 tests + goleak TestMain).
