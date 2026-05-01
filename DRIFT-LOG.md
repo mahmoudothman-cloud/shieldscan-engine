@@ -8,6 +8,88 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+### 2026-05-01 — Task 5.5: worker processor + concurrency + cancel-watcher
+
+**Files shipped:** `internal/worker/registry.go` (Registry, frozen at construction) · `internal/worker/processor.go` (Processor + Process method + cancel-watcher + JobDispatch translation helpers) · `internal/worker/worker.go` (Worker BRPOP loop + concurrency semaphore + WaitGroup-based graceful drain) · `internal/worker/{registry,processor,worker}_test.go` (3+13+8 = 24 tests + goleak TestMain).
+
+**24 tests at 5.5 close** (vs planned 22 — extras were `TestProcessor_JobDispatchToTarget` + `TestProcessor_JobDispatchToScanConfig` + `TestWorker_PanicsOnInvalidConcurrency`; right-sized expansion on contract surfaces). Engine total: 110 tests across 6 packages. Race-clean, vet-clean, golangci-lint v2 reports 0 issues.
+
+**Discrimination semantics decision table** pinned in `processor.go` Process() docstring covering the 5 outcomes from `(runErr, jobCtx.Err, ctx.Err)`. User-cancel emits `job_canceled`; worker-shutdown emits `job_completed` if Run finished cleanly before cancel arrived; tool-internal-timeout emits `job_failed` (timeout reason); other tool errors emit `job_failed` (error message). The table is the contract; the conditionals are the implementation.
+
+**Cancel-watcher 3 exit paths verified.** `TestProcessor_CancelWatcherExitsOnJobDone` (path 1: job finished), `TestProcessor_CancelMidRun` (path 2: cancel event received), `TestProcessor_CancelWatcherExitsOnSubClose` (path 3: subscriber closed via Process's defer). goleak in TestMain verifies no leak across all paths.
+
+**Forcing-function self-catch pattern continues.** No catch on this commit specifically — but the design surface is dense (3 files composing every prior task surface) and the discrimination semantics table forced explicit thinking that surfaced the worker-shutdown-vs-user-cancel distinction. Without articulating the table, the conditional ordering would have collapsed worker-shutdown into "cancel" semantically — which would emit `job_canceled` to Python on every worker restart, contaminating ScanJob.status semantics.
+
+### 2026-05-01 — Task 5.5: ADR-013 retry semantics — plan §5.5 "retry up to 3x" plan-staleness
+
+**Plan-staleness pin.** IMPLEMENTATION-PLAN.md §5.5 step 1 (line 1690) describes the test as: _"duplicate idempotency_key is silently dropped, canceled jobs don't retry, **failed jobs retry up to 3x**."_ This is stale.
+
+**ADR-013** (Python is the sole writer for scan state) places retry/state-machine ownership on the Python re-dispatch path: when a `job_failed` event lands, M4 Python `CompletionsConsumer` updates `ScanJob.status = 'failed'`; the M5+ ghost-queued janitor (Task 4.2 carry-forward) is the canonical retry mechanism, and re-dispatch re-creates a fresh job with a new `idempotency_key`. Go-side worker has nothing to retry — it doesn't own state.
+
+**5.5 emits `job_failed` events on tool error** and lets Python decide re-dispatch policy. No Go-side retry counter; no `max_retries` field; no exponential backoff inside Process(). The plan literal stays as written per state-at-time discipline; 5.5 implementation derives retry-ownership from ADR-013, not from plan §5.5's test description.
+
+**Future readers** opening §5.5 expecting Go-side retry should read this DRIFT-LOG entry first.
+
+### 2026-05-01 — Task 5.5: per-job CancelSubscriber (vs per-worker)
+
+**Decision.** Each `Process` call spawns its own `CancelSubscriber` bound to the job's `scan_id`. N concurrent jobs = N Pub/Sub subscriptions on the engine.
+
+**Why not per-worker.** A single worker-lifetime subscriber would need fan-out routing logic: "this `cancel_requested` event is for scan_X; which active job is processing scan_X?" That requires a registry of active jobs keyed by scan_id, with concurrent-mutation safety (job-start adds, job-end removes), with race protection against late-arriving cancel events for jobs that just completed. Per-job subscriber sidesteps all of this — each subscriber is bound to exactly one scan, lifecycle matches the job's, no fan-out needed.
+
+**At MVP scale (5 concurrent jobs per worker)**, 5 Pub/Sub subscriptions is fine. go-redis pools connections; subscription overhead is one connection-pool slot per active subscriber.
+
+**Trigger to revisit:** concurrency climbing to 50+ jobs simultaneously OR Redis Pub/Sub connection limits being hit in production. At that point, per-worker subscriber + fan-out routing earns its complexity.
+
+### 2026-05-01 — Task 5.5: frozen Registry pattern
+
+**Decision.** `internal/worker.Registry` is constructed once at worker startup (5.6 territory) with a defensive copy of the runner map. No `Set` method exposed; safe concurrent reads without mutex.
+
+**Trade-off.** M6.8 task may extend with `Register(engine, runner)` + mutex if dynamic registration becomes needed. For M5+M6 sequential tool registration at startup, frozen-at-startup is sufficient.
+
+**Pinned by `TestRegistry_FrozenAtConstruction`** — mutating the input map after `NewRegistry` returns does NOT affect the registry. Without this defensive copy, M6 task constructors that build the runner map and then continue to populate it would race with worker reads.
+
+### 2026-05-01 — Task 5.5: cancel-watcher 3 exit paths
+
+**Per-job cancel-watcher goroutine has 3 ctx-aware exit paths:**
+
+1. `jobCtx.Done()` — job finished or canceled by another path. Watcher exits without taking action.
+2. Cancel event received via `sub.Events()` — call `cancel()` on jobCtx → runner sees ctx cancel → Process emits `job_canceled`.
+3. Subscriber `Events()` channel closed — Redis disconnect (per ADR-021 H.6 from 5.4: surface, don't auto-recover) OR explicit `Close()` call from Process's defer when job completes normally.
+
+**ADR-021 Rule 2 enforced via `goleak.VerifyTestMain`** in `internal/worker` test packages. Tests `TestProcessor_CancelWatcherExitsOnJobDone` + `TestProcessor_CancelMidRun` + `TestProcessor_CancelWatcherExitsOnSubClose` collectively pin all 3 exit paths.
+
+**Process() blocks on `<-cancelExited` in defer** before returning — synchronizes goroutine cleanup with Process return. Without this, a Process call that returns "successfully" could leave the watcher goroutine alive briefly, racing with goleak's snapshot at TestMain exit.
+
+### 2026-05-01 — Task 5.5: discrimination semantics for runner return
+
+**Pin.** Process() discriminates 5 outcomes from the `(runErr, jobCtx.Err, ctx.Err)` tuple. The decision table lives in code comments above Process()'s discrimination logic, exactly as drafted in the scope-proposal review.
+
+**Why the table matters operationally.** Each emission shape maps to distinct Python-side behavior:
+
+- **User-cancel** → `ScanJob.status = "canceled"` in Python (clear signal of user intent; UI shows "Canceled by user").
+- **Worker-shutdown-cancel** → `ScanJob.status` stays "running" until Python ghost-queued janitor sweeps (signal that worker died, not user intent — re-dispatch should retry).
+- **Tool-internal-timeout** → `ScanJob.status = "failed"` with timeout reason (signal that the tool ran out of time; re-dispatch with longer timeout if customer pays for it).
+- **Other tool errors** → `ScanJob.status = "failed"` with error message (signal that the tool itself failed; re-dispatch may not help if it's a permanent failure).
+- **Worker-shutdown-after-clean-Run** → `ScanJob.status = "completed"` (preserves the work; the cancel arrived after Run finished but before publish, and we publish anyway because the job logically succeeded).
+
+**Future engineers** should find the decision table in the docstring and extend it when adding new outcome types, rather than reverse-engineering from conditionals.
+
+### 2026-05-01 — Task 5.5: two-layer timeout (worker + runner)
+
+**Pin.** Processor's `jobCtx` is just `WithCancel(workerCtx)`; runners enforce their own timeout via internal `WithTimeout(jobCtx, effective)` (5.2 NativeRunner / 5.3 DockerServiceRunner).
+
+**Two layers** cover all real cases: worker-level shutdown propagates through `workerCtx` cancel; tool-level timeout uses runner's own `effectiveTimeout` precedence (`cfg.Timeout > runner.Timeout > default`). A third layer ("processor-internal job timeout") would add complexity without benefit — the runner already enforces the right limit.
+
+**`cfg.Timeout` from JobDispatch** flows to `tools.ScanConfig` via `jobDispatchToScanConfig` helper. Runner respects override per its own precedence rules. Pinned by `TestProcessor_JobDispatchToScanConfig`.
+
+### 2026-05-01 — Task 5.5: DEVELOPMENT-PATTERNS.md created (engine-side)
+
+**Engine-side `DEVELOPMENT-PATTERNS.md`** created at 5.5. First pattern: **trigger-based deferral**.
+
+**8+ instances cited** from across M4-M5: ADR-014 hybrid Streams+PubSub, ADR-016 Asynq scheduled scans, ADR-017 R2 staging triggers, ADR-021 errgroup adoption, 5.2 H.4 ProgressEmitter, 5.3 H.5 per-tool retry, 5.4 H.6 Pub/Sub auto-reconnect, Checkpoint 2 H.1 SSE DB-session. Triple-pin precedent satisfied many times over; promotion overdue. Landed at 5.5.
+
+**Engine-side vs API-side.** API repo has its own `DEVELOPMENT-PATTERNS.md` in `shieldscan-docs/` (created earlier in M3 for `select_fresh` + `session_factory` DI patterns + API-key audit attribution). The two-repo docs split (Q3 Option B at Task 5.1) means each repo accumulates its own patterns; cross-cutting patterns (like trigger-based deferral, which spans both repos) are documented in whichever repo introduces the pattern's first three instances.
+
 ### 2026-05-01 — Task 5.4: Redis primitives (queue + streams + pubsub + idem)
 
 **Files shipped:** `internal/redis/queue.go` (JobConsumer) · `internal/redis/stream.go` (ProgressPublisher per ADR-018) · `internal/redis/pubsub.go` (CancelSubscriber + CompletionsPublisher) · `internal/redis/idem.go` (IdempotencyClaim) · `internal/redis/{queue,stream,pubsub,idem}_test.go` (4+6+5+8 = 23 tests). Plus `internal/events/events.go` extended with `JobDispatch`/`JobTarget`/`JobAuth`/`JobMobileConfig`/`ProgressEvent`/`SplitForCompletion`/`DecodeJobDispatch` and `internal/events/events_test.go` extended with 6 SplitForCompletion + fixture tests. Plus 4 fixture artifacts in `internal/events/testdata/`.
