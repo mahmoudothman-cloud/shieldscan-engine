@@ -8,6 +8,83 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+### 2026-05-01 — Task 6.1: Nuclei native runner
+
+**Files shipped:** `internal/tools/nuclei/nuclei.go` (factory + BuildArgs closure) · `internal/tools/nuclei/parse.go` (lenient JSONL parser + extraction helpers) · `internal/tools/nuclei/severity.go` (severity map) · `internal/tools/nuclei/nuclei_test.go` (17 tests with goleak TestMain) · 4 testdata fixtures (`nuclei_ssl_multi.jsonl` real-anonymized, `nuclei_xss_basic.jsonl` synthesized, `nuclei_empty.jsonl` empty, `nuclei_malformed_line.jsonl`) + testdata README.
+
+**17 tests at 6.1 close** (vs 16 estimate; +1 from H.3 tool-failure test). Engine total: **152 tests** across 9 packages. Race-clean, vet-clean, golangci-lint v2 reports 0 issues.
+
+**Plan §6.1 thinness divergence.** Plan literal §6.1 (lines 1776-1801) is 1 test, parser-only — it predates M5 and assumes a flat `parseNucleiOutput([]byte)` signature with no construction surface. M5's `NativeRunner` inverts the contract (closure-injected behavior into a generic runner). 6.1 honors the spirit (parse Nuclei output → []RawFinding) but expands scope to match canonical-first-tool weight: 1 test → 17 tests, ~25 LoC test → ~280 LoC test + ~340 LoC src across 3 source files.
+
+**6.1 does NOT register the runner.** `cmd/worker/run.go` registry population is deferred to 6.8 wiring task per landscape Finding 1. The empty-registry WARN at startup (5.6) continues to fire after 6.1 lands; this is acceptable and clears at 6.8. Brief reference here; full plan-staleness DRIFT entry at 6.8.
+
+**ADR-022 candidacy: recon-as-pre-scan-helpers.** Per landscape Finding 2, recon tools (Subfinder, httpx) don't fit ToolRunner because they produce subdomain strings / LiveHosts not RawFindings. Resolution lean: ship parsers + RunRecon helper at 6.3, but don't register with worker.Registry; M8 invokes recon as pre-scan phase. Brief reference here; full DRIFT entry + ADR-022 draft at 6.3 commit time.
+
+### 2026-05-01 — Task 6.1: tool-output lenient decode pattern (load-bearing asymmetry)
+
+**Pin.** Tool-output parsing (`internal/tools/<tool>/parse.go`) decodes lenient `map[string]any` and extracts via type-asserted helpers (`extractString`, `extractStringSlice`, `extractFloat`, `extractMap`). This is **asymmetric** with wire-format strictness in `internal/events/`, which uses `DisallowUnknownFields` and rejects malformed payloads.
+
+**Why the asymmetry.** Tools evolve their JSON shapes between minor releases (Nuclei v3.6 → v3.7 added fields; v3.8 will likely add more). Strict decode would break parsing on every Nuclei update. Wire format is a cross-repo contract — strictness there forces version-pin discipline. Tool output is an upstream artifact — leniency there keeps parsers stable across upstream churn.
+
+**Per-line resilience.** Malformed JSONL lines are dropped with WARN (not fatal). A subprocess killed mid-write or a stray banner leaking into stdout shouldn't poison the whole batch. Fixture `nuclei_malformed_line.jsonl` exercises this (4 valid + 1 garbage line → 4 findings + 1 logged warning).
+
+**Trigger to revisit (promote helpers to shared package).** Three-instance threshold: 6.1 inlines helpers in `internal/tools/nuclei/parse.go`. 6.2 (Semgrep) and 6.4 (SSLyze) likely need same shape; promote to `internal/tools/jsonx/` at the third instance. Don't pre-extract.
+
+### 2026-05-01 — Task 6.1: bufio.Scanner MaxScanTokenSize set to 1 MiB
+
+**Pin.** `parseOutput` allocates `bufio.Scanner` with explicit 1 MiB buffer cap (`maxScanLineBytes = 1 * 1024 * 1024`).
+
+**Why not the default 64 KiB.** Nuclei JSONL records embed full HTTP request + response when a finding matches. Request payloads can be a few KiB; response payloads (full HTML body) can be tens of KiB. Default 64 KiB is regularly insufficient — observed on the SSL fixture's larger records (~3-4 KiB) and easily exceeded on real DAST findings.
+
+**Lines exceeding 1 MiB are dropped with WARN** (`bufio.ErrTooLong` path). Same fail-soft posture as malformed-line handling — the runner returns successfully-parsed findings, doesn't poison the batch.
+
+**Trigger to revisit.** Customer report of "finding visible in `nuclei` stdout but not in our DB" → check warning logs for too-long drops; if present, switch from `bufio.Scanner` to streaming `json.Decoder` over `io.Reader` (no per-line buffer cap, but more code to manage).
+
+### 2026-05-01 — Task 6.1: severity mapping table (Nuclei → canonical)
+
+**Pin.** `mapSeverity()` is identity for all five Nuclei-emitted levels (info, low, medium, high, critical). Empty / unknown / unrecognized inputs default to `"info"` (defensive minimum) rather than dropping the finding.
+
+| Nuclei `info.severity` | RawFinding `Severity` |
+|---|---|
+| `info` | `info` |
+| `low` | `low` |
+| `medium` | `medium` |
+| `high` | `high` |
+| `critical` | `critical` |
+| (empty / unknown) | `info` |
+
+**Why pin an identity table.** Code review without it leaves "is severity validated?" ambiguous. The table-as-DRIFT-entry creates the audit trail. Other M6 tools (Semgrep at 6.2 emits `ERROR/WARNING/INFO`; SSLyze at 6.4 has its own scheme) will need genuine non-identity tables and document them in their per-task DRIFT entries.
+
+**Case-insensitive.** `mapSeverity("HIGH")` == `"high"`. Defense in depth; Nuclei is consistent about lowercase, but case-folding costs nothing.
+
+### 2026-05-01 — Task 6.1: CWE extraction path (first-only convention)
+
+**Pin.** CWE extracted from `info.classification.cwe-id[0]` — first element only. If the array is absent or empty, `RawFinding.CWEID = ""`.
+
+**Why first-only.** Nuclei's classification.cwe-id is conventionally a single-element array. Multi-CWE templates exist but are rare; selecting [0] handles the majority case without forcing a "primary CWE" decision into the parser. If a finding genuinely needs multiple CWEs surfaced, it's a SPEC schema extension (CWEs as `[]string`) — not a parser concern.
+
+**SSL templates ship without classification.** `nuclei_ssl_multi.jsonl` fixture has 11 findings, zero have `info.classification`. CWEID is empty for all of them; pinned by `TestParseOutput_NoClassification`.
+
+**CVE id has no dedicated RawFinding field.** SPEC §7's RawFinding schema (events.go:111+) defines CWEID, OWASP, CVSSScore but not CVEID. M6.1 folds the CVE id into Description (`"original description (CVE-2024-1234)"`) so the semantic is preserved without losing data. **Reversible:** if SPEC schema gains a CVEID field, the fold is a one-line removal.
+
+### 2026-05-01 — Task 6.1: Plan §6.1 + SPEC §3.3 surgical patches ("Nuclei SDK" → "Nuclei CLI")
+
+**Pin.** Two one-word doc patches landed at 6.1 docs commit:
+- `shieldscan-docs/SPECIFICATION.md:45` — "Nuclei SDK" → "Nuclei CLI"
+- `shieldscan-docs/IMPLEMENTATION-PLAN.md:9` — "Nuclei SDK" → "Nuclei CLI"
+
+**Why.** Engine never integrated a Nuclei Go SDK. From M5 design through M6.1 implementation, Nuclei is invoked as a subprocess via `tools.NativeRunner` (5.2 chassis). The doc references to "Nuclei SDK" were stale from an early architecture sketch. M6.1 is the canonical-first-tool task; correcting the references at this point keeps future readers from chasing a non-existent integration.
+
+**No other prose changes.** Surgical: just "SDK" → "CLI" in the two locations. Other Nuclei references in SPEC (e.g., line 230 tree diagram showing `nuclei.go`, line 731 example payload `"engine": "nuclei"`) are correct as-is.
+
+### 2026-05-01 — Task 6.1: Registry redefinition reference (full entry at 6.8)
+
+**Pin (brief).** Plan §6.8 currently says "Create `internal/tools/registry.go`" — but `internal/worker/registry.go` already exists at 5.5 (frozen-at-construction Registry shipped as part of the worker chassis). Per landscape Finding 1, plan §6.8 becomes the *wiring* task: invoking each M6 task's `NewXRunner` factory in `cmd/worker/run.go` and constructing `worker.NewRegistry(map[string]tools.ToolRunner{...})` from the results.
+
+**Full plan-staleness DRIFT entry lands at 6.8** when the wiring is implemented and the redefinition is fully resolved. This entry is the brief reference for searchability.
+
+---
+
 ### 2026-05-01 — Task 5.6: worker startup + heartbeat + main.go integration
 
 **Files shipped:** `internal/worker/heartbeat.go` + test (5 tests) · `internal/worker/startup.go` + test (6 tests) · `cmd/worker/main.go` (refactored — Phase 0 ping + signal handling) · `cmd/worker/run.go` (NEW — `runMain(ctx, deps)` extraction per H.12) + test (6 tests) · `deploy/docker-compose.services.yml` + `deploy/docker_compose_test.go` (5 tests) · `internal/worker/processor.go` extension (`NewProcessorFromRedis` convenience constructor) · `internal/config/config.go` extension (`DrainGraceSeconds` field) + test.
