@@ -1,0 +1,47 @@
+# golangci-lint v2 configuration for shieldscan-engine
+#
+# Pinned to golangci-lint v2.11.4 (per VERSIONS.md §2.4).
+# v2 has breaking schema changes from v1; do not downgrade without
+# updating this file's `version` directive.
+#
+# Linters explicitly enabled in addition to the v2 defaults:
+#   - containedctx — flags struct fields holding context.Context
+#                    (anti-pattern; ADR-021 Rule 1).
+#   - noctx        — flags HTTP requests built without ctx (ADR-021).
+#   - gosec        — security audit (defense in depth).
+#
+# v2's `default: standard` includes errcheck + staticcheck + govet +
+# ineffassign + unused, so we don't list them explicitly.
+
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - containedctx
+    - noctx
+    - gosec
+
+  exclusions:
+    rules:
+      # Test files exercise patterns that wouldn't fly in production:
+      # deliberate goroutine leaks (TestGoleakTemplate_DetectsLeak),
+      # synthetic findings exceeding the cap, etc. Keep these checks
+      # active in non-test code.
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck
+
+      # Buildguard test invokes `go list` which is the whole point of
+      # the package — security analyzers should not flag it.
+      - path: internal/buildguard/
+        linters:
+          - gosec
+
+run:
+  timeout: 5m
+
+formatters:
+  enable:
+    - gofmt

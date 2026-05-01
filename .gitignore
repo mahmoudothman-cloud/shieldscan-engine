@@ -1,0 +1,22 @@
+# Binaries
+/worker
+/cmd/worker/worker
+/bin/
+*.test
+*.out
+
+# Coverage
+coverage.txt
+coverage.html
+
+# Env (real values)
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
