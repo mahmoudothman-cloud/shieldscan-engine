@@ -1,0 +1,723 @@
+{
+  "errors": [],
+  "interfile_languages_used": [],
+  "paths": {
+    "scanned": [
+      "repo/app.py",
+      "repo/server.js"
+    ]
+  },
+  "results": [
+    {
+      "check_id": "python.lang.security.audit.subprocess-shell-true.subprocess-shell-true",
+      "end": {
+        "col": 51,
+        "line": 10,
+        "offset": 302
+      },
+      "extra": {
+        "engine_kind": "OSS",
+        "fingerprint": "anonymized-ocess-shell-true",
+        "fix": "False",
+        "is_ignored": false,
+        "lines": "    subprocess.call(\"ls \" + user_input, shell=True)",
+        "message": "Found 'subprocess' function 'call' with 'shell=True'. This is dangerous because this call will spawn the command using a shell process. Doing so propagates current shell settings and variables, which makes it much easier for a malicious actor to execute commands. Use 'shell=False' instead.",
+        "metadata": {
+          "category": "security",
+          "confidence": "MEDIUM",
+          "cwe": [
+            "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+          ],
+          "cwe2021-top25": true,
+          "cwe2022-top25": true,
+          "impact": "LOW",
+          "license": "Semgrep Rules License v1.0. For more details, visit semgrep.dev/legal/rules-license",
+          "likelihood": "HIGH",
+          "owasp": [
+            "A01:2017 - Injection",
+            "A03:2021 - Injection",
+            "A05:2025 - Injection"
+          ],
+          "references": [
+            "https://stackoverflow.com/questions/3172470/actual-meaning-of-shell-true-in-subprocess",
+            "https://docs.python.org/3/library/subprocess.html"
+          ],
+          "semgrep.dev": {
+            "rule": {
+              "origin": "community",
+              "r_id": 9646,
+              "rule_id": "DbUpz2",
+              "rv_id": 1263518,
+              "url": "https://semgrep.dev/playground/r/0bTKzDK/python.lang.security.audit.subprocess-shell-true.subprocess-shell-true",
+              "version_id": "0bTKzDK"
+            }
+          },
+          "shortlink": "https://sg.run/J92w",
+          "source": "https://semgrep.dev/r/python.lang.security.audit.subprocess-shell-true.subprocess-shell-true",
+          "source-rule-url": "https://bandit.readthedocs.io/en/latest/plugins/b602_subprocess_popen_with_shell_equals_true.html",
+          "subcategory": [
+            "secure default"
+          ],
+          "technology": [
+            "python"
+          ],
+          "vulnerability_class": [
+            "Command Injection"
+          ]
+        },
+        "metavars": {
+          "$FUNC": {
+            "abstract_content": "call",
+            "end": {
+              "col": 20,
+              "line": 10,
+              "offset": 271
+            },
+            "start": {
+              "col": 16,
+              "line": 10,
+              "offset": 267
+            }
+          },
+          "$TRUE": {
+            "abstract_content": "True",
+            "end": {
+              "col": 51,
+              "line": 10,
+              "offset": 302
+            },
+            "start": {
+              "col": 47,
+              "line": 10,
+              "offset": 298
+            }
+          }
+        },
+        "severity": "ERROR",
+        "validation_state": "NO_VALIDATOR"
+      },
+      "path": "repo/app.py",
+      "start": {
+        "col": 47,
+        "line": 10,
+        "offset": 298
+      }
+    },
+    {
+      "check_id": "python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query",
+      "end": {
+        "col": 68,
+        "line": 20,
+        "offset": 585
+      },
+      "extra": {
+        "engine_kind": "OSS",
+        "fingerprint": "anonymized-xecute-raw-query",
+        "is_ignored": false,
+        "lines": "    cur.execute(\"SELECT * FROM users WHERE id = '\" + user_id + \"'\")",
+        "message": "Avoiding SQL string concatenation: untrusted input concatenated with raw SQL query can result in SQL Injection. In order to execute raw query safely, prepared statement should be used. SQLAlchemy provides TextualSQL to easily used prepared statement with named parameters. For complex SQL composition, use SQL Expression Language or Schema Definition Language. In most cases, SQLAlchemy ORM will be a better option.",
+        "metadata": {
+          "category": "security",
+          "confidence": "LOW",
+          "cwe": [
+            "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+          ],
+          "cwe2021-top25": true,
+          "cwe2022-top25": true,
+          "impact": "HIGH",
+          "license": "Semgrep Rules License v1.0. For more details, visit semgrep.dev/legal/rules-license",
+          "likelihood": "LOW",
+          "owasp": [
+            "A01:2017 - Injection",
+            "A03:2021 - Injection",
+            "A05:2025 - Injection"
+          ],
+          "references": [
+            "https://docs.sqlalchemy.org/en/14/core/tutorial.html#using-textual-sql",
+            "https://www.tutorialspoint.com/sqlalchemy/sqlalchemy_quick_guide.htm",
+            "https://docs.sqlalchemy.org/en/14/core/tutorial.html#using-more-specific-text-with-table-expression-literal-column-and-expression-column"
+          ],
+          "semgrep.dev": {
+            "rule": {
+              "origin": "community",
+              "r_id": 10563,
+              "rule_id": "oqUz5y",
+              "rv_id": 1263578,
+              "url": "https://semgrep.dev/playground/r/bZT53rp/python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query",
+              "version_id": "bZT53rp"
+            }
+          },
+          "shortlink": "https://sg.run/2b1L",
+          "source": "https://semgrep.dev/r/python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query",
+          "subcategory": [
+            "audit"
+          ],
+          "technology": [
+            "sqlalchemy"
+          ],
+          "vulnerability_class": [
+            "SQL Injection"
+          ]
+        },
+        "metavars": {
+          "$CONNECTION": {
+            "abstract_content": "cur",
+            "end": {
+              "col": 8,
+              "line": 20,
+              "offset": 525
+            },
+            "propagated_value": {
+              "svalue_abstract_content": "conn.cursor()",
+              "svalue_end": {
+                "col": 24,
+                "line": 18,
+                "offset": 479
+              },
+              "svalue_start": {
+                "col": 11,
+                "line": 18,
+                "offset": 466
+              }
+            },
+            "start": {
+              "col": 5,
+              "line": 20,
+              "offset": 522
+            }
+          },
+          "$SQL": {
+            "abstract_content": "\"SELECT * FROM users WHERE id = '\"+user_id",
+            "end": {
+              "col": 61,
+              "line": 20,
+              "offset": 578
+            },
+            "start": {
+              "col": 17,
+              "line": 20,
+              "offset": 534
+            }
+          }
+        },
+        "severity": "ERROR",
+        "validation_state": "NO_VALIDATOR"
+      },
+      "path": "repo/app.py",
+      "start": {
+        "col": 5,
+        "line": 20,
+        "offset": 522
+      }
+    },
+    {
+      "check_id": "generic.secrets.security.detected-stripe-api-key.detected-stripe-api-key",
+      "end": {
+        "col": 48,
+        "line": 24,
+        "offset": 677
+      },
+      "extra": {
+        "engine_kind": "OSS",
+        "fingerprint": "anonymized-d-stripe-api-key",
+        "is_ignored": false,
+        "lines": "    api_key = \"sk_live_abcdef1234567890ABCDEF1234567890\"",
+        "message": "Stripe API Key detected",
+        "metadata": {
+          "category": "security",
+          "confidence": "LOW",
+          "cwe": [
+            "CWE-798: Use of Hard-coded Credentials"
+          ],
+          "cwe2021-top25": true,
+          "cwe2022-top25": true,
+          "impact": "MEDIUM",
+          "license": "Semgrep Rules License v1.0. For more details, visit semgrep.dev/legal/rules-license",
+          "likelihood": "LOW",
+          "owasp": [
+            "A07:2021 - Identification and Authentication Failures",
+            "A07:2025 - Authentication Failures"
+          ],
+          "references": [
+            "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures"
+          ],
+          "semgrep.dev": {
+            "rule": {
+              "origin": "community",
+              "r_id": 9078,
+              "rule_id": "JDUy0z",
+              "rv_id": 1262899,
+              "url": "https://semgrep.dev/playground/r/0bTKzK1/generic.secrets.security.detected-stripe-api-key.detected-stripe-api-key",
+              "version_id": "0bTKzK1"
+            }
+          },
+          "shortlink": "https://sg.run/dKd5",
+          "source": "https://semgrep.dev/r/generic.secrets.security.detected-stripe-api-key.detected-stripe-api-key",
+          "source-rule-url": "https://github.com/dxa4481/truffleHogRegexes/blob/master/truffleHogRegexes/regexes.json",
+          "subcategory": [
+            "audit"
+          ],
+          "technology": [
+            "secrets",
+            "stripe"
+          ],
+          "vulnerability_class": [
+            "Hard-coded Secrets"
+          ]
+        },
+        "metavars": {},
+        "severity": "ERROR",
+        "validation_state": "NO_VALIDATOR"
+      },
+      "path": "repo/app.py",
+      "start": {
+        "col": 16,
+        "line": 24,
+        "offset": 645
+      }
+    },
+    {
+      "check_id": "javascript.express.security.audit.express-check-csurf-middleware-usage.express-check-csurf-middleware-usage",
+      "end": {
+        "col": 22,
+        "line": 3,
+        "offset": 85
+      },
+      "extra": {
+        "engine_kind": "OSS",
+        "fingerprint": "anonymized-middleware-usage",
+        "is_ignored": false,
+        "lines": "const app = express();",
+        "message": "A CSRF middleware was not detected in your express application. Ensure you are either using one such as `csurf` or `csrf` (see rule references) and/or you are properly doing CSRF validation in your routes with a token or cookies.",
+        "metadata": {
+          "category": "security",
+          "confidence": "LOW",
+          "cwe": [
+            "CWE-352: Cross-Site Request Forgery (CSRF)"
+          ],
+          "cwe2021-top25": true,
+          "cwe2022-top25": true,
+          "impact": "HIGH",
+          "license": "Semgrep Rules License v1.0. For more details, visit semgrep.dev/legal/rules-license",
+          "likelihood": "LOW",
+          "owasp": [
+            "A01:2021 - Broken Access Control",
+            "A01:2025 - Broken Access Control"
+          ],
+          "references": [
+            "https://www.npmjs.com/package/csurf",
+            "https://www.npmjs.com/package/csrf",
+            "https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html"
+          ],
+          "semgrep.dev": {
+            "rule": {
+              "origin": "community",
+              "r_id": 22551,
+              "rule_id": "wdUKEq",
+              "rv_id": 1263128,
+              "url": "https://semgrep.dev/playground/r/yeTxp5d/javascript.express.security.audit.express-check-csurf-middleware-usage.express-check-csurf-middleware-usage",
+              "version_id": "yeTxp5d"
+            }
+          },
+          "shortlink": "https://sg.run/BxzR",
+          "source": "https://semgrep.dev/r/javascript.express.security.audit.express-check-csurf-middleware-usage.express-check-csurf-middleware-usage",
+          "subcategory": [
+            "audit"
+          ],
+          "technology": [
+            "javascript",
+            "typescript",
+            "express"
+          ],
+          "vulnerability_class": [
+            "Cross-Site Request Forgery (CSRF)"
+          ]
+        },
+        "metavars": {
+          "$APP": {
+            "abstract_content": "app",
+            "end": {
+              "col": 10,
+              "line": 3,
+              "offset": 73
+            },
+            "start": {
+              "col": 7,
+              "line": 3,
+              "offset": 70
+            }
+          },
+          "$EXPRESS": {
+            "abstract_content": "express",
+            "end": {
+              "col": 20,
+              "line": 3,
+              "offset": 83
+            },
+            "start": {
+              "col": 13,
+              "line": 3,
+              "offset": 76
+            }
+          }
+        },
+        "severity": "INFO",
+        "validation_state": "NO_VALIDATOR"
+      },
+      "path": "repo/server.js",
+      "start": {
+        "col": 7,
+        "line": 3,
+        "offset": 70
+      }
+    },
+    {
+      "check_id": "javascript.lang.security.detect-child-process.detect-child-process",
+      "end": {
+        "col": 35,
+        "line": 8,
+        "offset": 220
+      },
+      "extra": {
+        "dataflow_trace": {
+          "intermediate_vars": [
+            {
+              "content": "req",
+              "location": {
+                "end": {
+                  "col": 22,
+                  "line": 5,
+                  "offset": 109
+                },
+                "path": "vuln-target/server.js",
+                "start": {
+                  "col": 19,
+                  "line": 5,
+                  "offset": 106
+                }
+              }
+            }
+          ],
+          "taint_sink": [
+            "CliLoc",
+            [
+              {
+                "end": {
+                  "col": 35,
+                  "line": 8,
+                  "offset": 220
+                },
+                "path": "vuln-target/server.js",
+                "start": {
+                  "col": 14,
+                  "line": 8,
+                  "offset": 199
+                }
+              },
+              "'ls ' + req.query.dir"
+            ]
+          ],
+          "taint_source": [
+            "CliLoc",
+            [
+              {
+                "end": {
+                  "col": 22,
+                  "line": 5,
+                  "offset": 109
+                },
+                "path": "vuln-target/server.js",
+                "start": {
+                  "col": 19,
+                  "line": 5,
+                  "offset": 106
+                }
+              },
+              "req"
+            ]
+          ]
+        },
+        "engine_kind": "OSS",
+        "fingerprint": "anonymized-ct-child-process",
+        "is_ignored": false,
+        "lines": "  child.exec('ls ' + req.query.dir, (err, stdout) => res.send(stdout));",
+        "message": "Detected calls to child_process from a function argument `req`. This could lead to a command injection if the input is user controllable. Try to avoid calls to child_process, and if it is needed ensure user input is correctly sanitized or sandboxed. ",
+        "metadata": {
+          "category": "security",
+          "confidence": "LOW",
+          "cwe": [
+            "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+          ],
+          "cwe2021-top25": true,
+          "cwe2022-top25": true,
+          "impact": "HIGH",
+          "license": "Semgrep Rules License v1.0. For more details, visit semgrep.dev/legal/rules-license",
+          "likelihood": "LOW",
+          "owasp": [
+            "A01:2017 - Injection",
+            "A03:2021 - Injection",
+            "A05:2025 - Injection"
+          ],
+          "references": [
+            "https://cheatsheetseries.owasp.org/cheatsheets/Nodejs_Security_Cheat_Sheet.html#do-not-use-dangerous-functions"
+          ],
+          "semgrep.dev": {
+            "rule": {
+              "origin": "community",
+              "r_id": 9313,
+              "rule_id": "10UKNB",
+              "rv_id": 1409399,
+              "url": "https://semgrep.dev/playground/r/5PT7KnG/javascript.lang.security.detect-child-process.detect-child-process",
+              "version_id": "5PT7KnG"
+            }
+          },
+          "shortlink": "https://sg.run/l2lo",
+          "source": "https://semgrep.dev/r/javascript.lang.security.detect-child-process.detect-child-process",
+          "source-rule-url": "https://github.com/nodesecurity/eslint-plugin-security/blob/master/rules/detect-child-process.js",
+          "subcategory": [
+            "audit"
+          ],
+          "technology": [
+            "javascript"
+          ],
+          "vulnerability_class": [
+            "Command Injection"
+          ]
+        },
+        "metavars": {
+          "$CMD": {
+            "abstract_content": "'ls '+req.query.dir",
+            "end": {
+              "col": 35,
+              "line": 8,
+              "offset": 220
+            },
+            "start": {
+              "col": 14,
+              "line": 8,
+              "offset": 199
+            }
+          },
+          "$CP": {
+            "abstract_content": "child",
+            "end": {
+              "col": 8,
+              "line": 8,
+              "offset": 193
+            },
+            "start": {
+              "col": 3,
+              "line": 8,
+              "offset": 188
+            }
+          },
+          "$FUNC": {
+            "abstract_content": "req",
+            "end": {
+              "col": 22,
+              "line": 5,
+              "offset": 109
+            },
+            "start": {
+              "col": 19,
+              "line": 5,
+              "offset": 106
+            }
+          }
+        },
+        "severity": "ERROR",
+        "validation_state": "NO_VALIDATOR"
+      },
+      "path": "repo/server.js",
+      "start": {
+        "col": 14,
+        "line": 8,
+        "offset": 199
+      }
+    },
+    {
+      "check_id": "javascript.express.security.audit.express-open-redirect.express-open-redirect",
+      "end": {
+        "col": 29,
+        "line": 13,
+        "offset": 347
+      },
+      "extra": {
+        "dataflow_trace": {
+          "intermediate_vars": [],
+          "taint_sink": [
+            "CliLoc",
+            [
+              {
+                "end": {
+                  "col": 29,
+                  "line": 13,
+                  "offset": 347
+                },
+                "path": "vuln-target/server.js",
+                "start": {
+                  "col": 16,
+                  "line": 13,
+                  "offset": 334
+                }
+              },
+              "req.query.url"
+            ]
+          ],
+          "taint_source": [
+            "CliLoc",
+            [
+              {
+                "end": {
+                  "col": 25,
+                  "line": 13,
+                  "offset": 343
+                },
+                "path": "vuln-target/server.js",
+                "start": {
+                  "col": 16,
+                  "line": 13,
+                  "offset": 334
+                }
+              },
+              "req.query"
+            ]
+          ]
+        },
+        "engine_kind": "OSS",
+        "fingerprint": "anonymized-ss-open-redirect",
+        "is_ignored": false,
+        "lines": "  res.redirect(req.query.url);",
+        "message": "The application redirects to a URL specified by user-supplied input `req` that is not validated. This could redirect users to malicious locations. Consider using an allow-list approach to validate URLs, or warn users they are being redirected to a third-party website.",
+        "metadata": {
+          "category": "security",
+          "confidence": "HIGH",
+          "cwe": [
+            "CWE-601: URL Redirection to Untrusted Site ('Open Redirect')"
+          ],
+          "impact": "MEDIUM",
+          "license": "Semgrep Rules License v1.0. For more details, visit semgrep.dev/legal/rules-license",
+          "likelihood": "HIGH",
+          "owasp": [
+            "A01:2021 - Broken Access Control",
+            "A01:2025 - Broken Access Control"
+          ],
+          "references": [
+            "https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html"
+          ],
+          "semgrep.dev": {
+            "rule": {
+              "origin": "community",
+              "r_id": 22081,
+              "rule_id": "X5ULkq",
+              "rv_id": 1263140,
+              "url": "https://semgrep.dev/playground/r/nWT2L0v/javascript.express.security.audit.express-open-redirect.express-open-redirect",
+              "version_id": "nWT2L0v"
+            }
+          },
+          "shortlink": "https://sg.run/EpoP",
+          "source": "https://semgrep.dev/r/javascript.express.security.audit.express-open-redirect.express-open-redirect",
+          "subcategory": [
+            "vuln"
+          ],
+          "technology": [
+            "express"
+          ],
+          "vulnerability_class": [
+            "Open Redirect"
+          ]
+        },
+        "metavars": {
+          "$1": {
+            "abstract_content": "get",
+            "end": {
+              "col": 4,
+              "line": 1,
+              "offset": 3
+            },
+            "start": {
+              "col": 1,
+              "line": 1,
+              "offset": 0
+            }
+          },
+          "$APP": {
+            "abstract_content": "express()",
+            "end": {
+              "col": 22,
+              "line": 3,
+              "offset": 85
+            },
+            "start": {
+              "col": 13,
+              "line": 3,
+              "offset": 76
+            }
+          },
+          "$METHOD": {
+            "abstract_content": "get",
+            "end": {
+              "col": 8,
+              "line": 11,
+              "offset": 270
+            },
+            "start": {
+              "col": 5,
+              "line": 11,
+              "offset": 267
+            }
+          },
+          "$REQ": {
+            "abstract_content": "req",
+            "end": {
+              "col": 19,
+              "line": 13,
+              "offset": 337
+            },
+            "start": {
+              "col": 16,
+              "line": 13,
+              "offset": 334
+            }
+          },
+          "$RES": {
+            "abstract_content": "res",
+            "end": {
+              "col": 6,
+              "line": 13,
+              "offset": 324
+            },
+            "start": {
+              "col": 3,
+              "line": 13,
+              "offset": 321
+            }
+          },
+          "$VALUE": {
+            "abstract_content": "url",
+            "end": {
+              "col": 29,
+              "line": 13,
+              "offset": 347
+            },
+            "start": {
+              "col": 26,
+              "line": 13,
+              "offset": 344
+            }
+          }
+        },
+        "severity": "WARNING",
+        "validation_state": "NO_VALIDATOR"
+      },
+      "path": "repo/server.js",
+      "start": {
+        "col": 16,
+        "line": 13,
+        "offset": 334
+      }
+    }
+  ],
+  "skipped_rules": [],
+  "version": "1.95.0"
+}

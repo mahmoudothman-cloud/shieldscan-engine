@@ -1,0 +1,20 @@
+{
+  "errors": [
+    {
+      "code": 2,
+      "level": "error",
+      "message": "Failed to parse repo/badfile.py: SyntaxError at line 5",
+      "path": "repo/badfile.py",
+      "type": "Lexical or Syntax error"
+    }
+  ],
+  "paths": {
+    "scanned": [],
+    "skipped": [
+      "repo/badfile.py"
+    ]
+  },
+  "results": [],
+  "skipped_rules": [],
+  "version": "1.95.0"
+}

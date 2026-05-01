@@ -8,6 +8,158 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+### 2026-05-01 — Task 6.2: Semgrep native runner
+
+**Files shipped:** `internal/tools/semgrep/semgrep.go` (factory + buildArgs closure) · `internal/tools/semgrep/parse.go` (single-doc JSON parser + extraction helpers — second instance) · `internal/tools/semgrep/severity.go` (first non-identity M6 severity table) · `internal/tools/semgrep/semgrep_test.go` (17 tests with goleak TestMain) · 6 testdata fixtures (4 from real-anonymized + synthetic runs: basic, multi, empty, error; 2 hand-crafted: unknown_fields, missing_fields) + testdata README.
+
+**17 tests at 6.2 close.** Engine total: **169 tests** across 10 packages. Race-clean, vet-clean, golangci-lint v2 reports 0 issues.
+
+**Three "first non-trivial" patterns landed at 6.2** (see entries 1, 3, 5 below): first non-identity severity mapping, first ExitCodeLenient=true real use, first populated NativeRunner.Env. These establish patterns governing 6.4–6.7 inheritance.
+
+**Field-map success: NO reductions needed.** Every meaningful Semgrep datum maps to an existing `events.RawFinding` field — contrast with 6.1's three reductions (CVE folded into Description, CVSS-vector dropped, References dropped). Positive signal. See entry 8 below.
+
+### 2026-05-01 — Task 6.2: severity mapping table (FIRST non-identity in M6)
+
+**Pin.** `mapSeverity()` in `internal/tools/semgrep/severity.go` is the first non-identity severity table in M6. Semgrep emits a 3-level scheme; canonical RawFinding.Severity is 5-level. Mapping:
+
+| Semgrep | Canonical | Why |
+|---|---|---|
+| `ERROR` | `high` | Exploit-class (RCE, SQLi, secrets). NOT `critical` — critical reserves for confirmed-exploitable + remote (CVSS≥9). ERROR-but-not-critical leaves room for AI pipeline to upgrade-to-critical via context. |
+| `WARNING` | `medium` | Best-practice violation (missing CSRF middleware, weak crypto). |
+| `INFO` | `info` | Style/maintainability (dead code, naming). |
+| empty / unknown | `info` | Defensive default (mirrors 6.1 posture). |
+
+**Load-bearing decision: ERROR → high (NOT critical).** Regression-guarded by `TestMapSeverity_ErrorMapsToHighNotCritical`. Future "simplification" attempts must fail this test rather than silently re-map.
+
+**Case-insensitive.** Folded into `TestMapSeverity_AllLevels` table (per H.10 trim — single test covers both axes).
+
+### 2026-05-01 — Task 6.2: CWE prefix-extraction (load-bearing format note)
+
+**Pin.** Semgrep emits `extra.metadata.cwe` as an array of strings of the form `"CWE-78: Improper Neutralization of Special Elements..."` — CWE id embedded in human-readable description. Contrast with Nuclei (6.1) which emits bare `"CWE-78"` strings.
+
+`cweFromMetadata()` extracts only the `CWE-N` prefix via anchored regex `^(CWE-\d+)`. Empty input or no match → `""`. Anchored at start (^) — won't accept "WCWE-78" or other malformed prefixes.
+
+**Why prefix-only.** Consistency with Nuclei's bare format keeps the `RawFinding.CWEID` field stable across tools; the AI pipeline can lookup the human-readable description from a CWE catalog if needed. Embedded description duplicates the CWE name lookup; storing both in CWEID would create dedup ambiguity.
+
+### 2026-05-01 — Task 6.2: ExitCodeLenient=true (FIRST non-trivial M6 real use)
+
+**Pin.** Semgrep is the first M6 tool with `ExitCodeLenient=true`. Three exit-code regimes the runner must handle:
+
+| Exit | Cause | ParseOutput sees | Behavior |
+|---|---|---|---|
+| 0 | Clean run with `--config=p/default` (with or without findings) | Full JSON document | Normal parse |
+| 1 | Findings with `--error` (we omit), or network/permission edge | Full JSON document | Normal parse (NativeRunner swallows non-zero) |
+| 2 | Genuine tool error (parse failure on input file, bad config) | JSON with `errors[]` populated | Log errors at WARN, return parsed results (often empty) — **not** a Go error per H.1 |
+
+**`errors[]` non-empty + `results[]` empty is log-and-continue, NOT fatal.** Symmetric with 6.1's malformed-line tolerance. Trigger to revisit (escalate to partial-fatal): customer report of "Semgrep silently scanned nothing." At that point, gate Option B on `len(results)==0 && len(errors)>0`.
+
+**Mock-binary test** (`TestExitCodeLenient_Exit2WithErrorsArray`) exercises the full NativeRunner.Run pipeline through a Semgrep-configured runner with a shell-script mock that emits the error fixture and exits 2. Distinct from 5.2's framework-level lenient tests by going through the Semgrep factory.
+
+**`--error` flag deliberately omitted.** Keeps exit-code semantics simple (0 on clean run, 2 on tool error). Including would force lenient-mode exercise on every clean run with no operational benefit.
+
+### 2026-05-01 — Task 6.2: --config=p/default privacy decision (telemetry conflict resolved)
+
+**Pin.** Semgrep's `--config=auto` requires telemetry ON. Verified empirically during pre-prep:
+
+```
+$ semgrep scan --config=auto --metrics=off vuln-target/
+[ERROR]: Cannot create auto config when metrics are off.
+         Please allow metrics or run with a specific config.
+```
+
+**Decision: `--config=p/default --metrics=off`** — privacy-preserving fixed ruleset. Less adaptive than auto (which tunes the ruleset to detected languages / frameworks), but:
+
+1. **No telemetry to third-party servers.** Operationally aligns with self-host ethos; customers running in air-gapped environments cannot use `auto` regardless.
+2. **Predictable.** Rule set is fixed; scan results are reproducible across runs.
+3. **`--metrics=off` defense-in-depth.** `p/default` doesn't need metrics, but explicit `--metrics=off` documents intent and survives Semgrep config-default changes.
+
+**Customer-language-specific rulesets deferred** until customer demand. `--config=auto` is also `--config=p/python p/javascript ...` composable; trigger to revisit: customer ask for tiered SAST or language-specific tuning.
+
+**Per-file `--timeout=120`** (folded here): Semgrep's per-file regex timeout, distinct from the outer NativeRunner 5-minute timeout. Protects against pathological regex backtracking on a single file (catastrophic backtracking on minified JS / generated Python). Hardcoded at 120s; configurable promotion deferred until customer demand.
+
+**Companion docs commit lands TOOL-ARCH §6.2 invocation literal patch** to match: `--config=auto` → `--config=p/default --metrics=off --quiet --timeout=120`.
+
+### 2026-05-01 — Task 6.2: PYTHONWARNINGS=ignore Env pattern (forward-pin for pipx tools)
+
+**Pin.** `NewSemgrepRunner` populates `NativeRunner.Env = []string{"PYTHONWARNINGS=ignore"}`. FIRST populated Env in M6.
+
+**Why.** Semgrep 1.95.0 on Python 3.12 emits a `UserWarning: pkg_resources is deprecated` line on stderr at every invocation (from `opentelemetry.instrumentation.dependencies` import). NativeRunner captures stderr only on subprocess error — on success, stderr is discarded — but the warning still mixes into error-context truncation when exit codes ARE non-zero. `PYTHONWARNINGS=ignore` suppresses cleanly.
+
+**NativeRunner appends to inherited env** (per `cmd.Environ()` in 5.2's native.go:148), so PATH/HOME/etc. survive. Test asserts presence in slice (not absolute env equality).
+
+**Forward-pin for other pipx-installed tools.** SECOND instance candidates: M6.4 SSLyze, M6.6 Nikto/Wapiti, M6.7 Checkov — all pipx-installed Python CLI tools likely to emit similar deprecation noise. Pattern: `Env: []string{"PYTHONWARNINGS=ignore"}` per runner. Promotion to DEVELOPMENT-PATTERNS.md at THIRD instance per project convention.
+
+### 2026-05-01 — Task 6.2: setuptools<81 operational note (OPS milestone follow-up)
+
+**Pin (operational).** Semgrep 1.95.0 fails to start on Python 3.12 with setuptools v82 (default in fresh pipx installs as of 2026-04+) due to dropped `pkg_resources` module. Symptom: `ModuleNotFoundError: No module named 'pkg_resources'` from the `opentelemetry-instrumentation-requests` import chain.
+
+**Workaround applied to dev environment:**
+
+```bash
+pipx install semgrep==1.95.0
+/home/.../share/pipx/venvs/semgrep/bin/python -m pip install 'setuptools<81'
+```
+
+**OPS milestone (M11) provision-worker.sh must apply this fix** for every pipx-installed Semgrep target. Likely shape:
+
+```bash
+pipx install semgrep==1.95.0
+"$(pipx environment --value PIPX_LOCAL_VENVS)/semgrep/bin/python" \
+    -m pip install --quiet 'setuptools<81'
+```
+
+**Trigger to revisit:** Semgrep 1.96+ (or whichever upstream version drops `pkg_resources` import via opentelemetry upgrade) lands. At that point, the workaround is no longer necessary; remove from provision-worker.sh.
+
+### 2026-05-01 — Task 6.2: Plan §6.2 thinness divergence (1 sentence → 17 tests)
+
+**Pin.** Plan §6.2 (`shieldscan-docs/IMPLEMENTATION-PLAN.md` lines 1805-1814) is even thinner than §6.1: implementation reduced to a single sentence ("parse JSON output, map check_id → finding_type, extract path, start.line, extra.metadata.cwe"). No test names. No construction surface.
+
+**Divergence:** 1 sentence → 17 tests; ~25 LoC test → ~430 LoC test + ~340 LoC src across 3 source files.
+
+Same pattern as 6.1 — plan was written before M5 + 6.1 established the chassis. Honored in spirit, expanded in scope. Plan-staleness reference (no surgical patch to plan literal at this commit; the entire M6 plan section will benefit from a milestone-boundary refresh at M6 close).
+
+### 2026-05-01 — Task 6.2: field-map success (no reductions; positive signal)
+
+**Pin.** Every meaningful Semgrep datum maps to an existing `events.RawFinding` field at SPEC §7's schema. Contrast with 6.1's three reductions (CVE folded into Description, CVSS-vector dropped, References dropped).
+
+| Semgrep field | RawFinding field |
+|---|---|
+| `check_id` | `FindingType` (and Title — Semgrep has no separate title) |
+| `path` | `CodeFile` (FIRST populated) |
+| `start.line` | `CodeLine` (FIRST populated) |
+| `extra.message` | `Description` |
+| `extra.severity` (mapped) | `Severity` |
+| `extra.metadata.cwe[0]` (prefix-extracted) | `CWEID` |
+| `extra.metadata.owasp[0]` (verbatim) | `OWASP` (FIRST populated) |
+| `extra.lines` (truncated 2 KiB) | `CodeSnippet` (FIRST populated) |
+
+**Implication for SPEC §7.3 schema-extension trigger.** Per user guidance: track loosely; if 3+ M6/M7 tools have RawFinding-field reductions (CVE folded, Evidence split, etc.), THAT is the schema-extension trigger. So far: 6.1 had 3 reductions, 6.2 had 0. Counter at 1 tool with reductions; threshold not yet hit.
+
+### 2026-05-01 — Task 6.2: helper-extraction trigger reminder (SECOND instance)
+
+**Pin (forward-look).** `internal/tools/semgrep/parse.go` contains a verbatim copy of the lenient-decode helpers from `internal/tools/nuclei/parse.go`:
+
+- `extractString(map[string]any, string) string`
+- `extractMap(map[string]any, string) map[string]any`
+- `extractStringSlice(map[string]any, string) []string`
+- `extractFloat(map[string]any, string) float64`
+- `firstString([]string) string`
+- `truncate(string, int) string`
+
+**SECOND instance** of this shape across M6 tools. Per project's three-instance threshold, extraction to a shared package (proposed: `internal/tools/jsonx/`) is triggered at the **THIRD instance**.
+
+**Likely third instance: M6.4 SSLyze** — pipx-installed, JSON output, same lenient-decode shape. **6.4's task author should:**
+
+1. Notice the third instance.
+2. Extract helpers to `internal/tools/jsonx/` (new package).
+3. Update `internal/tools/nuclei/parse.go` and `internal/tools/semgrep/parse.go` to import from the new package.
+4. Land all three changes together (extraction + two callsite updates) so neither tool grows stale.
+5. Document the extraction in 6.4's DRIFT-LOG (third-instance threshold met).
+
+**If 6.4 doesn't fit the shape** (different JSON parsing model), the trigger moves to 6.6 / 6.7 — first that fits.
+
+---
+
 ### 2026-05-01 — Task 6.1: Nuclei native runner
 
 **Files shipped:** `internal/tools/nuclei/nuclei.go` (factory + BuildArgs closure) · `internal/tools/nuclei/parse.go` (lenient JSONL parser + extraction helpers) · `internal/tools/nuclei/severity.go` (severity map) · `internal/tools/nuclei/nuclei_test.go` (17 tests with goleak TestMain) · 4 testdata fixtures (`nuclei_ssl_multi.jsonl` real-anonymized, `nuclei_xss_basic.jsonl` synthesized, `nuclei_empty.jsonl` empty, `nuclei_malformed_line.jsonl`) + testdata README.

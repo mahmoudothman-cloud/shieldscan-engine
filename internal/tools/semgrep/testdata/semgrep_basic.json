@@ -1,0 +1,109 @@
+{
+  "errors": [],
+  "interfile_languages_used": [],
+  "paths": {
+    "scanned": [
+      "repo/app.py"
+    ],
+    "skipped": []
+  },
+  "results": [
+    {
+      "check_id": "python.lang.security.audit.subprocess-shell-true.subprocess-shell-true",
+      "end": {
+        "col": 51,
+        "line": 10,
+        "offset": 302
+      },
+      "extra": {
+        "engine_kind": "OSS",
+        "fingerprint": "anonymized-ocess-shell-true",
+        "fix": "False",
+        "is_ignored": false,
+        "lines": "    subprocess.call(\"ls \" + user_input, shell=True)",
+        "message": "Found 'subprocess' function 'call' with 'shell=True'. This is dangerous because this call will spawn the command using a shell process. Doing so propagates current shell settings and variables, which makes it much easier for a malicious actor to execute commands. Use 'shell=False' instead.",
+        "metadata": {
+          "category": "security",
+          "confidence": "MEDIUM",
+          "cwe": [
+            "CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+          ],
+          "cwe2021-top25": true,
+          "cwe2022-top25": true,
+          "impact": "LOW",
+          "license": "Semgrep Rules License v1.0. For more details, visit semgrep.dev/legal/rules-license",
+          "likelihood": "HIGH",
+          "owasp": [
+            "A01:2017 - Injection",
+            "A03:2021 - Injection",
+            "A05:2025 - Injection"
+          ],
+          "references": [
+            "https://stackoverflow.com/questions/3172470/actual-meaning-of-shell-true-in-subprocess",
+            "https://docs.python.org/3/library/subprocess.html"
+          ],
+          "semgrep.dev": {
+            "rule": {
+              "origin": "community",
+              "r_id": 9646,
+              "rule_id": "DbUpz2",
+              "rv_id": 1263518,
+              "url": "https://semgrep.dev/playground/r/0bTKzDK/python.lang.security.audit.subprocess-shell-true.subprocess-shell-true",
+              "version_id": "0bTKzDK"
+            }
+          },
+          "shortlink": "https://sg.run/J92w",
+          "source": "https://semgrep.dev/r/python.lang.security.audit.subprocess-shell-true.subprocess-shell-true",
+          "source-rule-url": "https://bandit.readthedocs.io/en/latest/plugins/b602_subprocess_popen_with_shell_equals_true.html",
+          "subcategory": [
+            "secure default"
+          ],
+          "technology": [
+            "python"
+          ],
+          "vulnerability_class": [
+            "Command Injection"
+          ]
+        },
+        "metavars": {
+          "$FUNC": {
+            "abstract_content": "call",
+            "end": {
+              "col": 20,
+              "line": 10,
+              "offset": 271
+            },
+            "start": {
+              "col": 16,
+              "line": 10,
+              "offset": 267
+            }
+          },
+          "$TRUE": {
+            "abstract_content": "True",
+            "end": {
+              "col": 51,
+              "line": 10,
+              "offset": 302
+            },
+            "start": {
+              "col": 47,
+              "line": 10,
+              "offset": 298
+            }
+          }
+        },
+        "severity": "ERROR",
+        "validation_state": "NO_VALIDATOR"
+      },
+      "path": "repo/app.py",
+      "start": {
+        "col": 47,
+        "line": 10,
+        "offset": 298
+      }
+    }
+  ],
+  "skipped_rules": [],
+  "version": "1.95.0"
+}

@@ -1,0 +1,33 @@
+{
+  "version": "1.95.0",
+  "results": [
+    {
+      "_comment": "valid result — should be parsed",
+      "check_id": "rule.valid",
+      "path": "repo/good.py",
+      "start": {"line": 5},
+      "extra": {"message": "valid finding", "severity": "ERROR"}
+    },
+    {
+      "_comment": "missing check_id — must be skipped",
+      "path": "repo/bad1.py",
+      "start": {"line": 1},
+      "extra": {"message": "no check_id", "severity": "WARNING"}
+    },
+    {
+      "_comment": "missing path — must be skipped",
+      "check_id": "rule.no.path",
+      "start": {"line": 1},
+      "extra": {"message": "no path", "severity": "INFO"}
+    },
+    {
+      "_comment": "valid result after skipped ones — must still parse",
+      "check_id": "rule.valid.two",
+      "path": "repo/good2.py",
+      "start": {"line": 99},
+      "extra": {"message": "second valid", "severity": "WARNING"}
+    }
+  ],
+  "errors": [],
+  "paths": {"scanned": [], "skipped": []}
+}

@@ -1,0 +1,25 @@
+{
+  "version": "1.95.0",
+  "future_top_level_field": "must be tolerated",
+  "results": [
+    {
+      "check_id": "python.lang.security.audit.subprocess-shell-true.subprocess-shell-true",
+      "path": "repo/app.py",
+      "start": {"line": 10, "col": 5, "offset": 100, "future_pos_field": "x"},
+      "end": {"line": 10, "col": 50},
+      "extra": {
+        "message": "Found subprocess with shell=True",
+        "severity": "ERROR",
+        "metadata": {
+          "cwe": ["CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"],
+          "owasp": ["A01:2017 - Injection", "A03:2021 - Injection"],
+          "future_metadata_field": ["forward-compat"]
+        },
+        "lines": "subprocess.call(\"ls \" + user_input, shell=True)",
+        "future_extra_field": 42
+      }
+    }
+  ],
+  "errors": [],
+  "paths": {"scanned": ["repo/app.py"], "skipped": []}
+}
