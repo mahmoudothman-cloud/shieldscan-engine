@@ -1,0 +1,25 @@
+{
+  "id": "job_a1b2c3d4",
+  "scan_id": "scn_x1y2z3",
+  "organization_id": "org_m1n2o3",
+  "engine": "nuclei",
+  "idempotency_key": "scn_x1y2z3:nuclei:1711720200",
+  "target": {
+    "url": "https://app.example.com",
+    "target_type": "web",
+    "domain_verified": true
+  },
+  "auth": {
+    "type": "cookie",
+    "data": "session=abc123; csrf=xyz789"
+  },
+  "config": {
+    "depth": "standard",
+    "template_categories": ["owasp-top-10", "cves"],
+    "max_requests_per_second": 50,
+    "timeout_seconds": 1800
+  },
+  "mobile_config": null,
+  "callback_channel": "shieldscan:progress:scn_x1y2z3",
+  "created_at": "2026-04-18T14:30:00Z"
+}

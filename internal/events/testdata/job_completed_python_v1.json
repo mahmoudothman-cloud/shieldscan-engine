@@ -1,0 +1,38 @@
+{
+  "event_type": "job_completed",
+  "job_id": "job_a1b2c3d4",
+  "scan_id": "scn_x1y2z3",
+  "engine": "nuclei",
+  "status": "completed",
+  "finding_count": 2,
+  "duration_ms": 145000,
+  "idempotency_key": "scn_x1y2z3:nuclei:1711720200",
+  "timestamp": "2026-04-18T14:34:27Z",
+  "findings": [
+    {
+      "tool_name": "nuclei",
+      "engine_category": "dast",
+      "title": "XSS in q parameter",
+      "severity": "high",
+      "finding_type": "xss",
+      "cwe_id": "CWE-79",
+      "target_url": "https://app.example.com/search",
+      "parameter": "q",
+      "fingerprint": "deadbeefcafe1234deadbeefcafe1234deadbeefcafe1234deadbeefcafe1234"
+    },
+    {
+      "tool_name": "nuclei",
+      "engine_category": "dast",
+      "title": "Open redirect",
+      "severity": "medium",
+      "finding_type": "open_redirect",
+      "cwe_id": "CWE-601",
+      "target_url": "https://app.example.com/redirect",
+      "fingerprint": "feedfacedeadbeef1234feedfacedeadbeef1234feedfacedeadbeef1234feed"
+    }
+  ],
+  "event_seq": {
+    "index": 1,
+    "total": 1
+  }
+}

@@ -8,6 +8,86 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+### 2026-05-01 — Task 5.4: Redis primitives (queue + streams + pubsub + idem)
+
+**Files shipped:** `internal/redis/queue.go` (JobConsumer) · `internal/redis/stream.go` (ProgressPublisher per ADR-018) · `internal/redis/pubsub.go` (CancelSubscriber + CompletionsPublisher) · `internal/redis/idem.go` (IdempotencyClaim) · `internal/redis/{queue,stream,pubsub,idem}_test.go` (4+6+5+8 = 23 tests). Plus `internal/events/events.go` extended with `JobDispatch`/`JobTarget`/`JobAuth`/`JobMobileConfig`/`ProgressEvent`/`SplitForCompletion`/`DecodeJobDispatch` and `internal/events/events_test.go` extended with 6 SplitForCompletion + fixture tests. Plus 4 fixture artifacts in `internal/events/testdata/`.
+
+**29 net-new tests at 5.4 close** (23 redis + 6 events extension). Engine total: 88 tests across 5 packages. Race-clean, vet-clean, lint-clean.
+
+**ADR-018 file-layout discipline implemented.** Progress XADD lives in `stream.go`; cancel + completions in `pubsub.go`. Engineer adding progress logic looks at `stream.go` first; cancel/completions logic in `pubsub.go`. Plan §5.4 literal had progress in `pubsub.go` — that's the stale Pub/Sub-for-progress shape that ADR-018 corrects.
+
+**Self-catch during TDD: caller-cancellation-vs-BRPOP-redis.Nil race.** Initial JobConsumer.Pop checked `ctx.Err()` only in the `err != nil` path, not in the `redis.Nil` (timeout) path. On real Redis where ctx-cancel mid-BRPOP can result in the BRPOP returning `redis.Nil` first (timeout) with the cancel landing right after, the cancel signal would be lost — Pop would return `(nil, nil)` instead of `(nil, ctx.Canceled)`. Caught while debugging the miniredis ctx-cancel test; restructured to check `ctx.Err()` BEFORE interpreting BRPOP's return, so the cancel signal wins regardless of BRPOP's race behavior. Pattern: ctx-error precedence over Redis-success-or-error.
+
+### 2026-05-01 — Task 5.4: cross-repo wire-format fixtures introduced
+
+`internal/events/testdata/` established as cross-repo contract fixture location.
+
+**Fixtures shipped:**
+- `job_dispatch_python_v1.json` — canonical SPEC §7.1 queue payload matching M4 Python `ScanQueue.dispatch` wire format.
+- `job_dispatch_python_v1.md` — provenance + cross-repo update protocol.
+- `job_completed_python_v1.json` — canonical SPEC §7.3 (post-ADR-017) completion event.
+- `job_completed_python_v1.md` — provenance + sequencing semantics.
+
+**Embedded via `//go:embed`** in `internal/events/events.go` as `FixtureJobDispatchPythonV1` and `FixtureJobCompletedPythonV1` byte slices. Tests in `internal/redis/` and `internal/events/` consume the embed without filesystem-relative path fragility.
+
+**Cross-repo update protocol** (in fixture .md files): when Python emit shape changes legitimately, both fixture files AND Python emit code AND Go consumer struct must update in lockstep. The `_v1` suffix sets up versioning for future schema migrations (e.g., `_v2.json` if a breaking change ships).
+
+**Pinned by `TestJobConsumer_MatchesPythonWireFormat`** (cross-repo wire-format test #6). DisallowUnknownFields enforces strictness — Python emit drift breaks Go decode loudly at CI time. This is the load-bearing cross-repo contract pin of Task 5.4.
+
+### 2026-05-01 — Task 5.4: SplitForCompletion location in events package
+
+**Decision.** ADR-017 sequencing logic placed in `internal/events/events.go::SplitForCompletion`, NOT in `internal/redis/`.
+
+**Why.** Sequencing is contract-shaped per ADR-017 (the multi-event protocol Python's CompletionsConsumer must understand). It belongs with the type definitions for the same reason `EventSeq.Validate` does — single source of truth for what's a valid sequenced batch. Both 5.4 `CompletionsPublisher` and 5.5 processor reference `SplitForCompletion`; placing it in events package means one canonical implementation.
+
+Future readers asking "how do JobCompletedEvents get split for sequencing?" find the answer with the type, not by tracing publisher code. Symmetry: `EventSeq` lives in events package; `SplitForCompletion` consumes/produces `EventSeq` and `JobCompletedEvent`; co-location is correct.
+
+**Pinned by 4 SplitForCompletion tests** covering single-event boundary cases (0/1/1000 findings), multi-event sequencing (1001/2000/2500), intermediate-status override (ADR-017 partial_findings type), and authoritative-fields-on-terminal-only invariant.
+
+### 2026-05-01 — Task 5.4: ProgressEvent as map[string]any (loose typing)
+
+**Decision.** `events.ProgressEvent` is a type-aliased `map[string]any`, not a typed struct.
+
+**Trade-off acknowledged.** SPEC §7.2 has 7+ event variants (`job_started`, `recon_started`, `subdomains_discovered`, `job_progress`, `finding_discovered`, `job_canceled`, `job_failed`) with payloads varying by event_type. A strict typed struct per variant would require N Go types and Go-side schema work every time Python adds a variant. Python is map-based; SPEC is the contract surface, not the Go type.
+
+**ProgressPublisher injects** `event_type` / `scan_id` / `timestamp` headers; payload is open-ended for everything else. Symmetric with Python's `ProgressPublisher.publish(event: dict)` shape.
+
+**Promotion path.** If type-safety pressure surfaces (specific variants need validation — e.g., `subdomains_discovered.subdomains` must be `[]string`, `job_progress.progress` must be `0-100`), promote those variants to typed structs in events package; the `ProgressEvent` map remains as fallback for variants not yet promoted. Most variants will probably never need promotion at MVP scale.
+
+### 2026-05-01 — Task 5.4: Pub/Sub disconnect handling for CancelSubscriber
+
+**Decision.** go-redis v9 `Subscribe` does NOT auto-reconnect on transient drops. CancelSubscriber surfaces disconnect via Events() channel close — when the underlying `pubsub.Channel()` closes (transient drop OR explicit `Close()`), the converter goroutine exits and Events() closes. Caller (M5.5 processor) detects via closed-channel receive (`_, ok := <-sub.Events(); !ok`) and decides recovery.
+
+**Why not auto-reconnect inside the primitive.** Primitives surface failure; orchestration decides recovery. Same shape as 5.3's "retry deferred to per-tool Execute" — for CancelSubscriber, the recovery decision depends on operational context the primitive can't know (is this transient blip recoverable? Or is Redis genuinely down and we should fail-the-job?). 5.5 processor knows; 5.4 primitive doesn't.
+
+**Subscription confirmation pattern.** `NewCancelSubscriber` calls `pubsub.Receive(ctx)` to wait for Redis's subscribe-ack before returning. Without this, a Publish emitted between `Subscribe()` and the first `Channel()` read could be lost. miniredis honors the Receive-handshake; verified by `TestCancelSubscriber_ReceivesPublishedEvent`.
+
+### 2026-05-01 — Task 5.4: malformed-payload poison-pill protection (queue + cancel)
+
+**Pattern applied to both JobConsumer and CancelSubscriber.** Malformed JSON payloads are dropped (queue: returns error to caller; cancel: silent skip in converter goroutine). Underlying messages are consumed (BRPOP popped; Pub/Sub delivered) so the malformed entry doesn't loop forever.
+
+**Trade-off acknowledged.** Malformed jobs are silently lost from the customer's perspective. M4 Python orchestrator emits well-formed JSON; malformed implies upstream bug or Redis corruption. Recovery for genuine customer-impact: M5+ ghost-queued janitor (Task 4.2 carry-forward) sweeps stuck `ScanJob.status = 'running'` rows.
+
+Alternatives rejected:
+- **Re-LPUSH for retry**: risks infinite loop on persistent malformed entry.
+- **Move to dead-letter list**: requires cross-repo coordination + new primitive; M4 Python doesn't have one.
+
+Pinned by `TestJobConsumer_MalformedJSONReturnsError` (consumed-then-empty assertion) and `TestCancelSubscriber_MalformedPayloadDropped` (subscriber continues delivering valid events after garbage).
+
+### 2026-05-01 — Task 5.4: miniredis Streams + Pub/Sub compat verified (Checkpoint 4 closure)
+
+**Checkpoint 4 documented-confidence pin** (miniredis/v2 v2.33.0 vs go-redis/v9.7.0) verified at Task 5.4 across both Streams and Pub/Sub primitives.
+
+**Streams** (XADD, XRANGE, XLEN, MAXLEN approximate trim) all behave per Redis spec. `TestProgressPublisher_MaxLenApplied` (publish 1500, expect `<= 1200` retained) and `TestProgressPublisher_RoundTripWithXRange` (publish then XRANGE retrieves the same payload) collectively verify.
+
+**Pub/Sub** (Subscribe + handshake via Receive + Channel + Publish) works correctly. `TestCancelSubscriber_ReceivesPublishedEvent` verifies subscribe-handshake + per-channel routing; `TestCompletionsPublisher_RoundTripJSON` verifies cross-process event round-trip with full JSON shape preservation.
+
+**One miniredis limitation surfaced + worked around.** miniredis's BRPOP runs synchronously and does NOT honor ctx-cancel mid-flight (real Redis cancels BRPOP via connection close + go-redis aborts). `TestJobConsumer_CtxCancelExits` works around with a short BRPOP timeout (200ms) so miniredis returns `redis.Nil` naturally; Pop's post-BRPOP `ctx.Err()` check then returns Canceled. The implementation is correct on real Redis (where mid-flight cancel IS interrupted); the test uses the short-timeout shape because miniredis can't reproduce real-Redis cancel semantics. Documented in test docstring + this DRIFT-LOG entry.
+
+**goleak coverage** added in `internal/redis/pubsub_test.go`'s `TestMain` with `IgnoreTopFunction` for go-redis pool reaper + miniredis serve goroutine. CancelSubscriber's converter-goroutine teardown verified leak-clean across all 8 pubsub tests.
+
+**Compat-confidence is now compat-verified.** Both engine-test deps (httpmock @ 5.3, miniredis @ 5.4) closed.
+
 ### 2026-05-01 — Task 5.3: DockerServiceRunner for HTTP-based services
 
 **Files shipped:** `internal/tools/docker_service.go` (DockerServiceRunner + Get/Post/PollUntil/HealthCheck helpers + compile-time interface assertion) · `internal/tools/docker_service_test.go` (24 tests using httpmock v1.3.1).

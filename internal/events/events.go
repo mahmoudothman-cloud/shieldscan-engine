@@ -15,10 +15,24 @@ package events
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 )
+
+// FixtureJobDispatchPythonV1 is the canonical Python-emitted job
+// dispatch payload (SPEC §7.1) used as the cross-repo wire-format pin
+// in tests. See testdata/job_dispatch_python_v1.md for provenance.
+//
+//go:embed testdata/job_dispatch_python_v1.json
+var FixtureJobDispatchPythonV1 []byte
+
+// FixtureJobCompletedPythonV1 is the canonical job-completion event
+// payload (SPEC §7.3 post-ADR-017). See testdata/job_completed_python_v1.md.
+//
+//go:embed testdata/job_completed_python_v1.json
+var FixtureJobCompletedPythonV1 []byte
 
 // EventType enumerates the event_type values that may appear on the
 // shieldscan:* Redis primitives. Producers MUST use these constants;
@@ -191,6 +205,130 @@ type CancelEvent struct {
 	ScanID    string    `json:"scan_id"`
 	Reason    string    `json:"reason"`
 	Timestamp string    `json:"timestamp"`
+}
+
+// JobDispatch matches SPEC §7.1 queue payload shape. The Go consumer
+// (internal/redis/JobConsumer.Pop) deserializes the JSON written by
+// the Python ScanQueue.dispatch (shieldscan-api scan_queue.py).
+//
+// Cross-repo contract: top-level field set MUST stay in sync with
+// the Python emit. DisallowUnknownFields is enforced at decode time
+// — any new top-level field on the Python side requires a
+// corresponding addition here.
+type JobDispatch struct {
+	ID              string           `json:"id"`
+	ScanID          string           `json:"scan_id"`
+	OrganizationID  string           `json:"organization_id"`
+	Engine          string           `json:"engine"`
+	IdempotencyKey  string           `json:"idempotency_key"`
+	Target          JobTarget        `json:"target"`
+	Auth            *JobAuth         `json:"auth"`
+	Config          map[string]any   `json:"config"`
+	MobileConfig    *JobMobileConfig `json:"mobile_config"`
+	CallbackChannel string           `json:"callback_channel"`
+	CreatedAt       string           `json:"created_at"`
+}
+
+// JobTarget is the embedded target object inside JobDispatch.
+type JobTarget struct {
+	URL            string `json:"url"`
+	TargetType     string `json:"target_type"`
+	DomainVerified bool   `json:"domain_verified"`
+}
+
+// JobAuth is the optional embedded auth object inside JobDispatch.
+type JobAuth struct {
+	Type string `json:"type"`
+	Data string `json:"data"`
+}
+
+// JobMobileConfig is the optional embedded mobile-config object.
+type JobMobileConfig struct {
+	UploadRef    string `json:"upload_ref"`
+	Platform     string `json:"platform"`
+	AnalysisType string `json:"analysis_type"`
+}
+
+// ProgressEvent is the open-ended payload type for progress events
+// flowing through the shieldscan:progress:{scan_id} Stream.
+//
+// Loose typing (map vs typed struct) is deliberate — SPEC §7.2 has
+// 7+ event variants (job_started, recon_started, subdomains_discovered,
+// job_progress, finding_discovered, job_canceled, job_failed) varying
+// in payload shape. A strict per-variant struct would require N Go
+// types and Go-side schema work every time Python adds a variant.
+// Python is map-based; SPEC is the contract surface.
+//
+// ProgressPublisher injects event_type / scan_id / timestamp headers;
+// payload is open-ended for everything else. If type-safety pressure
+// surfaces (specific variants need validation), promote those variants
+// to typed structs in this package; ProgressEvent map remains the
+// fallback. See engine DRIFT-LOG 2026-05-01 entry.
+type ProgressEvent map[string]any
+
+// SplitForCompletion splits findings into one or more JobCompletedEvent
+// instances respecting MaxFindingsPerEvent (ADR-017).
+//
+// base carries per-job invariants (JobID, ScanID, Engine, Status,
+// FindingCount, DurationMs, IdempotencyKey, Timestamp, ErrorMessage).
+// The splitter overrides Findings + EventSeq per batch index, and
+// for intermediate batches also overrides EventType, Status,
+// FindingCount, DurationMs.
+//
+// Edge cases:
+//   - 0 findings:    single event, EventSeq{1, 1}, Findings:nil
+//   - <=1000:        single event, EventSeq{1, 1}
+//   - 1001..2000:    two events, EventSeq{1,2} + {2,2}
+//   - 2001..3000:    three events
+//   - etc.
+//
+// Per ADR-017: intermediate events use Status="partial_findings" +
+// EventType=EventPartialFindings; FindingCount and DurationMs are
+// zeroed (authoritative only on the terminal event).
+func SplitForCompletion(findings []RawFinding, base JobCompletedEvent) []JobCompletedEvent {
+	if len(findings) <= MaxFindingsPerEvent {
+		ev := base
+		ev.Findings = findings
+		ev.EventSeq = EventSeq{Index: 1, Total: 1}
+		return []JobCompletedEvent{ev}
+	}
+
+	total := (len(findings) + MaxFindingsPerEvent - 1) / MaxFindingsPerEvent
+	out := make([]JobCompletedEvent, 0, total)
+	for i := 0; i < total; i++ {
+		start := i * MaxFindingsPerEvent
+		end := start + MaxFindingsPerEvent
+		if end > len(findings) {
+			end = len(findings)
+		}
+		ev := base
+		ev.Findings = findings[start:end]
+		ev.EventSeq = EventSeq{Index: i + 1, Total: total}
+		if i < total-1 {
+			// Intermediate batch (ADR-017).
+			ev.EventType = EventPartialFindings
+			ev.Status = "partial_findings"
+			ev.FindingCount = 0
+			ev.DurationMs = 0
+		}
+		// Else: terminal event preserves base's fields.
+		out = append(out, ev)
+	}
+	return out
+}
+
+// DecodeJobDispatch parses a JSON payload into JobDispatch with
+// DisallowUnknownFields enabled. Cross-repo wire-format pin: any
+// new field on the Python emit side breaks decode here, forcing
+// explicit struct extension.
+func DecodeJobDispatch(data []byte) (*JobDispatch, error) {
+	var job JobDispatch
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&job); err != nil {
+		return nil, fmt.Errorf("decode JobDispatch: %w", err)
+	}
+	return &job, nil
 }
 
 // DecodeJobCompletedEvent parses a JSON payload into JobCompletedEvent
