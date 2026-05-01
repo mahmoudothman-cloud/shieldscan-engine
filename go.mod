@@ -3,6 +3,7 @@ module github.com/odyssey/shieldscan-engine
 go 1.26.2
 
 require (
+	github.com/jarcoal/httpmock v1.3.1
 	github.com/rs/zerolog v1.33.0
 	github.com/stretchr/testify v1.9.0
 	go.uber.org/goleak v1.3.0
