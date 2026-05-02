@@ -1,0 +1,13 @@
+{
+  "classifications": {},
+  "vulnerabilities": {},
+  "anomalies": {},
+  "additionals": {},
+  "infos": {
+    "target": "https://example.com/",
+    "date": "2026-01-15T12:00:00Z",
+    "version": "3.2.4",
+    "scope": "folder",
+    "auth": null
+  }
+}

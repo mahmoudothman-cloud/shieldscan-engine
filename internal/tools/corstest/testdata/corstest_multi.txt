@@ -1,0 +1,30 @@
+------------------------------------------------------------------------
+Resource: https://api.example.com/v1/users
+Origin:   https://attacker.example.com
+ACAO:     https://attacker.example.com
+ACAC:     true
+[97;100mapi.example.com - Vulnerable: any origin allowed with credentials[0m
+------------------------------------------------------------------------
+Resource: https://www.example.com
+Origin:   https://www.example.com
+ACAO:     -
+ACAC:     -
+[97;100mwww.example.com - Not vulnerable: Access-Control-Allow-Origin header not present[0m
+------------------------------------------------------------------------
+Resource: https://api.example.org/data
+Origin:   null
+ACAO:     null
+ACAC:     true
+[97;100mapi.example.org - Vulnerable: null origin allowed with credentials[0m
+------------------------------------------------------------------------
+Resource: https://safe.example.com
+Origin:   https://safe.example.com
+ACAO:     https://allowed.example.com
+ACAC:     -
+[97;100msafe.example.com - Not vulnerable: ACAO restricted to specific origin[0m
+------------------------------------------------------------------------
+Resource: https://reflect.example.com/api
+Origin:   https://attacker.example.org
+ACAO:     https://attacker.example.org
+ACAC:     -
+[97;100mreflect.example.com - Vulnerable: origin reflected (no credentials)[0m

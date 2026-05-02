@@ -256,4 +256,117 @@ per-instance context.
 
 ---
 
-*Last updated: 2026-05-02 at Task 6.7.*
+## 4. Constants-only field mapping for tools with uniform finding shape
+
+**Promoted at Task 6.6** with 4 instances (M6.5 Gitleaks, M6.7 Checkov,
+M6.6 Nikto, M6.6 CORStest). Tools whose findings have a uniform
+severity/CWE classification class apply package-level constants
+directly rather than wiring a per-finding mapping function.
+
+### Shape
+
+The runner package exports constants for the values it applies
+universally:
+
+```go
+// internal/tools/<tool>/<tool>.go
+const (
+    SeverityCritical        = "critical"     // example from Gitleaks
+    CWEHardcodedCredentials = "CWE-798"      // example from Gitleaks
+)
+```
+
+The parser (`parse.go`) inlines these directly when populating
+`RawFinding`:
+
+```go
+return events.RawFinding{
+    // ... other fields from upstream data ...
+    Severity: SeverityCritical,
+    CWEID:    CWEHardcodedCredentials,
+}
+```
+
+No `severity.go` mapping file. No `mapSeverity()` function. No table.
+
+Constants are **exported** so M9 AI pipeline + downstream tooling
+can reference canonical values without parsing strings.
+
+### When to use
+
+A tool's finding class is **uniform** along severity/CWE axes — every
+finding has the same severity (because the tool's domain is
+uniform-severity by construction) AND no per-rule CWE diversity
+(or the tool emits no per-rule CWE field).
+
+Examples (Pattern 4 instances):
+
+- **Gitleaks** (M6.5): every finding is a hardcoded credential →
+  critical / CWE-798. No per-rule severity emitted.
+- **Checkov** (M6.7): OSS Checkov emits no per-check severity; all
+  IaC misconfigs → medium / CWE-1032.
+- **Nikto** (M6.6): every finding is informational web-server
+  misconfig → low. Nikto XML has no per-finding severity.
+- **CORStest** (M6.6): every finding is a CORS misconfiguration →
+  medium / CWE-942. CORStest output has no severity field.
+
+### When NOT to use (anti-instances)
+
+Per-finding mapping is appropriate when:
+
+- **Tool emits per-finding severity** (Nuclei identity, Semgrep
+  ERROR/WARNING/INFO, Dep-Check Critical/High/Medium/Low) → use a
+  `mapSeverity()` function in `severity.go`.
+- **Domain-rules table needed** (SSLyze 15-rule per-FindingType
+  table; Wapiti 5-level domain mapping) → use a domain-rules table
+  in `severity.go` per the "Domain-rules severity mapping" pattern
+  (track-only at 2 instances; not yet promoted).
+
+The decision is empirical: read the tool's output schema. If
+severity varies per finding, map it. If it doesn't, constants-only.
+
+### Anti-pattern: scaffolded mapping function with no input variation
+
+A `mapSeverity()` function that always returns the same value
+regardless of input is **misleading scaffolding**. It suggests
+variation that doesn't exist. Constants-only is the honest
+representation.
+
+### Tools using per-finding mapping (anti-instances list)
+
+Five tools currently use per-finding severity mapping. Reading any
+of these reveals the contrast with Pattern 4:
+
+- `internal/tools/nuclei/severity.go` — identity-passthrough (5-level)
+- `internal/tools/semgrep/severity.go` — 3-level → 5-level mapping
+- `internal/tools/depcheck/severity.go` — 5-level case-insensitive
+  identity (with Moderate alias)
+- `internal/tools/sslyze/severity.go` — 15-rule domain-rules table
+  (different pattern; track-only)
+- `internal/tools/wapiti/severity.go` — 5-level integer → canonical
+  (different pattern; track-only)
+
+### Trigger to revisit
+
+A tool currently using constants-only adds per-finding severity in a
+future version. At that point, replace the constants with a
+`mapSeverity()` function in `severity.go`. The pattern's "When to
+use" criteria become empirically false; refactor.
+
+### Cross-pattern cross-reference
+
+This pattern's promotion at 4 instances (one over the standard
+3-instance threshold) reflects the unambiguous criteria for
+applicability. By contrast, ADR-023 (NativeRunner OutputFile mode)
+overrode the threshold at 1 instance via asymmetric-cost reasoning
+because the alternatives were race-prone. Different cost asymmetries
+yield different threshold applications; the underlying principle is
+"pattern velocity should match decision-cost asymmetry," not "promote
+at exactly 3 every time."
+
+Pattern promoted at M6.6; cross-references explicit instances at
+6.5 / 6.7 / 6.6 above + anti-instances list above.
+
+---
+
+*Last updated: 2026-05-02 at Task 6.6.*

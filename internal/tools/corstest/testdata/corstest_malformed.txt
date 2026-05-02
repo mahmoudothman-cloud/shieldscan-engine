@@ -1,0 +1,20 @@
+------------------------------------------------------------------------
+Resource: https://complete.example.com
+Origin:   https://complete.example.com
+ACAO:     https://complete.example.com
+ACAC:     true
+[97;100mcomplete.example.com - Vulnerable: any origin with credentials[0m
+random debug line that doesn't match any record format
+this should be silently ignored
+[97;100mloose.example.com - Vulnerable: orphan vulnerable line without preceding record[0m
+------------------------------------------------------------------------
+Resource: https://no-status.example.com
+Origin:   https://no-status.example.com
+ACAO:     -
+ACAC:     -
+------------------------------------------------------------------------
+Resource: https://valid-after-bad.example.com
+Origin:   https://valid-after-bad.example.com
+ACAO:     https://valid-after-bad.example.com
+ACAC:     -
+[97;100mvalid-after-bad.example.com - Vulnerable: origin reflected[0m

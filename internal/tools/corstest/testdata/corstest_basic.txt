@@ -1,0 +1,6 @@
+------------------------------------------------------------------------
+Resource: https://api.example.com/v1/users
+Origin:   https://attacker.example.com
+ACAO:     https://attacker.example.com
+ACAC:     true
+[97;100mapi.example.com - Vulnerable: any origin allowed with credentials[0m

@@ -1,0 +1,28 @@
+<?xml version="1.0" ?>
+<niktoscan version="2.1.5">
+
+<scandetails targetip="192.0.2.40" targethostname="partial.example.com" targetport="443" sitename="https://partial.example.com:443">
+
+<item id="999976" osvdbid="0" method="GET">
+<description><![CDATA[Valid finding: header missing.]]></description>
+<uri><![CDATA[/]]></uri>
+</item>
+
+<item id="" method="GET">
+<description><![CDATA[Missing id — this finding should be skipped.]]></description>
+<uri><![CDATA[/no-id]]></uri>
+</item>
+
+<item id="999100" method="GET">
+<description><![CDATA[]]></description>
+<uri><![CDATA[/empty-desc]]></uri>
+</item>
+
+<item id="999103" method="GET">
+<description><![CDATA[Valid second finding.]]></description>
+<uri><![CDATA[/valid2]]></uri>
+</item>
+
+</scandetails>
+
+</niktoscan>

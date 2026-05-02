@@ -1,0 +1,54 @@
+{
+  "classifications": {},
+  "vulnerabilities": {
+    "Cross Site Scripting": [
+      {
+        "method": "GET",
+        "path": "/search",
+        "info": "XSS in q parameter",
+        "level": 3,
+        "parameter": "q",
+        "referer": "",
+        "module": "xss",
+        "http_request": "GET /search?q=<script>...",
+        "curl_command": "curl ...",
+        "wstg": []
+      },
+      {
+        "method": "POST",
+        "path": "/comment",
+        "info": "XSS in body",
+        "level": 4,
+        "parameter": "body",
+        "referer": "",
+        "module": "xss",
+        "http_request": "POST /comment ...",
+        "curl_command": "curl ...",
+        "wstg": []
+      }
+    ],
+    "SQL Injection": [
+      {
+        "method": "GET",
+        "path": "/user",
+        "info": "SQLi in id parameter",
+        "level": 5,
+        "parameter": "id",
+        "referer": "",
+        "module": "sql",
+        "http_request": "GET /user?id=1 ...",
+        "curl_command": "curl ...",
+        "wstg": []
+      }
+    ]
+  },
+  "anomalies": {},
+  "additionals": {},
+  "infos": {
+    "target": "https://example.com/",
+    "date": "2026-01-15T12:00:00Z",
+    "version": "3.2.4",
+    "scope": "folder",
+    "auth": null
+  }
+}

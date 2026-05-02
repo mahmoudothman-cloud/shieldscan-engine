@@ -1,0 +1,8 @@
+<?xml version="1.0" ?>
+<niktoscan version="2.1.5" scanstart="2026-01-15 12:00:00" scanend="2026-01-15 12:00:05">
+
+<scandetails targetip="192.0.2.30" targethostname="clean.example.com" targetport="443" sitename="https://clean.example.com:443" hostheader="clean.example.com" errors="0" checks="6544">
+<statistics elapsed="5" itemsfound="0" itemstested="6544" endtime="2026-01-15 12:00:05" />
+</scandetails>
+
+</niktoscan>

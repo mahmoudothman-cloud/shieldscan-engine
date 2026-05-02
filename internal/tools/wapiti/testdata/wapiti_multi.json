@@ -1,0 +1,102 @@
+{
+  "classifications": {},
+  "vulnerabilities": {
+    "Backup file": [],
+    "Weak credentials": [],
+    "CRLF Injection": [],
+    "Content Security Policy Configuration": [],
+    "Cross Site Request Forgery": [],
+    "Potentially dangerous file": [],
+    "Command execution": [],
+    "Path Traversal": [],
+    "Fingerprint web application framework": [],
+    "Fingerprint web server": [],
+    "Htaccess Bypass": [],
+    "HTML Injection": [],
+    "Clickjacking Protection": [
+      {
+        "method": "GET",
+        "path": "/",
+        "info": "X-Frame-Options is not set",
+        "level": 1,
+        "parameter": "",
+        "referer": "",
+        "module": "http_headers",
+        "http_request": "GET / HTTP/1.1\nhost: example.com\nconnection: keep-alive\nuser-agent: Mozilla/5.0 (Windows NT 6.1; rv:45.0) Gecko/20100101 Firefox/45.0\naccept-language: en-US\naccept-encoding: gzip, deflate, br\naccept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "curl_command": "curl \"https://example.com/\"",
+        "wstg": [
+          "OSHP-X-Frame-Options"
+        ]
+      }
+    ],
+    "HTTP Strict Transport Security (HSTS)": [
+      {
+        "method": "GET",
+        "path": "/",
+        "info": "Strict-Transport-Security is not set",
+        "level": 1,
+        "parameter": "",
+        "referer": "",
+        "module": "http_headers",
+        "http_request": "GET / HTTP/1.1\nhost: example.com\nconnection: keep-alive\nuser-agent: Mozilla/5.0 (Windows NT 6.1; rv:45.0) Gecko/20100101 Firefox/45.0\naccept-language: en-US\naccept-encoding: gzip, deflate, br\naccept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "curl_command": "curl \"https://example.com/\"",
+        "wstg": [
+          "WSTG-CONF-07",
+          "OSHP-HTTP-Strict-Transport-Security"
+        ]
+      }
+    ],
+    "MIME Type Confusion": [
+      {
+        "method": "GET",
+        "path": "/",
+        "info": "X-Content-Type-Options is not set",
+        "level": 1,
+        "parameter": "",
+        "referer": "",
+        "module": "http_headers",
+        "http_request": "GET / HTTP/1.1\nhost: example.com\nconnection: keep-alive\nuser-agent: Mozilla/5.0 (Windows NT 6.1; rv:45.0) Gecko/20100101 Firefox/45.0\naccept-language: en-US\naccept-encoding: gzip, deflate, br\naccept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "curl_command": "curl \"https://example.com/\"",
+        "wstg": [
+          "OSHP-X-Content-Type-Options"
+        ]
+      }
+    ],
+    "HttpOnly Flag cookie": [],
+    "Unencrypted Channels": [],
+    "LDAP Injection": [],
+    "Log4Shell": [],
+    "Open Redirect": [],
+    "Reflected Cross Site Scripting": [],
+    "Secure Flag cookie": [],
+    "Spring4Shell": [],
+    "SQL Injection": [],
+    "TLS/SSL misconfigurations": [],
+    "Server Side Request Forgery": [],
+    "Stored HTML Injection": [],
+    "Stored Cross Site Scripting": [],
+    "Subdomain takeover": [],
+    "Blind SQL Injection": [],
+    "Unrestricted File Upload": [],
+    "Vulnerable software": []
+  },
+  "anomalies": {
+    "Internal Server Error": [],
+    "Resource consumption": []
+  },
+  "additionals": {
+    "Review Webserver Metafiles for Information Leakage": [],
+    "Fingerprint web technology": [],
+    "HTTP Methods": [],
+    "TLS/SSL misconfigurations": []
+  },
+  "infos": {
+    "target": "https://example.com/",
+    "date": "Sat, 02 May 2026 06:50:58 +0000",
+    "version": "Wapiti 3.2.4",
+    "scope": "folder",
+    "auth": null,
+    "crawled_pages_nbr": 1,
+    "detailed_report_level": 0
+  }
+}

@@ -8,6 +8,289 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+### 2026-05-02 — Task 6.6: Nikto + Wapiti + CORStest runners + Pattern 4 promotion + 2 new parser shapes
+
+**Files shipped (single atomic engine commit):**
+- NEW `internal/tools/nikto/{nikto,parse}.go` + `nikto_test.go` + 4 testdata + README
+- NEW `internal/tools/wapiti/{wapiti,parse,severity}.go` + `wapiti_test.go` + 4 testdata + README
+- NEW `internal/tools/corstest/{corstest,parse,ansi}.go` + `corstest_test.go` + 4 testdata + README
+- UPDATE `DEVELOPMENT-PATTERNS.md` (Pattern 4 added: Constants-only field mapping)
+
+**Companion docs commit (`shieldscan-docs/`)** lands 3 TOOL-ARCH surgical patches.
+
+**38 net-new tests at 6.6 close** (12 Nikto + 14 Wapiti + 12 CORStest). Engine total: **292 tests** across 17 packages. Race-clean (concurrent OutputFile test from 6.7 still passes with Wapiti as 2nd consumer), vet-clean, golangci-lint v2 reports 0 issues.
+
+**Three-tool atomic commit** (Nikto first → Wapiti second → CORStest third within commit prep). Sequential implementation per Watch item D; framework regression check after Nikto + Wapiti landed (5 framework tests + Dep-Check 1st-consumer + Wapiti 2nd-consumer all green).
+
+**Pattern promotion at 6.6 (1 fired):**
+- **Constants-only field mapping → DEVELOPMENT-PATTERNS.md Pattern 4** (4 instances; promotion threshold met cleanly).
+
+**Pattern advances (track only):**
+- **Naturally-clean exit:** 3 → 6 (Nikto + Wapiti + CORStest add). Promotion DEFERRED per H.NEW.8 (wait for unified entry when other exit-code patterns mature).
+- **Domain-rules severity mapping:** 1 → 2 (Wapiti `level` integer → canonical). Track for 3rd-instance.
+- **OutputFile mode (ADR-023):** 1 → 2 (Wapiti is 2nd consumer; bug workaround for `-o /dev/stdout` corruption). Track.
+
+**Pattern stays at 1 instance (track only):**
+- **Plugin-rules parser:** Wapiti's category-keyed iteration is structurally distinct from SSLyze's per-plugin diagnostic shape — see entry 6 below for explicit distinction.
+
+**Two new parser shapes** (1st instance each; track):
+- **XML via `encoding/xml`** (Nikto). 4th format observed in M6.
+- **Text-with-ANSI** (CORStest). 5th format observed in M6.
+
+**Reductions counter advances 5/6 → 8/9 (83% → 89%).** SPEC §7.3 trigger remains fired; Path A still holds. Comprehensive 9-tool data accumulating for M6-close proposal.
+
+### 2026-05-02 — Task 6.6: Constants-only field mapping → DEVELOPMENT-PATTERNS.md Pattern 4
+
+**Pin (load-bearing).** Three-instance threshold met cleanly + 1 (4 instances at promotion):
+
+| # | Tool | Constants exported |
+|---|---|---|
+| 1 | M6.5 Gitleaks | `SeverityCritical = "critical"`, `CWEHardcodedCredentials = "CWE-798"` |
+| 2 | M6.7 Checkov | `SeverityMedium = "medium"`, `CWEIaCMisconfiguration = "CWE-1032"` |
+| 3 | M6.6 Nikto | `SeverityLow = "low"` |
+| 4 | M6.6 CORStest | `SeverityMedium = "medium"`, `CWEPermissiveCrossDomain = "CWE-942"` |
+
+**Pattern 4 entry text** (in `DEVELOPMENT-PATTERNS.md`) explicitly distinguishes:
+- **When to use:** uniform-severity-by-construction tools without per-rule severity
+- **When NOT to use** (anti-instances list): Nuclei/Semgrep/Dep-Check (per-finding mapping), SSLyze/Wapiti (domain-rules tables, separate pattern at 2 instances)
+- **Anti-pattern flagged:** scaffolded `mapSeverity()` with no input variation is misleading
+- **Cross-pattern reference:** ADR-023's threshold-override at 1 instance vs Pattern 4's clean 3+ instance promotion reflects different cost asymmetries; underlying principle is "pattern velocity should match decision-cost asymmetry"
+
+### 2026-05-02 — Task 6.6: Nikto XML parser (1st instance of encoding/xml)
+
+**Pin.** `internal/tools/nikto/parse.go` uses Go's stdlib `encoding/xml` to parse Nikto's `-Format xml` output. Defines `niktoScan` / `niktoScanDetails` / `niktoItem` structs with XML tags; iterates `<scandetails><item>` elements.
+
+**1st XML parser shape in M6** (4th format after JSONL + single-doc JSON + JSON-array). Track for 3rd-instance promotion. Likely candidate: M7 Trivy (has XML output mode).
+
+**XML stable across Nikto 2.x.** Verified at pre-prep: 2.1.5 + 2.5.0 both emit XML in same shape per Nikto DTD. JSON output added in 2.5+ but 2.1.5 doesn't support; XML chosen for cross-version compatibility.
+
+**Defensive struct design:** optional attrs (`osvdbid`, `targetip`) use `omitempty` so missing fields don't fail unmarshal. Top-level malformed XML IS fatal (consistent with single-doc parser convention from 6.2/6.5/6.7); per-item missing required fields (`id` or empty `description`) skip with WARN.
+
+### 2026-05-02 — Task 6.6: Nikto severity = constant "low" (Pattern 4 application)
+
+**Pin.** `nikto.SeverityLow = "low"`. Every Nikto finding gets the same severity (Pattern 4 constants-only mapping).
+
+**Why "low".** Nikto findings are uniformly **informational web-server misconfigs** (missing security headers, uncommon banners, directory listings, allowed-method enumeration). No CVE-class exploits emitted by default Nikto rules. Industry-standard severity for these is `"low"`.
+
+**CWEID intentionally empty** for Nikto findings. Nikto rules span too many CWE classes (info-disclosure, missing-headers, dangerous-files) for a meaningful constant. Future task or M9 AI pipeline can apply CWE inference if needed.
+
+**Trigger to revisit:** customer asks for finer-grained Nikto severity OR Nikto 3.x adds per-finding severity field.
+
+### 2026-05-02 — Task 6.6: Wapiti OutputFile mode (ADR-023 2nd consumer; bug workaround)
+
+**Pin.** Wapiti uses `NativeRunner.OutputFile = true` with `OutputFilePlaceholder = "{{outputFile}}"` (matches Dep-Check convention from 6.7). **2nd consumer of ADR-023 framework extension.**
+
+**Why required (not chosen):** Wapiti `-o /dev/stdout` corrupts JSON output by injecting the message *"A report has been generated in the file /dev/stdout"* INTO the JSON stream mid-value. Verified empirically at M6.6 pre-prep: `json.load` fails on the resulting bytes. ADR-023 OutputFile mode is the documented workaround.
+
+**Validates ADR-023 abstraction.** First time the framework extension is exercised by a *second consumer* with a *different reason* (Wapiti has a tool bug; Dep-Check has a deliberate file-output design). Confirms the abstraction generalizes beyond Dep-Check's specific case.
+
+**Pattern instance:** OutputFile mode at 2 instances (Dep-Check 6.7 + Wapiti 6.6). Track for 3rd-instance promotion to a possible framework-tier DEVELOPMENT-PATTERN entry. Likely 3rd candidate: M7 Trivy filesystem-scan, or another bug-workaround case.
+
+### 2026-05-02 — Task 6.6: Wapiti -o /dev/stdout corruption bug pinned
+
+**Pin (operational + parser-shape decision).** Verified empirically at M6.6 pre-prep:
+
+```bash
+$ wapiti -u https://example.com -m http_headers --flush-session -f json -o /dev/stdout 2>/dev/null > /tmp/clean.json
+$ python3 -c "import json; json.load(open('/tmp/clean.json'))"
+json.decoder.JSONDecodeError: Expecting value: line 7 column ...
+```
+
+The injected message *"A report has been generated in the file /dev/stdout"* lands inside a JSON string value, breaking the parse. Bug appears to be in Wapiti's report-generator: stdout receives both the JSON document AND the success message, written as separate stream operations that interleave at byte boundaries.
+
+**Implication:** Wapiti CANNOT use stdout-mode reliably. ADR-023 OutputFile mode is mandatory.
+
+**Trigger to remove workaround:** upstream Wapiti fix (track via wapiti-scanner GitHub issues). At that point, Wapiti could simplify to stdout-mode like other tools, but the OutputFile mode would still work — no urgency to refactor.
+
+### 2026-05-02 — Task 6.6: Wapiti category-keyed iteration distinct from plugin-rules pattern
+
+**Pin (plugin-rules pattern stays at 1 instance).** Wapiti's `vulnerabilities` map shape:
+
+```json
+{
+  "vulnerabilities": {
+    "Clickjacking Protection": [{vuln_instance}, {vuln_instance}, ...],
+    "SQL Injection":          [{...}, ...],
+    "Cross Site Scripting":   [{...}, ...]
+  }
+}
+```
+
+Per-instance shape is **uniform across all categories** (`method`, `path`, `info`, `level`, `parameter`, `module`, `http_request`, `curl_command`, `wstg`).
+
+**SSLyze plugin-rules (1st instance, 6.4) is structurally different:**
+- SSLyze plugins have heterogeneous per-plugin result shapes (heartbleed has `is_vulnerable_to_heartbleed` boolean; certificate_info has `certificate_deployments` array; tls_X_cipher_suites has `accepted_cipher_suites` array; etc.)
+- Each plugin needs domain-specific interpretation rule (`ruleHeartbleed`, `ruleRobot`, etc. dispatched via `pluginRules` table)
+
+**Wapiti is "category-keyed iteration"** (simpler variant): generic iteration over the `vulnerabilities` map; uniform per-instance extraction. No `pluginRules` table; no per-class rule functions.
+
+**Plugin-rules pattern stays at 1 instance (SSLyze only).** Wapiti does NOT advance the count. Pattern remains "track only" at 1 instance. Likely future plugin-rules candidate: M7 tool with heterogeneous per-plugin diagnostics.
+
+**Decision criterion** for future task authors: if all per-class items share the same shape → category-keyed iteration (use Wapiti's `parse.go` as template). If per-class items have heterogeneous shapes → plugin-rules pattern (use SSLyze's `rules.go` as template).
+
+### 2026-05-02 — Task 6.6: Wapiti level integer → canonical (domain-rules 2nd instance)
+
+**Pin.** `internal/tools/wapiti/severity.go` maps Wapiti's `level` integer (1-5) to canonical RawFinding.Severity. Wapiti convention:
+
+| Wapiti `level` | Canonical |
+|---|---|
+| 1 | info |
+| 2 | low |
+| 3 | medium |
+| 4 | high |
+| 5 | critical |
+
+Out-of-range values (0, negative, ≥6) → `"info"` (defensive default; mirrors prior tools).
+
+**Domain-rules severity mapping pattern, 2nd instance after 6.4 SSLyze.** Track for 3rd-instance promotion. Likely candidates: M7 tool with multi-rule severity (Trivy CVSS-derived severity?).
+
+### 2026-05-02 — Task 6.6: CORStest text-with-ANSI parser (1st instance; track for promotion)
+
+**Pin.** `internal/tools/corstest/parse.go` is the **first text-with-ANSI parser shape in M6** (5th format after JSONL + single-doc JSON + JSON-array + XML). Track for 3rd-instance promotion (likely rare; most modern tools emit JSON or XML).
+
+**Architecture:** `bufio.Scanner` line loop; ANSI-strip via regex; multi-line state machine accumulates per-host record fields (Resource / Origin / ACAO / ACAC) until status line emits a finding. Hosts marked "Not vulnerable" are filtered out (no finding emitted).
+
+**Resilience:** orphan status lines (no preceding record fields) are dropped with WARN; records without status lines (interrupted mid-record) are dropped silently when the next separator arrives.
+
+**Future similar-format candidates** (rare): M7-era tools that emit human-readable text for CLI usage. Most modern security tools default to JSON; text parsers are an edge case.
+
+### 2026-05-02 — Task 6.6: CORStest ANSI escape stripping helper
+
+**Pin.** `internal/tools/corstest/ansi.go`: `ansiRE = regexp.MustCompile(\x1b\[[0-9;]*m)` matches CSI SGR escape codes; `stripANSI(s)` replaces all matches with empty string.
+
+**Coverage:** SGR family only (most common in CLI tool color output: foreground/background colors, bold, reset). Other CSI families (cursor movement `H`/`J`/`K`, OSC sequences) use different terminators; CORStest doesn't emit them in normal scan output.
+
+**Trigger to extend:** customer report of non-SGR escape sequences leaking into finding fields. At that point, generalize regex to `\x1b\[[0-9;]*[a-zA-Z]` (all CSI families).
+
+### 2026-05-02 — Task 6.6: CORStest severity = constant "medium" (Pattern 4 application)
+
+**Pin.** `corstest.SeverityMedium = "medium"` + `corstest.CWEPermissiveCrossDomain = "CWE-942"`. Every CORStest finding gets the same severity + CWE (Pattern 4 constants-only mapping).
+
+**Why "medium" + CWE-942.** CORS misconfigurations are industry-standard medium-severity per OWASP API Top 10 + OWASP A01:2021 (Broken Access Control). Wildcard-with-credentials is the most common CORStest finding shape; null-origin and origin-reflection are sub-classes; all fall in the medium-severity band per OWASP. CWE-942 (Permissive Cross-domain Policy with Untrusted Domains) is the umbrella CWE.
+
+**Trigger to revisit:** customer asks for per-CORS-class severity (wildcard-with-credentials → high; null-origin → medium; reflected-origin → low). At that point, replace constant with mapping function driven by description text.
+
+### 2026-05-02 — Task 6.6: CORStest inline-tempfile workaround (NOT canonical for input files)
+
+**Pin (architectural acknowledgment).** CORStest takes a positional URL-list **file**, not a `-u <url>` flag. M6.6 implementation per H.3 Option (a): BuildArgs creates a per-Run tempfile via `os.CreateTemp`, writes `target.URL` to it, passes path as positional arg.
+
+**This pattern is NOT canonical for input-file tools.** Future input-file tools should propose a framework extension (InputFile mode similar to ADR-023 OutputFile) at 3rd instance per asymmetric-cost reasoning.
+
+**At M6.6:** 1st instance only; ad-hoc workaround acceptable per asymmetric-cost analysis (the alternatives at 1 instance — framework extension upfront, closure-shared state — have higher cost than the workaround's ugliness).
+
+**Cleanup limitation acknowledged:** the tempfile is created in `buildArgs` but no defer hook in BuildArgs surface. ParseOutput cannot reliably reach the path created here. **Cleanup is OS-level /tmp reaping (best-effort).** Acceptable for small URL files (~few hundred bytes typically); each Run leaks one small tempfile until the OS cleanup cycle.
+
+**Trigger to formalize InputFile framework extension:** 3rd instance of input-file-needing tool (analogous to ADR-023 promotion at 1st but with stronger asymmetry). At that point, extend NativeRunner with `InputFile bool` + `InputFilePlaceholder string` + `BuildInputContent func(target, cfg) []byte` fields; lifecycle mirrors OutputFile (create → substitute → invoke → defer cleanup).
+
+### 2026-05-02 — Task 6.6: Naturally-clean exit at 6 instances; promotion deferred per H.NEW.8
+
+**Pin (deferral reasoning explicitly documented).** Naturally-clean exit pattern instances post-6.6:
+
+1. M6.1 Nuclei
+2. M6.4 SSLyze
+3. M6.7 Dep-Check
+4. M6.6 Nikto
+5. M6.6 Wapiti
+6. M6.6 CORStest
+
+**6 instances; threshold-met-3-times-over.** Per H.NEW.8 approval, promotion to DEVELOPMENT-PATTERNS.md continues to be deferred.
+
+**Reasoning** (preserved for future engineers wondering "why isn't naturally-clean promoted at 6 instances?"):
+
+The three exit-code-handling patterns (naturally-clean / runner-tolerates / configuration-not-leniency) form a **coherent vocabulary** documented in 6.5 DRIFT-LOG entry 5 with a decision tree. Promoting just naturally-clean would fragment the conceptual unit:
+- "Why is naturally-clean a Pattern but the others aren't?"
+- "Where do I find the decision tree?"
+- Future readers would need to assemble the full picture from DRIFT-LOG + DEVELOPMENT-PATTERNS, defeating the documentation goal.
+
+**Trigger remains concrete:** configuration-not-leniency (currently 2: Gitleaks + Checkov) OR runner-tolerates (currently 1: Semgrep) hits 3rd instance. Then promote all three together as a unified "Exit-code handling vocabulary" Pattern. Likely fires at 6.3 or M7.
+
+**Asymmetric-cost accepted:** preserving conceptual unity outweighs the documentation lag for naturally-clean alone. This is the inverse of ADR-023's threshold override (where unity *justified* premature promotion); same principle, different direction.
+
+### 2026-05-02 — Task 6.6: reductions counter update (8/9 = 89%; Path A holds)
+
+**Pin.** Counter advances:
+
+| Tool | Reductions |
+|---|---|
+| 6.1 Nuclei | 3 |
+| 6.2 Semgrep | 0 |
+| 6.5 Gitleaks | 5 |
+| 6.4 SSLyze | 5 |
+| 6.7 Dep-Check | 5 |
+| 6.7 Checkov | 6 |
+| **6.6 Nikto** | **3** (osvdbid + osvdblink, namelink, iplink) |
+| **6.6 Wapiti** | **5** (curl_command, referer-when-empty, wstg refs, classifications metadata fold, http_request truncation) |
+| **6.6 CORStest** | **2** (Resource/Origin folded, ACAO/ACAC folded) |
+
+**8 of 9 M6 tools have reductions (89%, up from 83%).** SPEC §7.3 trigger remains fired; **Path A still holds** (M6 close timing for proposal). Comprehensive 9-tool data now accumulating; M6-close proposal will have empirically-grounded extension recommendations.
+
+**No new field-types missing per pre-prep field-map analysis.** All Nikto + Wapiti + CORStest reductions are similar shapes to existing tools.
+
+### 2026-05-02 — Task 6.6: Plan §6.6 thinness divergence
+
+**Pin.** Plan §6.6 (`shieldscan-docs/IMPLEMENTATION-PLAN.md` lines 1898+): one sentence × 3 tools.
+
+**Divergence (matches 6.7's "largest at any task" status):** 1 sentence × 3 tools → 38 tests + 2 new parser shapes + Pattern 4 promotion + 3 TOOL-ARCH patches. ~25 LoC plan literal → ~750 LoC src + ~700 LoC tests + ~80 LoC DEVELOPMENT-PATTERNS Pattern 4 entry.
+
+Plan §6.6 was written before M5 chassis + jsonx (6.5) + ADR-023 (6.7) + Pattern 3 (6.7) + reductions counter framework existed.
+
+### 2026-05-02 — Task 6.6: TOOL-ARCH three surgical patches
+
+**Pin.** Companion `shieldscan-docs/` commit lands 3 TOOL-ARCH invocation literal patches:
+
+1. **§6.7 Nikto:** `nikto -h <target> -nointeractive -Format txt -ask no` → `nikto -h <target> -Format xml -ask no -nointeractive` (XML chosen for parser stability; `-Format txt` deprecated parser shape).
+2. **§6.8 Wapiti:** `-o /dev/stdout` → `-o {{outputFile}}` (Wapiti bug corrupts /dev/stdout output; ADR-023 OutputFile mode required).
+3. **§6.9 CORStest:** `corstest -u https://api.target.com` → `python3 corstest.py <urlfile>` (CORStest takes positional file, not `-u` flag).
+
+All three regression-guarded engine-side: `TestBuildArgs_NoTextFormat` (Nikto), `TestBuildArgs_NoStdoutOutput` (Wapiti), `TestBuildArgs_NoUFlag` (CORStest).
+
+### 2026-05-02 — Task 6.6: Nikto version drift (apt 2.1.5 vs pinned 2.5.0)
+
+**Pin (operational).** VERSIONS.md pins Nikto 2.5.0; Ubuntu apt only ships 2.1.5. Verified at pre-prep: `nikto -Version` → 2.1.5.
+
+**Decision: accept apt's 2.1.5 for M6.6.** XML parser is stable across Nikto 2.x; the version drift doesn't affect parser correctness. Production deploys can choose: (a) accept apt's 2.1.5 + update VERSIONS.md to match, or (b) install Nikto 2.5.0 from source. **OPS milestone (M11) decision.**
+
+**Cross-version risk:** Nikto 2.5.0 may emit slightly different XML attributes. Defensive struct design (omitempty on optional attrs) handles minor variations. Trigger to re-test: 2.5.0 source-install lands at OPS milestone.
+
+### 2026-05-02 — Task 6.6: CORStest commit-SHA pinning (OPS provision-worker.sh note)
+
+**Pin (operational).** VERSIONS.md says "Pin to specific commit SHA" but no SHA listed. M6.6 pre-prep used `git clone --depth 1` (HEAD).
+
+**OPS milestone (M11) action items:**
+- Pick a specific SHA from the CORStest GitHub repo (last reasonable commit on `main`)
+- Update VERSIONS.md with the SHA
+- `provision-worker.sh` clones at that SHA
+- Wrapper script at `/usr/local/bin/corstest` invokes `python3 /opt/CORStest/corstest.py "$@"`
+
+**Trigger to revisit:** CORStest releases a tagged version with semver (unlikely; small research tool).
+
+### 2026-05-02 — Task 6.6: PYTHONWARNINGS Pattern 3 reaches 4-5 instances (no new promotion)
+
+**Pin.** Pattern 3 (PYTHONWARNINGS=ignore Env) instances after M6.6:
+
+1. M6.2 Semgrep (1st — observed warning suppression)
+2. M6.4 SSLyze (2nd — defense-in-depth)
+3. M6.7 Checkov (3rd — defense-in-depth; Pattern 3 promoted)
+4. M6.6 Wapiti (4th — defense-in-depth; pipx-installed)
+5. M6.6 CORStest (5th — defense-in-depth; Python script via `python3 corstest.py`)
+
+**5 instances; no new promotion needed** (Pattern 3 already promoted at 6.7). Reinforces the pattern's applicability across Python-tool variations (pipx-installed + script-based + research-tool).
+
+### 2026-05-02 — Task 6.6: Three-tool atomic commit shape
+
+**Pin.** Per H.12 + Watch item D: single atomic engine commit covers all 3 tools + Pattern 4 promotion + 18 DRIFT entries. Sequential implementation within commit prep:
+
+1. **Nikto first** (XML novelty) → 12 tests green
+2. **Wapiti second** (ADR-023 2nd consumer; framework regression check after Wapiti lands — all framework + Dep-Check + Wapiti tests green)
+3. **CORStest third** (text-with-ANSI parser is novel; care for state machine)
+
+**Atomic-commit invariants honored:**
+- DEVELOPMENT-PATTERNS.md Pattern 4 exists ⇔ all 4 instances exist
+- ADR-023 has 2 consumers ⇔ both Dep-Check + Wapiti compile + tests pass
+- 3 TOOL-ARCH patches land in companion docs commit IMMEDIATELY before engine commit
+
+---
+
 ### 2026-05-02 — Task 6.7: Dep-Check + Checkov runners + NativeRunner OutputFile extension (ADR-023)
 
 **Files shipped (single atomic engine commit):**
