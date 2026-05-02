@@ -8,6 +8,206 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+### 2026-05-02 — Task 6.4: SSLyze native runner + plugin-rules parser + first-time CipherSuite/CertSubject
+
+**Files shipped (single engine commit):**
+- NEW `internal/tools/sslyze/sslyze.go` (factory + buildArgs + URL→hostport derivation)
+- NEW `internal/tools/sslyze/parse.go` (top-level dispatch; per-server iteration; pluginRules table dispatch)
+- NEW `internal/tools/sslyze/rules.go` (per-plugin rule functions; ruleProtocolSupported factory; ruleCertificateInfo multi-finding; helpers)
+- NEW `internal/tools/sslyze/severity.go` (per-plugin severity + CWE tables; first multi-rule severity table in M6)
+- NEW `internal/tools/sslyze/sslyze_test.go` (11 tests: construction + BuildArgs + ParseOutput integration)
+- NEW `internal/tools/sslyze/rules_test.go` (17 tests: per-rule + helpers + table-alignment)
+- NEW 6 testdata fixtures + README
+- Companion `shieldscan-docs/` commit lands TOOL-ARCH §6.5 invocation literal patch
+
+**28 net-new tests at 6.4 close** (within 22-28 band; high end reflects 13 per-plugin rule cases). Engine total: **222 tests** across 12 packages. Race-clean, vet-clean, golangci-lint v2 reports 0 issues.
+
+**Architecturally significant first-instance patterns (both tracked for promotion):**
+1. **"Plugin-rules parser" / "synthetic-finding parser"** — output is structured plugin diagnostics, NOT a finding list. Parser SYNTHESIZES findings via per-plugin domain rules. See entry 4 below.
+2. **"Domain-rules severity mapping"** — multi-rule severity + CWE tables driven by exploit-class judgments. See entry 5 below.
+
+**SPEC §7.3 schema-extension trigger fired** — third reductions tool. Path A approved: defer extension proposal to M6 close. See entry 1 below.
+
+**First-time-populated dormant RawFinding fields:** `CipherSuite` (cipher findings via summarizeCiphers metadata) — wait, see entry 2 caveat — and `CertSubject` (cert findings, populated for every issue from the same deployment). Both fields defined since 5.1; M6.4 finally exercises CertSubject. (CipherSuite remains technically dormant: per H.NEW.3 cipher findings emit aggregated per-protocol with cipher names folded into Description; the CipherSuite field is reserved for future single-cipher granularity per H.NEW.3 Option P. Surfaced as nuance in entry 2.)
+
+**Python-side cross-repo verification completed pre-implementation** per workflow step 3: `shieldscan-api/src/app/models/raw_findings.py` lines 122-124 confirm `cipher_suite` (255-char) + `cert_subject` (500-char) columns exist, nullable, generously sized for our values. No blocker.
+
+**4th instance** of `SHIELDSCAN_<TOOL>_BINARY` pattern (DEVELOPMENT-PATTERNS.md Pattern 2 from 6.5) — applies cleanly; no documentation update needed.
+**4th instance** of jsonx helpers — reinforces but no expansion.
+
+### 2026-05-02 — Task 6.4: SPEC §7.3 schema-extension trigger FIRED; Path A approved (defer to M6 close)
+
+**Pin (load-bearing).** Reductions counter at 6.4 close:
+
+| Tool | Reductions | Notes |
+|---|---|---|
+| 6.1 Nuclei | 3 | CVE folded, CVSS-vector dropped, References dropped |
+| 6.2 Semgrep | 0 | Every Semgrep datum maps to existing RawFinding fields |
+| 6.5 Gitleaks | 5 | Commit-metadata folded, entropy/columns/endline/tags dropped |
+| 6.4 SSLyze | 5 | cipher key_size/openssl_name folded, cert chain depth dropped, path_validation/ocsp dropped, plugin metadata dropped, per-plugin aggregation context lost |
+
+**3 of 4 M6 tools have meaningful reductions (75%).** Threshold (3+) met — SPEC §7.3 schema-extension trigger fired.
+
+**Path A approved** (defer extension proposal to M6 close). Reasoning:
+1. Biggest "missing fields" (CipherSuite + CertSubject) **already exist** at SPEC §4 line 360-361 — they were dormant. 6.4 finally populates CertSubject. The schema gap is narrower than the raw count suggests.
+2. Remaining reductions are diagnostic-fold candidates (cipher key_size, cert chain depth, path_validation, ocsp_response) — stable degradation via Description fold.
+3. Cross-repo SPEC §7.3 changes are heavy-coordination (Python `RawFinding` SQLAlchemy model in `shieldscan-api/src/app/models/raw_findings.py` would need migration). Mid-M6 timing fragments milestone focus.
+4. Better timing: at M6 close, propose with comprehensive 8-tool data (rather than reactive at 6.4 with 4 datapoints). M9 AI pipeline proposal context will inform what extensions matter.
+
+**Revisit triggers pinned:**
+- M6 close milestone-boundary work (primary)
+- Mid-M6 customer report of meaningful data loss from a specific reduction (secondary; emergency-extension only if customer-blocking)
+
+### 2026-05-02 — Task 6.4: CertSubject first populated (CipherSuite still dormant — nuance)
+
+**Pin.** `events.RawFinding.CertSubject` (events/events.go:146) — defined at M5.1, **first populated at M6.4** by `ruleCertificateInfo` from leaf cert subject `rfc4514_string`. Cross-repo Python schema accepts (`raw_findings.py:124`, 500-char cap; our values typically <100 chars).
+
+**`CipherSuite` (events/events.go:145) caveat — still dormant.** Per H.NEW.3 Option Q (per-protocol-aggregated), 6.4's protocol findings fold accepted-cipher names into Description as a comma-separated list. The single `CipherSuite` field is reserved for future single-cipher granularity (H.NEW.3 Option P, deferred until customer demand). So **CertSubject is the only formerly-dormant field actually populated at 6.4.**
+
+**Revisit trigger for CipherSuite activation:** customer asks for per-cipher granularity (Option P transition) OR M9 AI pipeline value-add from per-cipher dedup.
+
+### 2026-05-02 — Task 6.4: Plugin-rules parser pattern (1st instance; track for promotion)
+
+**Pin.** SSLyze's `--json_out` payload is structured plugin diagnostics, NOT a finding list. The 6.4 parser dispatches via a per-plugin rules table (`pluginRules` in `rules.go`) where each rule function has signature:
+
+```go
+type ruleFunc func(pluginEntry map[string]any, targetHostport string) []events.RawFinding
+```
+
+Each rule synthesizes 0..N RawFindings from the plugin's `result` map. Rules return empty slice for "not vulnerable" cases so the dispatcher skips silently. Plugins not in the table are silently ignored (forward-compat with future SSLyze versions).
+
+**Architectural distinction from prior M6 parsers:**
+- 6.1 Nuclei: iterate JSONL lines → each line IS a finding
+- 6.2 Semgrep: iterate `results[]` → each item IS a finding
+- 6.5 Gitleaks: iterate JSON array → each item IS a finding
+- 6.4 SSLyze: iterate per-plugin diagnostic results → SYNTHESIZE findings via domain rules
+
+**1st instance of "plugin-rules parser" / "synthetic-finding parser" pattern in M6.** Track for promotion at 3rd instance per project's three-instance threshold.
+
+**Likely future instances:**
+- 6.6 Wapiti — per-vuln-class plugins (XSS, SQLi, file-disclosure, etc.) — likely uses similar dispatch
+- 6.7 Dep-Check — per-dependency CVE chains may need similar synthesis
+- M9 AI pipeline watch: pluginRules table is package-private at 6.4; richer access (per-rule severity overrides driven by org policy) is M9-pipeline-extension concern.
+
+**Future task authors:** grep `"plugin-rules parser"` or `"synthetic-finding parser"` in DRIFT-LOG to find this 1st-instance precedent + dispatch shape. When 3rd instance lands, promote to DEVELOPMENT-PATTERNS.md as Pattern 3.
+
+### 2026-05-02 — Task 6.4: Domain-rules severity mapping (1st instance; track for promotion)
+
+**Pin.** `internal/tools/sslyze/severity.go` exposes two package-private maps:
+- `pluginSeverity map[string]string` — FindingType → canonical severity
+- `pluginCWE map[string]string` — FindingType → canonical CWE
+
+15 entries each, aligned (TestPluginSeverityCWE_TablesAligned regression-guards).
+
+**Distinct from prior M6 severity tables:**
+- 6.1 Nuclei: identity (5 levels, no transformation)
+- 6.2 Semgrep: 3-level → 5-level mapping (ERROR→high, WARNING→medium, INFO→info)
+- 6.5 Gitleaks: constants-only (no per-finding variation)
+- 6.4 SSLyze: **multi-rule domain-knowledge table** with 15 distinct FindingType→severity mappings + 5 distinct CWEs across the table
+
+Domain rationale documented inline in severity.go (critical = confirmed-exploitable + remote; high = active exploitation vectors; medium = deprecated/conditions-required; low = defense-in-depth absences).
+
+**1st instance of "domain-rules severity mapping" pattern.** Track for promotion at 3rd instance. Likely candidates: 6.6 Wapiti (per-vuln-class severity), 6.7 Dep-Check (CVSS-driven). Search `"domain-rules severity mapping"` for trigger.
+
+### 2026-05-02 — Task 6.4: ExitCodeLenient=false naturally-clean (2nd instance)
+
+**Pin.** SSLyze 6.1.0 verified at pre-prep: exits 0 even with weak ciphers / vulnerable findings. Naturally-clean exit-code pattern, **2nd instance after 6.1 Nuclei** in M6's three-pattern exit-code vocabulary (naturally-clean / runner-tolerates / configuration-not-leniency).
+
+**Sub-note: HSTS detection deferred.** TOOL-ARCH §6.5 line 598 mentions "Missing HSTS header" but `--http_headers` plugin is `NOT_SCHEDULED` by default. Per H.6 lean: HSTS detection deferred to DAST layer (Nuclei templates own HTTP-header policy). Trigger to revisit: M9 AI pipeline finds value in cross-tool HSTS deduplication, OR customer ask.
+
+### 2026-05-02 — Task 6.4: PYTHONWARNINGS=ignore defense-in-depth (2nd instance)
+
+**Pin.** `NewSSLyzeRunner` populates `Env = []string{"PYTHONWARNINGS=ignore"}` despite no observed warnings in 6.1.0 pre-prep testing. Defense-in-depth against forward-compat (future SSLyze versions adding opentelemetry-style imports that trip pkg_resources deprecation, à la 6.2 Semgrep).
+
+**2nd instance of Env-warning-suppression pattern after 6.2.** Not yet at promotion threshold (3rd instance — likely 6.6 Wapiti or 6.7 Checkov). Search `"PYTHONWARNINGS"` in DRIFT-LOG for trigger candidates.
+
+### 2026-05-02 — Task 6.4: Per-target invocation strategy (Option X over Y)
+
+**Pin.** SSLyze accepts multiple targets per invocation (`sslyze a.com b.com c.com`), but 6.4 invokes **per-target** (one Run per target — Option X over batch Option Y).
+
+**Rationale:**
+- Symmetric with chassis (other M6 tools take one Target per Run)
+- Subprocess overhead negligible for SSL scans (~5-10s per target; ~50ms subprocess startup)
+- Avoids forcing multi-target abstraction on Target/ScanConfig
+- Per-target failures don't pollute other targets' results
+- Parser still handles multi-server `server_scan_results` array gracefully (forward-compat if 6.8 wiring decides to batch)
+
+**Revisit trigger:** customer with very-many-target SSL portfolios (50+ targets per scan) where subprocess overhead becomes meaningful (50ms × 50 targets = 2.5s; vs single-batch handshake ~5s reuse).
+
+### 2026-05-02 — Task 6.4: Cipher granularity Option Q (per-protocol-aggregated)
+
+**Pin.** Per H.NEW.3 lean Q approved: weak-cipher findings emitted **per-protocol** (e.g., one finding for "TLS 1.0 supported" with accepted-cipher names folded into Description), NOT per-cipher (Option P which would yield 12 findings for 12 weak ciphers).
+
+**Truncation format:** `"Accepted ciphers (N): A, B, C, D, E, [+M more]"` — first 5 ciphers inline, rest folded into `[+N more]` marker. Description capped at 2 KiB via `jsonx.Truncate` (consistent with 6.2/6.5 conventions).
+
+**Implementation:** `summarizeCiphers` helper in rules.go; regression-guarded by `TestSummarizeCiphers` table-driven test (empty, 3-inline, 12-truncated, 2 KiB-cap-respected).
+
+**Revisit trigger:** customer asks for per-cipher granularity (Option P transition) — would activate the dormant `CipherSuite` RawFinding field per finding.
+
+### 2026-05-02 — Task 6.4: Field-map reductions documented (5; counter 3/4 = 75%)
+
+**Pin.** SSLyze emits 18 plugin shapes with rich diagnostic data. **5 reductions applied:**
+
+| Reduction | Disposition | Why |
+|---|---|---|
+| `cipher_suite.key_size` + `openssl_name` + `ephemeral_key.*` | Folded into Description (cipher list summary) | No dedicated fields; aggregated per Option Q |
+| `received_certificate_chain[1+]` (intermediate + root certs) | Dropped (only leaf → CertSubject) | Single CertSubject field; chain depth lost |
+| `path_validation_results` (multi-truststore validation) | Dropped | Aggregate fold deemed too noisy; AI pipeline can re-derive |
+| `ocsp_response`, `signed_certificate_timestamps_count` | Dropped | Diagnostic, not directly actionable |
+| Plugin metadata (`uuid`, `network_configuration`, `connectivity_status`, plugin-level `error_trace`, per-plugin aggregation counts) | Dropped | Tool internals; aggregation context lost |
+
+**Counter status:** Nuclei=3, Semgrep=0, Gitleaks=5, SSLyze=5. **3 of 4 M6 tools have reductions** — SPEC §7.3 trigger fired (entry 1).
+
+### 2026-05-02 — Task 6.4: Plan §6.4 thinness divergence
+
+**Pin.** Plan §6.4 (`shieldscan-docs/IMPLEMENTATION-PLAN.md` lines 1874-1882): one sentence implementation pointer ("parse SSLyze JSON, detect SSL 2.0/3.0 support, weak ciphers, invalid certificate chain, missing HSTS"). Mentions 4 detection categories.
+
+**Divergence (deepest in M6):** 1 sentence → 28 tests → 13 plugin-interpretation rules → ~750 LoC src + ~600 LoC tests across 4 source files + 2 test files. Plan literal mentions HSTS but `--http_headers` plugin is NOT_SCHEDULED by default; HSTS deferred to DAST layer per H.6.
+
+Plan §6.4 was written before M5 + 6.1/6.2/6.5 chassis; pattern-promotion triggers (jsonx, plugin-rules), the SPEC §7.3 trigger, and the rules-engine architecture didn't exist when plan was authored. Honored in spirit, expanded in scope. Plan §6.4 will benefit from a milestone-boundary refresh at M6 close.
+
+### 2026-05-02 — Task 6.4: TOOL-ARCH §6.5 --regular surgical patch
+
+**Pin.** Companion docs commit (`shieldscan-docs/`) updates TOOL-ARCH §6.5 invocation literal:
+- BEFORE: `sslyze --json_out=- --regular target.com`
+- AFTER: `sslyze --json_out=- --certinfo --heartbleed --robot --openssl_ccs --reneg --sslv2 --sslv3 --tlsv1 --tlsv1_1 --tlsv1_2 --tlsv1_3 --compression --fallback --ems target.com:443`
+
+**Why.** `--regular` is **invalid in SSLyze 6.1.0** (errors: `unrecognized arguments: --regular`). Verified empirically at pre-prep. The literal was stale from an early SSLyze version; M6.4 implementation enumerates the actual plugin flags used.
+
+**No other prose changes.** Other §6.5 references (binary path, parser-produces example, etc.) remain accurate.
+
+**Regression-guarded by `TestBuildArgs_NoRegularFlag`** (engine-side test asserts `--regular` is NOT in BuildArgs output).
+
+### 2026-05-02 — Task 6.4: Per-target target syntax (hostname:port from URL)
+
+**Pin.** `deriveBuildArgsTarget` in sslyze.go:
+- Parses `target.URL` as URL
+- Returns `<host>:<port>` where port comes from URL or defaults to 443 for `https`/`wss` schemes
+- Falls back to `target.URL` verbatim on parse failure (operator-supplied "host:port" string)
+
+**Examples:**
+- `https://app.example.com` → `app.example.com:443`
+- `https://app.example.com:8443/path` → `app.example.com:8443`
+- `app.example.com:443` (no scheme) → `app.example.com:443` (verbatim fallback)
+
+Regression-guarded by `TestBuildArgs_TargetIsTrailing`.
+
+### 2026-05-02 — Task 6.4: jsonx-extension trigger watch (path-walker; 1st instance need)
+
+**Pin (forward-look).** SSLyze rules walk 2-3 levels deep into nested plugin results (e.g., `result.certificate_deployments[0].verified_chain_has_sha1_signature`). Composing `jsonx.ExtractMap(jsonx.ExtractMap(result, "X"), "Y")` works but is verbose.
+
+A `jsonx.ExtractStringPath("a.b.c", root)` walker would simplify. **NOT extracted at 6.4 (1st-instance need; YAGNI applies).**
+
+**Track for promotion at 3rd instance.** Likely candidates:
+- 6.7 Dep-Check (deep CVE chain context likely needs path traversal)
+- 6.6 Wapiti (per-plugin-class JSON shapes may nest similarly)
+
+Future task authors: grep `"path-walker"` in DRIFT-LOG for this 1st-instance precedent. When 3rd instance lands, extend jsonx package with the walker (separate file or expanded jsonx.go) and update all 3 callsites atomically (same pattern as 6.5 jsonx extraction).
+
+**Also tracked: `boolFrom` helper.** Used in rules.go for lenient bool extraction. 1st instance; if 4th tool needs the same shape, promote to `jsonx.ExtractBool`.
+
+---
+
 ### 2026-05-02 — Task 6.5: Gitleaks native runner + jsonx extraction + env-var-binary pattern promotion
 
 **Files shipped (atomic single commit):**

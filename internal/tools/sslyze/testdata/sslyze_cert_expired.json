@@ -1,0 +1,45 @@
+{
+  "sslyze_version": "6.1.0",
+  "sslyze_url": "https://github.com/nabla-c0d3/sslyze",
+  "date_scans_started": "2026-01-15T12:00:00.000000",
+  "date_scans_completed": "2026-01-15T12:00:10.000000",
+  "invalid_server_strings": [],
+  "server_scan_results": [
+    {
+      "uuid": "00000000-0000-0000-0000-000000000004",
+      "server_location": {"hostname": "expired.example.com", "port": 443, "ip_address": "192.0.2.40"},
+      "scan_status": "COMPLETED",
+      "connectivity_status": "COMPLETED",
+      "scan_result": {
+        "ssl_2_0_cipher_suites": {"status": "COMPLETED", "result": {"is_tls_version_supported": false, "accepted_cipher_suites": [], "rejected_cipher_suites": []}},
+        "ssl_3_0_cipher_suites": {"status": "COMPLETED", "result": {"is_tls_version_supported": false, "accepted_cipher_suites": [], "rejected_cipher_suites": []}},
+        "tls_1_0_cipher_suites": {"status": "COMPLETED", "result": {"is_tls_version_supported": false, "accepted_cipher_suites": [], "rejected_cipher_suites": []}},
+        "tls_1_1_cipher_suites": {"status": "COMPLETED", "result": {"is_tls_version_supported": false, "accepted_cipher_suites": [], "rejected_cipher_suites": []}},
+        "heartbleed": {"status": "COMPLETED", "result": {"is_vulnerable_to_heartbleed": false}},
+        "robot": {"status": "COMPLETED", "result": {"robot_result": "NOT_VULNERABLE_NO_ORACLE"}},
+        "openssl_ccs_injection": {"status": "COMPLETED", "result": {"is_vulnerable_to_ccs_injection": false}},
+        "tls_compression": {"status": "COMPLETED", "result": {"supports_compression": false}},
+        "session_renegotiation": {"status": "COMPLETED", "result": {"supports_secure_renegotiation": true, "is_vulnerable_to_client_renegotiation_dos": false}},
+        "tls_extended_master_secret": {"status": "COMPLETED", "result": {"supports_ems_extension": true}},
+        "tls_fallback_scsv": {"status": "COMPLETED", "result": {"supports_fallback_scsv": true}},
+        "certificate_info": {
+          "status": "COMPLETED",
+          "result": {
+            "hostname_used_for_server_name_indication": "expired.example.com",
+            "certificate_deployments": [
+              {
+                "received_certificate_chain": [
+                  {"subject": {"rfc4514_string": "CN=wrong-host.example.com,O=Example Org"}}
+                ],
+                "leaf_certificate_subject_matches_hostname": false,
+                "verified_chain_has_sha1_signature": true,
+                "received_chain_has_valid_order": true,
+                "_synthetic_expired": true
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}
