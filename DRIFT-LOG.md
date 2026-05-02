@@ -8,6 +8,215 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+### 2026-05-02 — Task 6.5: Gitleaks native runner + jsonx extraction + env-var-binary pattern promotion
+
+**Files shipped (atomic single commit):**
+- NEW `internal/tools/jsonx/jsonx.go` (~80 LoC, 6 helpers)
+- NEW `internal/tools/jsonx/jsonx_test.go` (9 tests, table-driven)
+- NEW `internal/tools/gitleaks/gitleaks.go` (factory + buildArgs)
+- NEW `internal/tools/gitleaks/parse.go` (JSON-array parser + commitFold + recordToFinding)
+- NEW `internal/tools/gitleaks/gitleaks_test.go` (16 tests with goleak TestMain)
+- NEW 4 testdata fixtures + README
+- UPDATE `internal/tools/nuclei/parse.go` (delete 6 helpers; import jsonx)
+- UPDATE `internal/tools/semgrep/parse.go` (delete 6 helpers; import jsonx)
+- UPDATE `DEVELOPMENT-PATTERNS.md` (add Pattern 2: env-var-binary resolution)
+
+**25 net-new tests at 6.5 close** (16 gitleaks + 9 jsonx; within 23-27 band). Engine total: **194 tests** across 11 packages. Race-clean, vet-clean, golangci-lint v2 reports 0 issues.
+
+**Three first-instance patterns landed at 6.5:**
+1. **Constants-only field mapping** (`SeverityCritical = "critical"`, `CWEHardcodedCredentials = "CWE-798"` — no per-finding mapping function). Tracked for promotion at 3rd instance.
+2. **Configuration-not-leniency** exit-code handling (`ExitCodeLenient=false` + `--exit-code=0` flag in BuildArgs). Third option in M6's exit-code vocabulary.
+3. **JSON-array parse format** (`[]any` with per-item type-assert per H.6). Third format observed in M6.
+
+**Two pattern promotions** (per project's three-instance threshold — both fired atomically at this commit):
+1. **Helper extraction** → `internal/tools/jsonx/`. The 6 helpers (`ExtractString`, `ExtractMap`, `ExtractStringSlice`, `ExtractFloat`, `FirstString`, `Truncate`) extracted from `internal/tools/semgrep/parse.go` (most recent canonical instance). Three callsites updated atomically: nuclei, semgrep, gitleaks.
+2. **`SHIELDSCAN_<TOOL>_BINARY` env pattern** → `DEVELOPMENT-PATTERNS.md` Pattern 2. Cross-references all three instances explicitly.
+
+**Reductions counter update:** 2 of 3+ tools with field-map reductions (6.1 Nuclei: 3 reductions; 6.2 Semgrep: 0; 6.5 Gitleaks: 5). Threshold for SPEC §7.3 schema-extension trigger not yet hit; track loosely. Likely fires at 6.4 SSLyze or 6.7 Dep-Check.
+
+**Atomic-change reasoning honored.** All 5 file changes + 2 doc updates landed in one engine commit. No interim states where jsonx exists without callers, or where one of nuclei/semgrep imports a not-yet-existent package.
+
+### 2026-05-02 — Task 6.5: SeverityCritical + CWEHardcodedCredentials constants (FIRST constants-only mapping in M6)
+
+**Pin.** `internal/tools/gitleaks/gitleaks.go` exports two package constants:
+
+```go
+const (
+    SeverityCritical        = "critical"
+    CWEHardcodedCredentials = "CWE-798"  // Use of Hard-coded Credentials
+)
+```
+
+**Why constants, not a function.** Gitleaks emits no per-finding severity or CWE — both are tool-class invariants. Secrets in source are exploit-class by definition (→ critical). CWE-798 covers every Gitleaks rule semantically. A `mapSeverity()` function with no input variation would be misleading scaffolding.
+
+**Exported** so M9 AI pipeline + downstream tooling can reference canonically (e.g., `gitleaks.SeverityCritical` instead of string-literal `"critical"`). Capitalized per Go export convention.
+
+**Trigger to revisit.** Gitleaks 8.x or 9.x ships per-rule severity / CWE fields. At that point, replace constants with a real mapping function driven by the new fields.
+
+**Pattern tracking.** First constants-only mapping in M6. **Track for 3rd-instance promotion** — possible candidates: 6.7 Dep-Check (might constants its category), some 6.6 tool with single-rule output. Search future task DRIFT-LOG entries for "constants-only mapping" to find the trigger.
+
+### 2026-05-02 — Task 6.5: Commit-metadata fold all-or-nothing format
+
+**Pin.** Gitleaks emits per-finding commit metadata in `git` mode (`Author`, `Email`, `Commit`, `Date`, `Message`). RawFinding has no dedicated home for commit context. Decision: **fold into `Description`** when Commit + Author + Date are ALL non-empty. All-or-nothing.
+
+**Format:**
+```
+"<base description> (commit <SHA8> by <Author> on <YYYY-MM-DD>)"
+```
+
+- `Commit` → first 8 chars (short SHA convention from git)
+- `Date` → trimmed to `YYYY-MM-DD` (RFC3339 timestamp's time component dropped). Date is what's actionable; the time adds noise without value.
+- `Author` → verbatim (already anonymized to `"Anonymous Developer"` etc. in fixtures).
+
+**Email + Message dropped.** Email duplicates Author for attribution; commit Message is too noisy for the Description (single-line append, full commit messages can be paragraphs). Reductions tracked in DRIFT-LOG entry 4 below.
+
+**All-or-nothing rule** (regression-guarded by `TestCommitFold_PartiallyMissing`): if any one of Commit/Author/Date is empty, return base unchanged. Avoids partially-populated suffixes like `"(commit  by  on 2026-01-15)"` that look like a bug. `dir`-mode scans (no git context) and edge cases (commits without authors, repos without dates) all return clean base descriptions.
+
+**Date-trim regression-guarded** by `TestCommitFold_DateTrimsTimestamp`. The time component MUST NOT survive the fold.
+
+### 2026-05-02 — Task 6.5: field-map reductions (5 reductions; counter 2/3+ for SPEC §7.3 trigger)
+
+**Pin.** Gitleaks emits 18 per-finding fields; RawFinding has no exact home for several. **5 reductions applied:**
+
+| Reduction | Disposition | Why |
+|---|---|---|
+| `Author` + `Email` + `Commit` + `Date` + `Message` | Folded into `Description` (all-or-nothing per entry 3) | No commit-metadata fields on RawFinding; fold preserves attribution without lossy individual drops |
+| `Entropy` | Dropped | Diagnostic, not actionable; AI pipeline can re-derive |
+| `StartColumn` + `EndColumn` | Dropped | RawFinding has no column field |
+| `EndLine` | Dropped | RawFinding has only `CodeLine` (start) |
+| `Tags` | Dropped | Tool-specific; OWASP field would be wrong fit |
+
+**Plus three "fully dropped" fields (already-redundant, not counted toward reductions):** `Secret` (duplicates `Match`), `SymlinkFile` (rare + not actionable), `Fingerprint` (Gitleaks's own dedup id; we compute via `tools.ComputeFingerprint`).
+
+**Counter for SPEC §7.3 schema-extension trigger:**
+- M6.1 Nuclei: 3 reductions (CVE folded, CVSS-vector dropped, References dropped)
+- M6.2 Semgrep: 0 reductions
+- M6.5 Gitleaks: 5 reductions
+
+**2 of 3+ tools have reductions.** Threshold for schema-extension proposal is 3+. Track loosely; likely fires at 6.4 SSLyze (CVSS detail fields beyond float64 score) or 6.7 Dep-Check (CVE chain context). Don't preempt.
+
+### 2026-05-02 — Task 6.5: ExitCodeLenient=false + --exit-code=0 (configuration-not-leniency; THIRD M6 exit-code option)
+
+**Pin.** `NewGitleaksRunner` sets `ExitCodeLenient: false` and `BuildArgs` includes `--exit-code=0`. The runner stays strict; the *tool's flag* compensates.
+
+**Third documented pattern** in M6's exit-code vocabulary:
+
+| Pattern | Used at | Tool behavior | Runner config |
+|---|---|---|---|
+| **Naturally-clean** | 6.1 Nuclei | Tool exits 0 on findings | `ExitCodeLenient=false` (no special handling) |
+| **Runner-tolerates** | 6.2 Semgrep | Tool exits non-zero legitimately; no flag to suppress | `ExitCodeLenient=true` |
+| **Configuration-not-leniency** | 6.5 Gitleaks | Tool exposes `--exit-code=0`-style flag to force clean exit | `ExitCodeLenient=false` + flag in BuildArgs |
+
+**Decision tree** for future M6/M7 tools (preferred order):
+
+1. Does the tool always exit 0 on success? → naturally-clean (6.1).
+2. Does the tool expose a flag to force-clean exit (`--exit-code=0`, `--no-fail-on-finding`, etc.)? → configuration-not-leniency (6.5). Preferred when available — keeps runner config strict, exit semantics owned by tool config (more discoverable from BuildArgs reading).
+3. Otherwise → runner-tolerates (6.2).
+
+**Promotion to DEVELOPMENT-PATTERNS.md** when 3+ tools use configuration-not-leniency. Currently 1 instance; track via this DRIFT entry. Search future task entries for "configuration-not-leniency" to find the trigger.
+
+**Regression-guarded by `TestBuildArgs_ExitCodeZeroPresent`.** If a future change removes `--exit-code=0` without updating ExitCodeLenient, Gitleaks would fail every job that finds secrets — the test catches it.
+
+### 2026-05-02 — Task 6.5: helper-extraction promoted to internal/tools/jsonx/
+
+**Pin.** Three-instance threshold met at 6.5 (Nuclei + Semgrep + Gitleaks all need the same lenient `map[string]any` extraction helpers). Helpers extracted to a shared package:
+
+```
+internal/tools/jsonx/
+├── jsonx.go         (~80 LoC; 6 exported helpers)
+└── jsonx_test.go    (9 tests, table-driven)
+```
+
+**Exported helpers:**
+- `ExtractString(map[string]any, string) string`
+- `ExtractMap(map[string]any, string) map[string]any`
+- `ExtractStringSlice(map[string]any, string) []string`
+- `ExtractFloat(map[string]any, string) float64`
+- `FirstString([]string) string`
+- `Truncate(string, int) string`
+
+**Verbatim copy** from `internal/tools/semgrep/parse.go` (most recent canonical instance) — no behavioral changes. Pre-extraction nuclei + semgrep test suites passed; post-extraction same suites still pass — verified.
+
+**Atomic commit invariants honored:**
+- jsonx exists ⇔ 3 callers exist (nuclei, semgrep, gitleaks)
+- All 3 callers updated together
+- DEVELOPMENT-PATTERNS.md entry exists ⇔ 3rd instance exists
+
+**Future expansion** (not at 6.5): `ExtractInt`, dotted-path walkers (`ExtractStringPath("a.b.c")`), structured access for known-shape JSON. Driven by genuine 4th-tool need; YAGNI applies.
+
+**Test coverage:** type-assertion boundaries (nil map, missing key, wrong type), array-or-bare-string tolerance, JSON-number-as-float64 contract, regression guard documenting that ExtractString does NOT walk dotted paths (composition via ExtractMap chaining instead).
+
+### 2026-05-02 — Task 6.5: SHIELDSCAN_<TOOL>_BINARY pattern promoted to DEVELOPMENT-PATTERNS.md
+
+**Pin.** Three-instance threshold met at 6.5. The env-var-binary resolution pattern (`SHIELDSCAN_<TOOL_UPPER>_BINARY` env, `exec.LookPath("<tool>")` fallback, fail-fast on neither) lands as `DEVELOPMENT-PATTERNS.md` Pattern 2 (after Pattern 1 trigger-based deferral from 5.5).
+
+**Instances cross-referenced explicitly:**
+- M6.1 Nuclei (`internal/tools/nuclei/nuclei.go`)
+- M6.2 Semgrep (`internal/tools/semgrep/semgrep.go`)
+- M6.5 Gitleaks (`internal/tools/gitleaks/gitleaks.go`)
+
+**Phase 1 startup wiring (fail-fast diagnostic) deferred to 6.8** per M6.5 watch item E. 6.5 ships only the resolution interface (`Config.BinaryPath` field per tool); 6.8 wires `cmd/worker/run.go` to invoke env-var resolution and emit the diagnostic. The pattern entry in DEVELOPMENT-PATTERNS.md documents the Phase 1 message shape so 6.8's author has the canonical text.
+
+**Trigger to revisit pattern.** A native tool with a fundamentally different launch mechanism (Java `java -jar <path>`, Python `python -m <module>`, etc.). Likely extends to a launcher abstraction rather than fragmenting per-tool.
+
+### 2026-05-02 — Task 6.5: Plan §6.5 thinness divergence
+
+**Pin.** Plan §6.5 (`shieldscan-docs/IMPLEMENTATION-PLAN.md` lines 1886-1894): one sentence implementation pointer ("parse JSON output, every finding is critical severity with CWE-798"). No test names. No construction surface. No mention of helper-extraction or pattern-promotion triggers.
+
+**Divergence:** 1 test → 25 tests; ~25 LoC test → ~750 LoC across 5 file changes + 2 doc updates.
+
+Plan was written before M5 + 6.1/6.2 chassis; pattern-promotion triggers (jsonx, env-var-binary) didn't exist when plan was authored. Honored in spirit (Severity + CWE constants assertion ARE present in tests), expanded in scope. Plan §6.5 will benefit from a milestone-boundary refresh at M6 close; no surgical patch at this commit.
+
+### 2026-05-02 — Task 6.5: reductions counter (2/3+; SPEC §7.3 schema-extension trigger pending)
+
+**Pin.** SPEC §7's `RawFinding` schema reductions counter:
+- 6.1 Nuclei: 3 reductions
+- 6.2 Semgrep: 0 reductions
+- 6.5 Gitleaks: 5 reductions
+
+**Threshold:** 3+ tools with field-map reductions for SPEC §7.3 schema-extension proposal. Currently 2 of 3+. Don't preempt; track loosely.
+
+**Likely candidates for 3rd:**
+- **6.4 SSLyze** — TLS-detail fields (cipher suite metadata, certificate chain context) likely don't fit existing RawFinding shape.
+- **6.7 Dep-Check** — CVE chain context (vulnerability ID + dependency tree path) likely needs accommodation.
+
+**When the 3rd tool with reductions lands**, that task's commit body should call out the threshold-trigger fire, and propose either (a) RawFinding schema extension, or (b) explicit "no extension; reductions are intentional" decision with reasoning. SPEC §7.3 is the natural home for the proposal.
+
+### 2026-05-02 — Task 6.5: JSON-array parse format (THIRD M6 format)
+
+**Pin.** Gitleaks emits a bare JSON array of finding objects:
+
+```json
+[
+  { /* finding 1 */ },
+  { /* finding 2 */ }
+]
+```
+
+**Third format observed in M6:**
+- **6.1 Nuclei:** JSONL — newline-separated single-line objects, parsed via `bufio.Scanner` line loop.
+- **6.2 Semgrep:** Single-doc JSON `{"results": [...], "errors": [...]}`, parsed via single `json.Unmarshal`.
+- **6.5 Gitleaks:** Bare JSON array `[...]`, parsed via single `json.Unmarshal` into `[]any`.
+
+**Decode shape: `[]any` with per-item type-assert** (per H.6 lean). More tolerant than `[]map[string]any`, which would fail-fast on any non-object array element. A malformed record (e.g., a stray string in the array) gets skipped with WARN rather than failing the whole `Unmarshal`.
+
+**Regression-guarded by `TestParseOutput_MalformedJSONFatal`** (top-level malformed JSON IS fatal — distinct from 6.1's per-line drop-and-continue) and `TestParseOutput_MissingRequiredFieldsSkipped` (per-record missing fields skip with WARN, batch survives).
+
+### 2026-05-02 — Task 6.5: constants-only mapping pattern (1st instance; track for promotion at 3rd instance)
+
+**Pin (forward-look).** Gitleaks's constants-only mapping (no `mapSeverity()` function; severity + CWE are package constants) is the **first instance** in M6 of a tool whose finding shape doesn't vary along severity/CWE axes.
+
+**Pattern shape:** when a tool emits no per-finding severity field AND no per-finding CWE field, the runner package exports constants for both (capitalized for export) and applies them universally in `recordToFinding`. No mapping function; no severity.go file; constants-only.
+
+**Track for 3rd-instance promotion.** Possible candidates:
+- **6.7 Dep-Check** — every dep-check finding is essentially "outdated dep with known CVE"; severity might be CVSS-driven (not constant) — likely NOT this pattern.
+- **6.6 Wapiti / Nikto** — DAST tools that may have per-finding severity. Likely NOT this pattern either.
+- **Less obvious:** any future tool whose category is intrinsically uniform-severity (e.g., a license-compliance scanner where every finding is "license-policy-violation" → fixed severity).
+
+**Future task authors:** grep for "constants-only mapping" in DRIFT-LOG to find this trigger and the 1st-instance precedent. When the 3rd instance lands, promote to DEVELOPMENT-PATTERNS.md as Pattern 3.
+
+---
+
 ### 2026-05-01 — Task 6.2: Semgrep native runner
 
 **Files shipped:** `internal/tools/semgrep/semgrep.go` (factory + buildArgs closure) · `internal/tools/semgrep/parse.go` (single-doc JSON parser + extraction helpers — second instance) · `internal/tools/semgrep/severity.go` (first non-identity M6 severity table) · `internal/tools/semgrep/semgrep_test.go` (17 tests with goleak TestMain) · 6 testdata fixtures (4 from real-anonymized + synthetic runs: basic, multi, empty, error; 2 hand-crafted: unknown_fields, missing_fields) + testdata README.

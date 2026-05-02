@@ -6,6 +6,7 @@ import (
 	"regexp"
 
 	"github.com/odyssey/shieldscan-engine/internal/events"
+	"github.com/odyssey/shieldscan-engine/internal/tools/jsonx"
 	"github.com/rs/zerolog"
 )
 
@@ -27,6 +28,10 @@ var cwePrefixRE = regexp.MustCompile(`^(CWE-\d+)`)
 // parseOutput returns a closure that parses a Semgrep `--json`
 // single-doc payload into RawFindings. Returned closure satisfies
 // NativeRunner.ParseOutput.
+//
+// Field-extraction helpers come from internal/tools/jsonx/ as of M6.5
+// (3rd-instance threshold met; helpers extracted from per-package
+// duplicates).
 //
 // Asymmetries vs internal/tools/nuclei/parse.go (M6.1):
 //   - Single-doc decode (one json.Unmarshal call), NOT JSONL line
@@ -62,16 +67,15 @@ func parseOutput(log zerolog.Logger) func([]byte) ([]events.RawFinding, error) {
 			for _, e := range errs {
 				em, _ := e.(map[string]any)
 				log.Warn().
-					Str("type", extractString(em, "type")).
-					Str("path", extractString(em, "path")).
-					Str("message", extractString(em, "message")).
+					Str("type", jsonx.ExtractString(em, "type")).
+					Str("path", jsonx.ExtractString(em, "path")).
+					Str("message", jsonx.ExtractString(em, "message")).
 					Msg("semgrep: tool error reported in errors[]; continuing")
 			}
 		}
 
 		results, ok := raw["results"].([]any)
 		if !ok {
-			// Missing or wrong-type results → empty happy path.
 			return findings, nil
 		}
 
@@ -86,8 +90,8 @@ func parseOutput(log zerolog.Logger) func([]byte) ([]events.RawFinding, error) {
 			if !ok {
 				log.Warn().
 					Int("index", i).
-					Str("check_id", extractString(rec, "check_id")).
-					Str("path", extractString(rec, "path")).
+					Str("check_id", jsonx.ExtractString(rec, "check_id")).
+					Str("path", jsonx.ExtractString(rec, "path")).
 					Msg("semgrep: record missing required fields; dropping")
 				continue
 			}
@@ -115,26 +119,26 @@ func parseOutput(log zerolog.Logger) func([]byte) ([]events.RawFinding, error) {
 // metavars, validation_state, end.*, lines→CodeSnippet only) are
 // intentionally dropped.
 func recordToFinding(rec map[string]any) (events.RawFinding, bool) {
-	checkID := extractString(rec, "check_id")
-	path := extractString(rec, "path")
+	checkID := jsonx.ExtractString(rec, "check_id")
+	path := jsonx.ExtractString(rec, "path")
 	if checkID == "" || path == "" {
 		return events.RawFinding{}, false
 	}
 
-	start := extractMap(rec, "start")
-	line := int(extractFloat(start, "line"))
+	start := jsonx.ExtractMap(rec, "start")
+	line := int(jsonx.ExtractFloat(start, "line"))
 
-	extra := extractMap(rec, "extra")
-	severity := mapSeverity(extractString(extra, "severity"))
-	description := extractString(extra, "message")
-	snippet := truncate(extractString(extra, "lines"), codeSnippetMaxBytes)
+	extra := jsonx.ExtractMap(rec, "extra")
+	severity := mapSeverity(jsonx.ExtractString(extra, "severity"))
+	description := jsonx.ExtractString(extra, "message")
+	snippet := jsonx.Truncate(jsonx.ExtractString(extra, "lines"), codeSnippetMaxBytes)
 
-	metadata := extractMap(extra, "metadata")
+	metadata := jsonx.ExtractMap(extra, "metadata")
 	cweID := cweFromMetadata(metadata)
-	owasp := firstString(extractStringSlice(metadata, "owasp"))
+	owasp := jsonx.FirstString(jsonx.ExtractStringSlice(metadata, "owasp"))
 
 	return events.RawFinding{
-		Title:       checkID, // Semgrep has no separate title; rule id is the canonical name
+		Title:       checkID,
 		Description: description,
 		Severity:    severity,
 		FindingType: checkID,
@@ -150,7 +154,7 @@ func recordToFinding(rec map[string]any) (events.RawFinding, bool) {
 // of metadata.cwe. Returns "" on missing array, empty array, or
 // malformed first element. See engine DRIFT-LOG M6.2 entry 2.
 func cweFromMetadata(metadata map[string]any) string {
-	arr := extractStringSlice(metadata, "cwe")
+	arr := jsonx.ExtractStringSlice(metadata, "cwe")
 	if len(arr) == 0 {
 		return ""
 	}
@@ -158,104 +162,4 @@ func cweFromMetadata(metadata map[string]any) string {
 		return m[1]
 	}
 	return ""
-}
-
-// ─── lenient-decode helpers ─────────────────────────────────────────
-//
-// Copy of the helpers from internal/tools/nuclei/parse.go. SECOND
-// instance of this shape across M6 tools. Per project's three-instance
-// threshold, extraction to a shared internal/tools/jsonx/ package is
-// triggered at the THIRD instance — likely M6.4 (SSLyze). See engine
-// DRIFT-LOG M6.2 entry 9 for the trigger reminder.
-
-// extractString walks m[key] expecting a string; returns "" on type
-// mismatch or missing key.
-func extractString(m map[string]any, key string) string {
-	if m == nil {
-		return ""
-	}
-	v, ok := m[key]
-	if !ok {
-		return ""
-	}
-	s, ok := v.(string)
-	if !ok {
-		return ""
-	}
-	return s
-}
-
-// extractMap walks m[key] expecting map[string]any; returns nil on
-// type mismatch or missing key.
-func extractMap(m map[string]any, key string) map[string]any {
-	if m == nil {
-		return nil
-	}
-	v, ok := m[key]
-	if !ok {
-		return nil
-	}
-	mm, ok := v.(map[string]any)
-	if !ok {
-		return nil
-	}
-	return mm
-}
-
-// extractStringSlice walks m[key] expecting []any of strings; returns
-// empty slice on type mismatch. Tolerates a bare string instead of a
-// single-element array (wraps it).
-func extractStringSlice(m map[string]any, key string) []string {
-	if m == nil {
-		return nil
-	}
-	v, ok := m[key]
-	if !ok {
-		return nil
-	}
-	if arr, ok := v.([]any); ok {
-		out := make([]string, 0, len(arr))
-		for _, item := range arr {
-			if s, ok := item.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	}
-	if s, ok := v.(string); ok {
-		return []string{s}
-	}
-	return nil
-}
-
-// extractFloat walks m[key] expecting a number (json.Number-decoded
-// as float64); returns 0 on type mismatch.
-func extractFloat(m map[string]any, key string) float64 {
-	if m == nil {
-		return 0
-	}
-	v, ok := m[key]
-	if !ok {
-		return 0
-	}
-	if f, ok := v.(float64); ok {
-		return f
-	}
-	return 0
-}
-
-// firstString returns slice[0] or "" for empty.
-func firstString(s []string) string {
-	if len(s) == 0 {
-		return ""
-	}
-	return s[0]
-}
-
-// truncate caps s to n bytes; appends "..." if cut.
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }

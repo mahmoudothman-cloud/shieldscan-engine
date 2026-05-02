@@ -1,0 +1,32 @@
+[
+  {
+    "_comment": "valid",
+    "RuleID": "aws-access-token",
+    "File": "repo/good.py",
+    "StartLine": 1,
+    "Match": "[REDACTED]",
+    "Description": "valid",
+    "Tags": []
+  },
+  {
+    "_comment": "missing RuleID \u2014 must skip",
+    "File": "repo/bad1.py",
+    "StartLine": 1,
+    "Match": "[REDACTED]"
+  },
+  {
+    "_comment": "missing File \u2014 must skip",
+    "RuleID": "no-file",
+    "StartLine": 1,
+    "Match": "[REDACTED]"
+  },
+  {
+    "_comment": "valid second",
+    "RuleID": "github-pat",
+    "File": "repo/good2.py",
+    "StartLine": 99,
+    "Match": "[REDACTED]",
+    "Description": "valid two",
+    "Tags": []
+  }
+]

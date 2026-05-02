@@ -102,4 +102,80 @@ new pattern, add it as section 2, etc.
 
 ---
 
-*Last updated: 2026-05-01 at Task 5.5.*
+## 2. Env-var-binary resolution for native tools
+
+**Promoted at Task 6.5** with 3 instances (M6.1 Nuclei, M6.2 Semgrep,
+M6.5 Gitleaks). Every M6+ native-tool runner that resolves a binary
+path follows this pattern.
+
+### The pattern
+
+Each native-tool runner config takes a `BinaryPath` resolved at
+startup as:
+
+1. **Env var first:** `os.Getenv("SHIELDSCAN_<TOOL_UPPER>_BINARY")`.
+2. **`exec.LookPath` fallback:** `exec.LookPath("<tool>")`.
+3. **Fail-fast** at startup Phase 1 if both empty (no usable path).
+
+The `Config` struct in each tool package exposes `BinaryPath` as a
+single string field; resolution happens in `cmd/worker/run.go` (at
+M6.8 wiring), not inside the tool package — keeps tool packages
+testable without env-var mutation.
+
+### Why
+
+Operators install tools via different mechanisms:
+
+| Mechanism | Typical path |
+|---|---|
+| `go install …@version` | `~/go/bin/<tool>` |
+| `pipx install <tool>==<version>` | `~/.local/bin/<tool>` |
+| `apt install <tool>` | `/usr/bin/<tool>` |
+| OPS `provision-worker.sh` symlink | `/usr/local/bin/<tool>` |
+
+Hardcoding any one path breaks the others. Env-var override +
+LookPath fallback handles every realistic case.
+
+**Fail-fast diagnostic at Phase 1 startup:** the worker emits a
+specific message naming both override paths so the operator can
+pick whichever is operationally cleaner. Example:
+
+```
+gitleaks binary not found; set SHIELDSCAN_GITLEAKS_BINARY env var
+or ensure gitleaks is on $PATH
+```
+
+The message names *both* override paths so operators don't have to
+guess which is preferred. Phase 1 wiring lands at M6.8 (per M6.5
+watch item E — 6.5 ships only the resolution interface).
+
+### Instances
+
+- **`SHIELDSCAN_NUCLEI_BINARY`** (M6.1 Nuclei,
+  `internal/tools/nuclei/nuclei.go`)
+- **`SHIELDSCAN_SEMGREP_BINARY`** (M6.2 Semgrep,
+  `internal/tools/semgrep/semgrep.go`)
+- **`SHIELDSCAN_GITLEAKS_BINARY`** (M6.5 Gitleaks,
+  `internal/tools/gitleaks/gitleaks.go`)
+
+### When to use
+
+Every native-tool runner that takes `BinaryPath` in its `Config`
+struct — i.e., every M6 task by the time the wiring lands at 6.8.
+M7 Docker-service runners use a different shape (HTTP endpoints, not
+binaries) and are out of scope for this pattern.
+
+### Trigger to revisit
+
+A native tool with a fundamentally different launch mechanism
+(e.g., Java jar via `java -jar <path>`, or a wrapped Python module
+via `python -m <module>`). At that point, the pattern likely
+extends to a launcher abstraction rather than fragmenting per-tool.
+
+Pattern promoted at M6.5 per project's third-instance threshold
+convention (see preamble); cross-referenced explicitly to M6.1,
+M6.2, M6.5 instances above.
+
+---
+
+*Last updated: 2026-05-02 at Task 6.5.*
