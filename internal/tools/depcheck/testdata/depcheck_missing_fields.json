@@ -1,0 +1,34 @@
+{
+  "reportSchema": "1.1",
+  "dependencies": [
+    {
+      "_comment": "valid dep with valid CVE",
+      "fileName": "good.jar",
+      "filePath": "repo/good.jar",
+      "vulnerabilities": [
+        {"name": "CVE-2020-1234", "severity": "High", "cvssv3": {"baseScore": 7.5}, "cwes": ["CWE-79"], "description": "valid CVE"}
+      ]
+    },
+    {
+      "_comment": "dep with no vulnerabilities array — clean",
+      "fileName": "clean.jar",
+      "filePath": "repo/clean.jar"
+    },
+    {
+      "_comment": "dep with no filePath — vulnerabilities skipped (missing required field)",
+      "fileName": "no-path.jar",
+      "vulnerabilities": [
+        {"name": "CVE-2020-9999", "severity": "High", "description": "should be dropped"}
+      ]
+    },
+    {
+      "_comment": "valid dep; CVE missing 'name' — that CVE skipped, others survive",
+      "fileName": "partial.jar",
+      "filePath": "repo/partial.jar",
+      "vulnerabilities": [
+        {"severity": "High", "description": "no name → drop"},
+        {"name": "CVE-2021-5678", "severity": "Medium", "cvssv3": {"baseScore": 5.0}, "cwes": ["CWE-89"], "description": "valid CVE in partial"}
+      ]
+    }
+  ]
+}

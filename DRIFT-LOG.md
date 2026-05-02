@@ -8,6 +8,252 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+### 2026-05-02 — Task 6.7: Dep-Check + Checkov runners + NativeRunner OutputFile extension (ADR-023)
+
+**Files shipped (single atomic engine commit):**
+- UPDATE `internal/tools/native.go` (NativeRunner: +`OutputFile`, +`OutputFilePlaceholder`, +`ParseOutputFile` fields; bimodal `Run()` with tempfile lifecycle)
+- UPDATE `internal/tools/native_test.go` (+5 framework tests for OutputFile mode; +3 imports)
+- NEW `internal/tools/depcheck/{depcheck,parse,severity}.go` + `depcheck_test.go` + 4 testdata fixtures + README
+- NEW `internal/tools/checkov/{checkov,parse}.go` + `checkov_test.go` + 4 testdata fixtures + README
+- UPDATE `DEVELOPMENT-PATTERNS.md` (Pattern 3 added: PYTHONWARNINGS=ignore Env)
+
+**Companion docs commit (`shieldscan-docs/`)** lands ADR-023.
+
+**32 net-new tests at 6.7 close** (5 framework + 12 depcheck + 12 checkov + 3 from Pattern 3 promotion implicit in DefaultsApplied tests). Engine total: **254 tests** across 14 packages. Race-clean (concurrent OutputFile test verified under -race), vet-clean, golangci-lint v2 reports 0 issues.
+
+**Most architecturally significant M6 task to date:** framework extension + two new tool packages + 1 DEVELOPMENT-PATTERNS promotion + 1 ADR.
+
+**Three first-instance pattern advances at 6.7 (track only — no promotions triggered):**
+1. **Constants-only field mapping** advances 1 → 2 instances (Gitleaks + Checkov). Track for promotion at 3rd.
+2. **Naturally-clean exit** advances 2 → 3 instances (Nuclei + SSLyze + Dep-Check). 3rd-instance threshold reached, but per H.NEW.7 promotion deferred — wait for unified "exit-code handling" entry when configuration-not-leniency or runner-tolerates also hits 3rd instance.
+3. **Configuration-not-leniency exit** advances 1 → 2 instances (Gitleaks + Checkov). Track.
+
+**Pattern promotions at 6.7 (1 fired):**
+1. **PYTHONWARNINGS=ignore Env → DEVELOPMENT-PATTERNS.md Pattern 3** (3rd-instance threshold met cleanly: Semgrep + SSLyze + Checkov).
+
+**Premature promotion at 6.7 (1 fired; threshold-override):**
+2. **NativeRunner OutputFile mode → ADR-023** (1st instance only — Dep-Check). Three-instance threshold OVERRIDDEN per asymmetric-cost reasoning: hack alternatives all rejected as race-prone or architecturally messy.
+
+**Reductions counter advances 3/4 → 5/6 (75% → 83%).** SPEC §7.3 trigger remains fired; Path A still holds (M6 close timing). No new field-types missing per pre-prep field-map analysis — all reductions are similar shapes to existing tools.
+
+### 2026-05-02 — Task 6.7: NativeRunner OutputFile extension (framework change; ADR-023)
+
+**Pin (load-bearing).** `internal/tools/native.go` adds three fields to `NativeRunner`:
+
+```go
+OutputFile            bool
+OutputFilePlaceholder string
+ParseOutputFile       func(outputFilePath string) ([]events.RawFinding, error)
+```
+
+`Run()` becomes bimodal:
+- **Stdout-mode** (`OutputFile=false`, default): unchanged — subprocess stdout captured, ParseOutput receives bytes.
+- **File-output mode** (`OutputFile=true`): `os.CreateTemp` mints a unique tempfile; placeholder substitution into args; subprocess invoked; `ParseOutputFile` receives the path; `defer os.Remove` cleans up regardless of success/error.
+
+**Validation at Run entry**: `OutputFile=true` requires both `ParseOutputFile != nil` AND `OutputFilePlaceholder != ""`. Surfaces as standard error (not panic).
+
+**5 framework tests** (`internal/tools/native_test.go`):
+1. `TestNativeRunner_OutputFile_PathSubstituted` — placeholder MUST be replaced before exec
+2. `TestNativeRunner_OutputFile_TempfileCleanedUpOnSuccess` — defer cleanup verified
+3. `TestNativeRunner_OutputFile_TempfileCleanedUpOnError` — symmetric cleanup on subprocess error
+4. `TestNativeRunner_OutputFile_ConcurrentRunsDistinctPaths` — 10 parallel Run() calls, distinct paths under -race
+5. `TestNativeRunner_OutputFile_Validation` — table-driven: missing-ParseOutputFile + missing-Placeholder
+
+**Backward-compat verified pre-implementation per Watch item A:** all 4 existing tool packages (nuclei, semgrep, gitleaks, sslyze) test suites passed unchanged after framework extension. Stdout-mode is the zero-value default; existing code paths unaffected.
+
+**Full ADR-023 lands at companion `shieldscan-docs/SPECIFICATION.md §13` commit.**
+
+### 2026-05-02 — Task 6.7: Dep-Check tempfile lifecycle (per-Run unique paths via os.CreateTemp)
+
+**Pin.** Per ADR-023, NativeRunner uses `os.CreateTemp("", "shieldscan-"+ToolName+"-*.out")` to mint a per-Run unique tempfile path. The "*" wildcard is a stdlib convention that gets replaced with a random suffix; the resulting path is guaranteed unique even under concurrent `Run()` calls on the same NativeRunner.
+
+**Tempfile naming:** `shieldscan-<toolname>-<random>.out`. The toolname prefix aids `ls /tmp` debugging. The `.out` suffix is generic (per H.6 lean) — file might contain JSON or XML or other format depending on tool config.
+
+**Cleanup:** `defer os.Remove(tempfilePath)` regardless of subprocess success/error (per H.3 lean). `os.Remove` errors ignored — cleanup is best-effort; the OS will eventually reap stale tempfiles via tmpfs cleanup or similar.
+
+**Verified race-free** by `TestNativeRunner_OutputFile_ConcurrentRunsDistinctPaths` running 10 parallel Run() calls under `-race`; all 10 received distinct tempfile paths.
+
+### 2026-05-02 — Task 6.7: Per-CVE findings convention (1 dep with 5 CVEs → 5 RawFindings)
+
+**Pin.** `internal/tools/depcheck/parse.go` iterates `dependencies[i].vulnerabilities[j]` and emits one RawFinding per CVE. A dep with 5 CVEs produces 5 findings, each with the same `CodeFile` (dep file path) but distinct `FindingType` (CVE id).
+
+**Why per-CVE.** Mirrors industry SCA tooling conventions (Snyk, GitHub Dependabot, Trivy SCA). Per-CVE granularity enables:
+- AI pipeline dedup per-CVE (same CVE across tools = same vulnerability).
+- Per-CVE remediation tracking (each CVE has its own fix version).
+- Per-CVE severity (a dep can have a critical CVE + a low CVE).
+
+**Aggregation alternative rejected.** Per-dep aggregated findings (1 dep with 5 CVEs → 1 finding with CVE list folded) would lose per-CVE severity context and make AI pipeline dedup harder.
+
+**Fingerprint dedup via `tools.ComputeFingerprint`** produces distinct fingerprints (FindingType differs per CVE), so the convention is fingerprint-stable.
+
+### 2026-05-02 — Task 6.7: Dep-Check naturally-clean exit (3rd instance; promotion deferred per H.NEW.7)
+
+**Pin.** Dep-Check 9.2.0 exits 0 by default even when vulnerabilities found. `--failOnCVSS <threshold>` flag would change this — DELIBERATELY OMITTED to keep exit code semantics simple and consistent with naturally-clean pattern.
+
+**Naturally-clean exit pattern instances:**
+- 6.1 Nuclei (1st)
+- 6.4 SSLyze (2nd)
+- **6.7 Dep-Check (3rd)** — 3rd-instance threshold reached
+
+**Promotion to DEVELOPMENT-PATTERNS.md DEFERRED per H.NEW.7.** Reasoning: the three exit-code-handling patterns (naturally-clean / runner-tolerates / configuration-not-leniency) form a coherent vocabulary documented in 6.5 DRIFT-LOG entry 5 with a decision tree. Promoting just naturally-clean would fragment the conceptual unit. Wait for either configuration-not-leniency or runner-tolerates to also hit 3rd instance, then promote all three together as a unified "Exit-code handling vocabulary" pattern.
+
+**Trigger to promote**: configuration-not-leniency advances to 3rd instance (currently 2: Gitleaks + Checkov), OR runner-tolerates advances to 3rd instance (currently 1: Semgrep). Likely fires at 6.6 Wapiti family.
+
+**Regression-guarded by `TestBuildArgs_NoFailOnCVSSFlag`.**
+
+### 2026-05-02 — Task 6.7: Checkov constant Severity = "medium" (constants-only mapping 2nd instance)
+
+**Pin.** OSS Checkov (3.2.340 verified at pre-prep) emits `severity: null` for ALL checks. Severity is a Bridgecrew Cloud commercial feature; OSS edition has no per-check severity field.
+
+**Decision per H.NEW.1:** apply constant `SeverityMedium = "medium"` to every Checkov RawFinding. Industry-standard default for IaC misconfigurations. Downstream AI pipeline can tune via context.
+
+**Constants-only mapping pattern instances:**
+- 6.5 Gitleaks (1st: SeverityCritical + CWEHardcodedCredentials)
+- **6.7 Checkov (2nd: SeverityMedium + CWEIaCMisconfiguration)**
+
+**Track for 3rd-instance promotion.** Likely candidate: M7 Trivy (similar OSS-tool pattern with limited per-finding metadata).
+
+**Trigger to revisit:** Checkov adds per-check severity to OSS edition (commercial feature drift). At that point, replace constant with mapping function driven by the `severity` field.
+
+### 2026-05-02 — Task 6.7: Checkov constant CWE = "CWE-1032"
+
+**Pin.** Per H.NEW.2, every Checkov finding maps to `CWEIaCMisconfiguration = "CWE-1032"` (OWASP IaC Misconfiguration). OSS Checkov has no per-check CWE field; CWE-1032 is the umbrella IaC-misconfig category covering all Checkov rule classes (S3 misconfig, security-group misconfig, missing-encryption, etc.).
+
+**Per-rule CWE mapping rejected** (Option β in pre-prep): hundreds of Checkov rules; per-rule table would be brittle and incomplete. Constant CWE keeps the parser simple; AI pipeline can refine if needed.
+
+**Trigger to revisit:** customer asks for finer-grained CWE classification; OR Bridgecrew open-sources their per-check CWE table.
+
+### 2026-05-02 — Task 6.7: Checkov --soft-fail (configuration-not-leniency 2nd instance)
+
+**Pin.** Checkov 3.2.340 exits 1 on findings by default. Per H.NEW.4, BuildArgs includes `--soft-fail` flag forcing exit 0; NativeRunner's `ExitCodeLenient` stays `false`. Configuration-not-leniency pattern.
+
+**Configuration-not-leniency instances:**
+- 6.5 Gitleaks (1st: `--exit-code=0`)
+- **6.7 Checkov (2nd: `--soft-fail`)**
+
+**Track for 3rd-instance promotion** (currently 1 from threshold). Pattern would promote alongside the unified exit-code-handling DEVELOPMENT-PATTERNS entry deferred at H.NEW.7.
+
+**Regression-guarded by `TestBuildArgs_SoftFailPresent`.**
+
+### 2026-05-02 — Task 6.7: Checkov code_block 2-D array → flattened CodeSnippet
+
+**Pin.** Checkov `code_block` is a 2-D structure: `[[lineNumber, codeText], ...]`. The `flattenCodeBlock` helper in `internal/tools/checkov/parse.go` converts it to a single source string preserving line content (line numbers dropped — they're already encoded in `file_line_range`):
+
+```
+in:  [[5, "resource X {\n"], [6, "  attr = ...\n"]]
+out: "resource X {\n  attr = ...\n"
+```
+
+Truncated to 2 KiB via `jsonx.Truncate` consistent with 6.2/6.4/6.5 conventions.
+
+**Per-pair malformed entries skipped silently** (e.g., single-element pairs, wrong-type entries). Tested via `TestFlattenCodeBlock` table-driven cases.
+
+**Reduction acknowledged:** the 2-D structure (with line-number-per-line tracking) is reduced to flat source. Reductions counter entry 10.
+
+### 2026-05-02 — Task 6.7: PYTHONWARNINGS Pattern 3 promotion to DEVELOPMENT-PATTERNS.md
+
+**Pin.** Three-instance threshold met cleanly (Semgrep + SSLyze + Checkov). `Env: []string{"PYTHONWARNINGS=ignore"}` for every pipx-installed Python tool runner regardless of currently-observed warnings.
+
+DEVELOPMENT-PATTERNS.md Pattern 3 entry text drafted at H.10; lands at the engine commit. References:
+- All three instances (semgrep.go / sslyze.go / checkov.go)
+- Cross-link to ADR-023 (asymmetric-cost reasoning, since this pattern's "defense-in-depth despite no warnings observed" mirrors ADR-023's threshold-override reasoning)
+- "When NOT to use" guidance (Go binaries, JVM tools, native binaries)
+
+### 2026-05-02 — Task 6.7: reductions counter update (5/6 tools = 83%; Path A holds)
+
+**Pin.** Counter advances:
+
+| Tool | Reductions |
+|---|---|
+| 6.1 Nuclei | 3 |
+| 6.2 Semgrep | 0 |
+| 6.5 Gitleaks | 5 |
+| 6.4 SSLyze | 5 |
+| **6.7 Dep-Check** | **5** (references[], vulnerableSoftware[], hashes md5/sha1/sha256, evidenceCollected, multi-CWE beyond [0]) |
+| **6.7 Checkov** | **6** (bc_check_id, guideline, evaluations, caller_file_*, entity_tags, code_block 2-D structure folded) |
+
+**5 of 6 M6 tools have reductions (83%, up from 75%).** SPEC §7.3 trigger remains fired; **Path A still holds** (M6 close timing for proposal).
+
+**No new field-types missing.** All Dep-Check + Checkov reductions are similar shapes to existing tools. Maybe candidates if M6 close proposal goes ahead: `References []string` (cross-tool consistent), but that's been deferred since 6.1 too.
+
+### 2026-05-02 — Task 6.7: Plan §6.7 thinness divergence (largest at any M6 task)
+
+**Pin.** Plan §6.7 (`shieldscan-docs/IMPLEMENTATION-PLAN.md` lines 1910+): one sentence × 2 tools.
+
+**Divergence (largest at any M6 task; exceeds 6.4):**
+- 1 sentence × 2 tools → 32 tests + framework extension + 1 ADR + 1 DEVELOPMENT-PATTERNS promotion
+- ~25 LoC plan literal → ~700 LoC src + ~600 LoC tests + ~70 LoC framework extension + 1 ADR
+
+Plan §6.7 was written before M5 chassis + ADR-023 + pattern-promotion infrastructure existed. No surgical doc patches needed at 6.7 (TOOL-ARCH §6.10 + §6.11 invocation literals validated at pre-prep).
+
+### 2026-05-02 — Task 6.7: Dep-Check Java JRE dependency (OPS provision-worker.sh note)
+
+**Pin (operational).** Dep-Check is a JVM-based tool. M6.7 pre-prep verified: fresh Ubuntu 24.04 install requires `apt install default-jre` (or pinned OpenJDK 21) before Dep-Check can start. Without Java, `dependency-check.sh --version` fails with `Error: JAVA_HOME is not defined correctly`.
+
+**OPS milestone (M11) `provision-worker.sh` action items:**
+
+```bash
+# Install JDK before Dep-Check unzip:
+apt install -y default-jre
+
+# Verify:
+java --version  # expect openjdk 21.x.x
+
+# Then unzip Dep-Check 9.2.0 release archive:
+curl -sL -o dependency-check.zip \
+    "https://github.com/jeremylong/DependencyCheck/releases/download/v9.2.0/dependency-check-9.2.0-release.zip"
+unzip dependency-check.zip -d /opt/
+ln -sf /opt/dependency-check/bin/dependency-check.sh /usr/local/bin/dependency-check.sh
+```
+
+**SHIELDSCAN_DEPCHECK_BINARY env** points to `dependency-check.sh` (per M6.7 Watch item A — single env var; `_HOME`-based variant rejected as needlessly complex).
+
+### 2026-05-02 — Task 6.7: Dep-Check NVD API key requirement (OPS milestone configuration)
+
+**Pin (operational + commit-blocker for actual scans).** NVD CVE database requires an API key as of 2026 — the unauthenticated endpoint returns 403/404. Verified empirically at M6.7 pre-prep: `dependency-check.sh --updateonly` failed with `[ERROR] Error updating the NVD Data; the NVD returned a 403 or 404 error`.
+
+**M6.7 implementation impact:** parser tests use synthesized fixtures (per documented schema); no real scan performed. Production deploys MUST configure the key.
+
+**OPS milestone (M11) `provision-worker.sh` action items:**
+
+```bash
+# Set DEPCHECK_NVD_API_KEY env var (or pass --nvdApiKey via NativeRunner.Env)
+# Get a key from: https://nvd.nist.gov/developers/request-an-api-key
+export DEPCHECK_NVD_API_KEY="<key>"
+
+# First-run NVD update (takes 15-30 min):
+dependency-check.sh --updateonly --nvdApiKey "$DEPCHECK_NVD_API_KEY"
+```
+
+**Trigger to revisit:** NVD changes their API access model (likely won't; rate limits will get tighter, not looser).
+
+### 2026-05-02 — Task 6.7: Two-tool atomic commit shape (single commit covers both + framework)
+
+**Pin.** Per H.NEW.8 + Watch item D: single atomic engine commit covers Dep-Check + Checkov + framework extension + DEVELOPMENT-PATTERNS update + 16 DRIFT entries. Sequential implementation within commit prep (Dep-Check + framework first; Checkov second per Watch item E) but landed atomically.
+
+**Atomic-commit invariants honored:**
+- NativeRunner OutputFile mode exists ⇔ Dep-Check uses it
+- DEVELOPMENT-PATTERNS Pattern 3 exists ⇔ 3rd instance (Checkov) exists
+- ADR-023 lands in companion docs commit (separate repo) immediately before engine commit
+
+### 2026-05-02 — Task 6.7: ADR-023 acknowledgment
+
+**Pin.** ADR-023 lands in `shieldscan-docs/SPECIFICATION.md §13` (companion docs commit `docs(spec): add ADR-023 NativeRunner file-output mode (M6.7)`).
+
+**ADR-023 in brief**: NativeRunner gains `OutputFile` mode for tools that write findings to file rather than stdout. Three-instance threshold OVERRIDDEN per asymmetric-cost reasoning (hack alternatives all rejected as race-prone). Triggers to revisit: 5+ tools using OutputFile mode (consider separate FileOutputRunner type), tools that write to stderr (distinct shape), >5% performance regression from tempfile I/O, operator concern about tempfile location.
+
+**Cross-references:** DEVELOPMENT-PATTERNS.md preamble explains the asymmetric-cost reasoning generally; ADR-023 is the load-bearing instance. Pattern 3 (PYTHONWARNINGS) entry references ADR-023 for the reasoning analogy.
+
+### 2026-05-02 — Task 6.7: jsonx-extension trigger watch update (still 1st-instance need post-6.7)
+
+**Pin (forward-look update).** The jsonx-extension trigger watch from 6.4 entry 14 (path-walker `ExtractStringPath`, `ExtractBool`) — Dep-Check's parser uses shallow access (`vulnerabilities[i].name`, `vulnerabilities[i].cvssv3.baseScore`); 1-2 levels deep, manageable via existing `jsonx.ExtractMap` chains. Checkov similarly shallow.
+
+**Path-walker need does NOT deepen at 6.7.** Still 1st-instance need (from SSLyze rules at 6.4). Likely 2nd instance: M6.6 Wapiti or M7.x tools with deeper nesting. No promotion at 6.7.
+
+**`boolFrom` helper from 6.4 (in `internal/tools/sslyze/rules.go`):** still 1st instance. Neither 6.7 tool needs lenient bool extraction (Dep-Check uses string severity; Checkov has no bool fields parser uses). No promotion.
+
+---
+
 ### 2026-05-02 — Task 6.4: SSLyze native runner + plugin-rules parser + first-time CipherSuite/CertSubject
 
 **Files shipped (single engine commit):**

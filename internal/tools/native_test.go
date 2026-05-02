@@ -2,8 +2,12 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -410,4 +414,216 @@ func TestNativeRunner_NilParseOutput(t *testing.T) {
 	_, err := r.Run(t.Context(), Target{}, ScanConfig{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ParseOutput is nil")
+}
+
+// ─── ADR-023 OutputFile mode (M6.7) ──────────────────────────────────
+
+// shScript writes a tiny POSIX shell script to a tempfile (mode 0755)
+// and returns its path. Used as a controllable mock binary for file-
+// output mode tests.
+func shScript(t *testing.T, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "mock.sh")
+	require.NoError(t, os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755))
+	return p
+}
+
+// TestNativeRunner_OutputFile_PathSubstituted pins the placeholder
+// substitution invariant: BuildArgs returns args containing
+// "{{outputFile}}"; NativeRunner replaces every occurrence with the
+// per-Run tempfile path before exec.
+func TestNativeRunner_OutputFile_PathSubstituted(t *testing.T) {
+	// Mock binary: writes its first arg's value (the substituted path)
+	// back to that same path. Verifies substitution happened (placeholder
+	// would not be a writable path).
+	mock := shScript(t, `echo "[{\"FindingType\":\"X\",\"Title\":\"ok\",\"Severity\":\"info\"}]" > "$1"`)
+
+	r := &NativeRunner{
+		ToolName: "outputfile-mode-test", ToolCategory: "test",
+		BinaryPath: mock,
+		BuildArgs: func(Target, ScanConfig) []string {
+			return []string{"{{outputFile}}"}
+		},
+		OutputFile:            true,
+		OutputFilePlaceholder: "{{outputFile}}",
+		ParseOutputFile: func(path string) ([]events.RawFinding, error) {
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			// Verify the path is NOT the literal placeholder.
+			assert.NotEqual(t, "{{outputFile}}", path,
+				"placeholder MUST be substituted before exec")
+			assert.Contains(t, path, "shieldscan-outputfile-mode-test-",
+				"tempfile path should carry tool-name prefix")
+			// Sanity: parse the JSON our mock wrote.
+			var arr []events.RawFinding
+			require.NoError(t, json.Unmarshal(data, &arr))
+			return arr, nil
+		},
+		Timeout: 5 * time.Second,
+	}
+	findings, err := r.Run(t.Context(), Target{}, ScanConfig{})
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	assert.Equal(t, "ok", findings[0].Title)
+}
+
+// TestNativeRunner_OutputFile_TempfileCleanedUpOnSuccess pins the
+// invariant: post-Run, the tempfile no longer exists when Run
+// succeeded.
+func TestNativeRunner_OutputFile_TempfileCleanedUpOnSuccess(t *testing.T) {
+	mock := shScript(t, `echo "[]" > "$1"`)
+
+	var capturedPath string
+	r := &NativeRunner{
+		ToolName: "cleanup-success", ToolCategory: "test",
+		BinaryPath: mock,
+		BuildArgs: func(Target, ScanConfig) []string {
+			return []string{"{{outputFile}}"}
+		},
+		OutputFile:            true,
+		OutputFilePlaceholder: "{{outputFile}}",
+		ParseOutputFile: func(path string) ([]events.RawFinding, error) {
+			capturedPath = path
+			// Verify file exists at parse time.
+			_, statErr := os.Stat(path)
+			assert.NoError(t, statErr, "tempfile must exist at ParseOutputFile call")
+			return nil, nil
+		},
+		Timeout: 5 * time.Second,
+	}
+	_, err := r.Run(t.Context(), Target{}, ScanConfig{})
+	require.NoError(t, err)
+	require.NotEmpty(t, capturedPath)
+	_, statErr := os.Stat(capturedPath)
+	assert.True(t, os.IsNotExist(statErr),
+		"tempfile MUST be removed after successful Run; got stat err: %v", statErr)
+}
+
+// TestNativeRunner_OutputFile_TempfileCleanedUpOnError pins the
+// symmetric invariant: even when the subprocess exits non-zero (and
+// ExitCodeLenient=false aborts the Run), the tempfile is still
+// removed by the deferred cleanup.
+func TestNativeRunner_OutputFile_TempfileCleanedUpOnError(t *testing.T) {
+	// Mock binary: writes a partial file then exits 1.
+	mock := shScript(t, `echo "partial" > "$1"; exit 1`)
+
+	// Sniff the tempfile path by reading TempDir before/after.
+	beforeFiles := listTempDir(t)
+
+	r := &NativeRunner{
+		ToolName: "cleanup-error", ToolCategory: "test",
+		BinaryPath:            mock,
+		BuildArgs:             func(Target, ScanConfig) []string { return []string{"{{outputFile}}"} },
+		OutputFile:            true,
+		OutputFilePlaceholder: "{{outputFile}}",
+		ParseOutputFile: func(path string) ([]events.RawFinding, error) {
+			t.Fatalf("ParseOutputFile MUST NOT be called when subprocess exits non-zero (ExitCodeLenient=false)")
+			return nil, nil
+		},
+		Timeout: 5 * time.Second,
+	}
+	_, err := r.Run(t.Context(), Target{}, ScanConfig{})
+	require.Error(t, err, "non-zero exit MUST surface as error")
+
+	// Verify NO new shieldscan-cleanup-error-* file remains in TempDir.
+	afterFiles := listTempDir(t)
+	for f := range afterFiles {
+		if _, existed := beforeFiles[f]; existed {
+			continue
+		}
+		assert.NotContains(t, f, "shieldscan-cleanup-error-",
+			"tempfile MUST be removed even on subprocess error; found leftover %s", f)
+	}
+}
+
+// TestNativeRunner_OutputFile_ConcurrentRunsDistinctPaths pins the
+// race-freedom invariant per ADR-023: 10 concurrent Run() invocations
+// on the same NativeRunner instance MUST each receive a distinct
+// tempfile path. Run with -race.
+func TestNativeRunner_OutputFile_ConcurrentRunsDistinctPaths(t *testing.T) {
+	mock := shScript(t, `echo "[]" > "$1"`)
+
+	const N = 10
+	pathsCh := make(chan string, N)
+	r := &NativeRunner{
+		ToolName: "concurrent", ToolCategory: "test",
+		BinaryPath:            mock,
+		BuildArgs:             func(Target, ScanConfig) []string { return []string{"{{outputFile}}"} },
+		OutputFile:            true,
+		OutputFilePlaceholder: "{{outputFile}}",
+		ParseOutputFile: func(path string) ([]events.RawFinding, error) {
+			pathsCh <- path
+			return nil, nil
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := r.Run(t.Context(), Target{}, ScanConfig{})
+			assert.NoError(t, err)
+		}()
+	}
+	wg.Wait()
+	close(pathsCh)
+
+	seen := map[string]bool{}
+	for p := range pathsCh {
+		assert.False(t, seen[p],
+			"tempfile path %q seen twice; concurrent Run() invocations leaked into shared path", p)
+		seen[p] = true
+	}
+	assert.Equal(t, N, len(seen), "expected %d distinct tempfile paths, got %d", N, len(seen))
+}
+
+// TestNativeRunner_OutputFile_Validation pins the construct-validation
+// shape: OutputFile=true requires both ParseOutputFile and
+// OutputFilePlaceholder. Failures are surfaced from Run, not panic.
+func TestNativeRunner_OutputFile_Validation(t *testing.T) {
+	t.Run("missing-ParseOutputFile", func(t *testing.T) {
+		r := &NativeRunner{
+			ToolName: "v1", ToolCategory: "test",
+			BinaryPath:            "/bin/echo",
+			BuildArgs:             func(Target, ScanConfig) []string { return nil },
+			OutputFile:            true,
+			OutputFilePlaceholder: "{{outputFile}}",
+			// ParseOutputFile deliberately nil
+			Timeout: 5 * time.Second,
+		}
+		_, err := r.Run(t.Context(), Target{}, ScanConfig{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ParseOutputFile is nil")
+	})
+	t.Run("missing-OutputFilePlaceholder", func(t *testing.T) {
+		r := &NativeRunner{
+			ToolName: "v2", ToolCategory: "test",
+			BinaryPath:            "/bin/echo",
+			BuildArgs:             func(Target, ScanConfig) []string { return nil },
+			OutputFile:            true,
+			ParseOutputFile:       func(string) ([]events.RawFinding, error) { return nil, nil },
+			OutputFilePlaceholder: "", // deliberately empty
+			Timeout:               5 * time.Second,
+		}
+		_, err := r.Run(t.Context(), Target{}, ScanConfig{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "OutputFilePlaceholder is empty")
+	})
+}
+
+// listTempDir returns the basenames of files in os.TempDir() at the
+// time of call. Used by cleanup-on-error test to detect leftover
+// tempfiles.
+func listTempDir(t *testing.T) map[string]struct{} {
+	t.Helper()
+	entries, err := os.ReadDir(os.TempDir())
+	require.NoError(t, err)
+	out := make(map[string]struct{}, len(entries))
+	for _, e := range entries {
+		out[e.Name()] = struct{}{}
+	}
+	return out
 }

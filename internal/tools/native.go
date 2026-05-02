@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"time"
 
@@ -100,6 +101,45 @@ type NativeRunner struct {
 	// that don't (gitleaks, semgrep) are the minority and must opt in
 	// explicitly. Default-strict matches the dominant pattern.
 	ExitCodeLenient bool
+
+	// OutputFile, when true, switches the runner from stdout-mode to
+	// file-output mode for tools that write findings to a file rather
+	// than stdout (Dep-Check, M7 Trivy filesystem-scan candidate, etc.).
+	//
+	// Per Run, NativeRunner creates a unique tempfile via os.CreateTemp,
+	// substitutes its path into BuildArgs's args slice (replacing every
+	// occurrence of OutputFilePlaceholder), invokes the subprocess,
+	// calls ParseOutputFile (NOT ParseOutput) with the file path, and
+	// removes the tempfile via defer regardless of success/failure.
+	//
+	// Stdout content is discarded in file-output mode (typical
+	// file-output tool's stdout is logging chatter, not findings).
+	//
+	// Stdout-mode (OutputFile=false, the zero-value default) is
+	// unchanged.
+	//
+	// See SPECIFICATION.md ADR-023 (M6.7) for the framework-extension
+	// rationale + alternatives considered.
+	OutputFile bool
+
+	// OutputFilePlaceholder is the literal substring in BuildArgs's
+	// returned args slice that NativeRunner replaces with the per-Run
+	// tempfile path. Conventional value: "{{outputFile}}".
+	//
+	// Required when OutputFile=true; ignored otherwise. Validated at
+	// the start of Run.
+	OutputFilePlaceholder string
+
+	// ParseOutputFile is invoked instead of ParseOutput when
+	// OutputFile=true. It receives the path to the populated tempfile
+	// (which is then deleted by NativeRunner via defer).
+	//
+	// Required when OutputFile=true; ignored otherwise. Validated at
+	// the start of Run.
+	//
+	// ParseOutputFile should NOT delete the file itself — NativeRunner's
+	// defer handles cleanup symmetrically across success and error paths.
+	ParseOutputFile func(outputFilePath string) ([]events.RawFinding, error)
 }
 
 // Compile-time interface assertion. If NativeRunner ever drifts from
@@ -114,11 +154,28 @@ func (n *NativeRunner) Category() string { return n.ToolCategory }
 
 // Run executes the subprocess and returns enriched findings.
 // See ToolRunner.Run docstring for error semantics.
+//
+// Run is bimodal:
+//
+//   - Stdout-mode (OutputFile=false, default): subprocess stdout is
+//     captured into a capped buffer; ParseOutput receives the bytes.
+//   - File-output mode (OutputFile=true; ADR-023): NativeRunner mints
+//     a unique tempfile via os.CreateTemp, substitutes its path into
+//     args, invokes the subprocess, calls ParseOutputFile with the
+//     path, and removes the tempfile via defer.
 func (n *NativeRunner) Run(ctx context.Context, target Target, cfg ScanConfig) ([]events.RawFinding, error) {
 	if n.BuildArgs == nil {
 		return nil, fmt.Errorf("%s: BuildArgs is nil", n.ToolName)
 	}
-	if n.ParseOutput == nil {
+	// Mode-specific validation.
+	if n.OutputFile {
+		if n.ParseOutputFile == nil {
+			return nil, fmt.Errorf("%s: OutputFile=true but ParseOutputFile is nil", n.ToolName)
+		}
+		if n.OutputFilePlaceholder == "" {
+			return nil, fmt.Errorf("%s: OutputFile=true but OutputFilePlaceholder is empty", n.ToolName)
+		}
+	} else if n.ParseOutput == nil {
 		return nil, fmt.Errorf("%s: ParseOutput is nil", n.ToolName)
 	}
 
@@ -127,6 +184,29 @@ func (n *NativeRunner) Run(ctx context.Context, target Target, cfg ScanConfig) (
 	defer cancel()
 
 	args := n.BuildArgs(target, cfg)
+
+	// File-output mode: mint a unique tempfile and substitute its path
+	// into args. Per ADR-023: os.CreateTemp guarantees unique paths
+	// across concurrent Run() calls; defer cleanup handles success +
+	// error paths symmetrically.
+	var tempfilePath string
+	if n.OutputFile {
+		f, err := os.CreateTemp("", "shieldscan-"+n.ToolName+"-*.out")
+		if err != nil {
+			return nil, fmt.Errorf("%s: create tempfile: %w", n.ToolName, err)
+		}
+		tempfilePath = f.Name()
+		_ = f.Close() // tool will write; we only need the unique path
+		defer func() {
+			_ = os.Remove(tempfilePath) // ignore remove error; cleanup is best-effort
+		}()
+		// Substitute placeholder in args (every occurrence).
+		for i, a := range args {
+			if a == n.OutputFilePlaceholder {
+				args[i] = tempfilePath
+			}
+		}
+	}
 
 	// ADR-021 Rule 1: subprocess via exec.CommandContext.
 	//
@@ -187,7 +267,15 @@ func (n *NativeRunner) Run(ctx context.Context, target Target, cfg ScanConfig) (
 		// ExitCodeLenient: fall through to parse stdout regardless.
 	}
 
-	findings, err := n.ParseOutput(stdout.buf.Bytes())
+	var findings []events.RawFinding
+	var err error
+	if n.OutputFile {
+		// File-output mode: stdout is discarded; ParseOutputFile reads
+		// the tempfile from disk.
+		findings, err = n.ParseOutputFile(tempfilePath)
+	} else {
+		findings, err = n.ParseOutput(stdout.buf.Bytes())
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s parse failed: %w (stderr: %s)",
 			n.ToolName, err, truncate(stderr.String(), 512))

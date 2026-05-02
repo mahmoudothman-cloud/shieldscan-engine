@@ -1,0 +1,90 @@
+{
+  "check_type": "terraform",
+  "results": {
+    "failed_checks": [
+      {
+        "check_id": "CKV_AWS_23",
+        "bc_check_id": "BC_AWS_NETWORKING_31",
+        "check_name": "Ensure every security group and rule has a description",
+        "check_result": {
+          "result": "FAILED",
+          "evaluated_keys": [
+            "ingress/[0]"
+          ]
+        },
+        "code_block": [
+          [
+            5,
+            "resource \"aws_security_group\" \"web\" {\n"
+          ],
+          [
+            6,
+            "  name = \"web-sg\"\n"
+          ],
+          [
+            7,
+            "  ingress {\n"
+          ],
+          [
+            8,
+            "    from_port = 22\n"
+          ],
+          [
+            9,
+            "    to_port   = 22\n"
+          ],
+          [
+            10,
+            "    protocol  = \"tcp\"\n"
+          ],
+          [
+            11,
+            "    cidr_blocks = [\"0.0.0.0/0\"]\n"
+          ],
+          [
+            12,
+            "  }\n"
+          ],
+          [
+            13,
+            "}\n"
+          ]
+        ],
+        "file_path": "/main.tf",
+        "file_abs_path": "/tmp/checkov-target/main.tf",
+        "repo_file_path": "/tmp/checkov-target/main.tf",
+        "file_line_range": [
+          5,
+          13
+        ],
+        "resource": "aws_security_group.web",
+        "evaluations": null,
+        "check_class": "checkov.terraform.checks.resource.aws.SecurityGroupRuleDescription",
+        "fixed_definition": null,
+        "entity_tags": null,
+        "caller_file_path": null,
+        "caller_file_line_range": null,
+        "resource_address": null,
+        "severity": null,
+        "bc_category": null,
+        "benchmarks": null,
+        "description": null,
+        "short_description": null,
+        "vulnerability_details": null,
+        "connected_node": null,
+        "guideline": "https://docs.prismacloud.io/en/enterprise-edition/policy-reference/aws-policies/aws-networking-policies/networking-31",
+        "details": [],
+        "check_len": null,
+        "definition_context_file_path": "/tmp/checkov-target/main.tf"
+      }
+    ]
+  },
+  "summary": {
+    "passed": 1,
+    "failed": 1,
+    "skipped": 0,
+    "parsing_errors": 0,
+    "resource_count": 1,
+    "checkov_version": "3.2.340"
+  }
+}

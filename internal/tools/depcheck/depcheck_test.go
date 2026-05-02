@@ -1,0 +1,211 @@
+// Package depcheck holds tests for the OWASP Dependency-Check native
+// runner. First M6 tool to use NativeRunner's OutputFile mode (per
+// ADR-023).
+package depcheck
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/odyssey/shieldscan-engine/internal/tools"
+	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
+)
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
+
+func fixturePath(t *testing.T, name string) string {
+	t.Helper()
+	return filepath.Join("testdata", name)
+}
+
+func noopLog() zerolog.Logger {
+	return zerolog.New(nil).Level(zerolog.Disabled)
+}
+
+func testConfig() Config { return Config{BinaryPath: "/bin/echo"} }
+
+// ─── Construction (3) ────────────────────────────────────────────────
+
+func TestNewDepCheckRunner_IdentityFields(t *testing.T) {
+	r := NewDepCheckRunner(testConfig(), noopLog())
+	assert.Equal(t, "depcheck", r.Name())
+	assert.Equal(t, "sca", r.Category())
+}
+
+// TestNewDepCheckRunner_DefaultsApplied pins the load-bearing defaults.
+// FIRST USE of NativeRunner.OutputFile=true (ADR-023). Regression-
+// guarded: ParseOutputFile != nil; ParseOutput == nil; placeholder
+// is "{{outputFile}}".
+func TestNewDepCheckRunner_DefaultsApplied(t *testing.T) {
+	r := NewDepCheckRunner(testConfig(), noopLog())
+	assert.Equal(t, 15*time.Minute, r.Timeout)
+	assert.Equal(t, 50*1024*1024, r.MaxStdoutBytes)
+	assert.False(t, r.ExitCodeLenient,
+		"naturally-clean: Dep-Check exits 0 by default; --failOnCVSS deliberately omitted")
+	assert.True(t, r.OutputFile, "Dep-Check writes findings to file via --out")
+	assert.Equal(t, "{{outputFile}}", r.OutputFilePlaceholder,
+		"placeholder MUST match the BuildArgs --out value for substitution")
+	assert.NotNil(t, r.ParseOutputFile,
+		"file-output mode requires ParseOutputFile (ADR-023)")
+	assert.Nil(t, r.ParseOutput,
+		"file-output mode does NOT use ParseOutput; both fields set is a code smell")
+}
+
+// TestNewDepCheckRunner_NoEnvWarningsSuppression pins anti-pattern guard:
+// Dep-Check is JVM-based, NOT pipx-installed Python. PYTHONWARNINGS=ignore
+// would be misleading scaffolding here.
+func TestNewDepCheckRunner_NoEnvWarningsSuppression(t *testing.T) {
+	r := NewDepCheckRunner(testConfig(), noopLog())
+	assert.Nil(t, r.Env,
+		"Dep-Check is JVM-based; PYTHONWARNINGS=ignore would be misleading")
+}
+
+// ─── BuildArgs (3) ───────────────────────────────────────────────────
+
+func TestBuildArgs_HasAllRequiredFlags(t *testing.T) {
+	args := buildArgs(testConfig())(
+		tools.Target{SourcePath: "/src/repo"},
+		tools.ScanConfig{},
+	)
+	joined := strings.Join(args, " ")
+	for _, want := range []string{
+		"--scan", "/src/repo",
+		"--format", "JSON",
+		"--out", "{{outputFile}}",
+	} {
+		assert.Contains(t, joined, want, "missing required flag/arg %q", want)
+	}
+}
+
+// TestBuildArgs_NoFailOnCVSSFlag is the naturally-clean regression
+// guard. If --failOnCVSS slips in, Dep-Check would exit non-zero on
+// findings → ExitCodeLenient=false would surface as Run error.
+func TestBuildArgs_NoFailOnCVSSFlag(t *testing.T) {
+	args := buildArgs(testConfig())(
+		tools.Target{SourcePath: "/src/repo"},
+		tools.ScanConfig{},
+	)
+	assert.NotContains(t, strings.Join(args, " "), "--failOnCVSS",
+		"naturally-clean invariant: --failOnCVSS MUST NOT be present")
+}
+
+// TestBuildArgs_OutputPlaceholderPresent regression-guards the
+// placeholder substitution contract: BuildArgs MUST include
+// "{{outputFile}}" exactly as NativeRunner expects to substitute.
+func TestBuildArgs_OutputPlaceholderPresent(t *testing.T) {
+	args := buildArgs(testConfig())(
+		tools.Target{SourcePath: "/src/repo"},
+		tools.ScanConfig{},
+	)
+	found := false
+	for _, a := range args {
+		if a == "{{outputFile}}" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found,
+		"BuildArgs MUST include literal '{{outputFile}}' for NativeRunner substitution")
+}
+
+// ─── ParseOutputFile (5) ─────────────────────────────────────────────
+
+func TestParseOutputFile_BasicSingleCVE(t *testing.T) {
+	findings, err := parseOutputFile(noopLog())(fixturePath(t, "depcheck_basic.json"))
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+
+	f := findings[0]
+	assert.Equal(t, "CVE-2021-44228", f.FindingType)
+	assert.Equal(t, "CVE-2021-44228", f.Title)
+	assert.Equal(t, "critical", f.Severity)
+	assert.Equal(t, "CWE-502", f.CWEID, "first CWE only (consistent with Nuclei)")
+	assert.InDelta(t, 10.0, f.CVSSScore, 0.001)
+	assert.Equal(t, "repo/lib/log4j-core-2.14.0.jar", f.CodeFile)
+	assert.Contains(t, f.Description, "log4j-core-2.14.0.jar",
+		"fileName folded into Description")
+}
+
+func TestParseOutputFile_MultiCVEAcrossDeps(t *testing.T) {
+	findings, err := parseOutputFile(noopLog())(fixturePath(t, "depcheck_multi_cve.json"))
+	require.NoError(t, err)
+	require.Len(t, findings, 7, "3 deps × {3, 2, 2} CVE counts = 7 findings")
+
+	// Severity distribution: 3 critical + 1 high + 1 medium + 1 low
+	// + others; verify spread.
+	sev := map[string]int{}
+	for _, f := range findings {
+		sev[f.Severity]++
+	}
+	assert.Equal(t, 3, sev["critical"], "log4j critical+critical + spring critical")
+	assert.GreaterOrEqual(t, sev["high"], 1)
+	assert.GreaterOrEqual(t, sev["medium"], 1)
+	assert.GreaterOrEqual(t, sev["low"], 1)
+
+	// Per-CVE granularity: log4j-core appears 3 times (3 CVEs).
+	log4jCount := 0
+	for _, f := range findings {
+		if strings.Contains(f.CodeFile, "log4j-core") {
+			log4jCount++
+		}
+	}
+	assert.Equal(t, 3, log4jCount, "log4j-core dep should produce 3 findings (one per CVE)")
+}
+
+func TestParseOutputFile_Empty(t *testing.T) {
+	findings, err := parseOutputFile(noopLog())(fixturePath(t, "depcheck_empty.json"))
+	require.NoError(t, err)
+	assert.Empty(t, findings)
+}
+
+// TestParseOutputFile_MalformedJSONFatal: top-level malformed JSON IS
+// fatal (consistent with Semgrep + Gitleaks + SSLyze postures).
+func TestParseOutputFile_MalformedJSONFatal(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "bad.json")
+	require.NoError(t, os.WriteFile(tmp, []byte(`{"dependencies": [MALFORMED]`), 0o644))
+	_, err := parseOutputFile(noopLog())(tmp)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "depcheck")
+}
+
+// TestParseOutputFile_MissingRequiredFieldsSkipped: per-dep missing
+// filePath drops the whole dep; per-CVE missing name skips that CVE.
+// Fixture has 4 deps; expect 2 findings (one from "good.jar", one
+// from "partial.jar"'s valid CVE).
+func TestParseOutputFile_MissingRequiredFieldsSkipped(t *testing.T) {
+	findings, err := parseOutputFile(noopLog())(fixturePath(t, "depcheck_missing_fields.json"))
+	require.NoError(t, err)
+	require.Len(t, findings, 2)
+
+	ids := []string{findings[0].FindingType, findings[1].FindingType}
+	assert.Contains(t, ids, "CVE-2020-1234")
+	assert.Contains(t, ids, "CVE-2021-5678")
+}
+
+// ─── Severity mapping (1) ────────────────────────────────────────────
+
+func TestMapSeverity_AllLevels(t *testing.T) {
+	cases := map[string]string{
+		"Critical":      "critical",
+		"CRITICAL":      "critical",
+		"High":          "high",
+		"Medium":        "medium",
+		"Moderate":      "medium", // also observed in NVD
+		"Low":           "low",
+		"Info":          "info",
+		"Informational": "info",
+		"":              "info",
+		"unknown":       "info",
+	}
+	for in, want := range cases {
+		assert.Equal(t, want, mapSeverity(in), "severity %q mapping", in)
+	}
+}

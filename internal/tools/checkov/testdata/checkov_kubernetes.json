@@ -1,0 +1,61 @@
+{
+  "check_type": "kubernetes",
+  "results": {
+    "failed_checks": [
+      {
+        "check_id": "CKV_K8S_8",
+        "bc_check_id": "BC_K8S_5",
+        "check_name": "Liveness Probe Should be Configured",
+        "file_path": "/deployment.yaml",
+        "file_line_range": [
+          1,
+          25
+        ],
+        "resource": "Deployment.default.example-app",
+        "severity": null,
+        "code_block": [
+          [
+            1,
+            "apiVersion: apps/v1\n"
+          ],
+          [
+            2,
+            "kind: Deployment\n"
+          ]
+        ],
+        "guideline": "https://docs.example.com/k8s/livenessprobe"
+      },
+      {
+        "check_id": "CKV_K8S_22",
+        "bc_check_id": "BC_K8S_29",
+        "check_name": "Use read-only filesystem for containers where possible",
+        "file_path": "/deployment.yaml",
+        "file_line_range": [
+          10,
+          20
+        ],
+        "resource": "Deployment.default.example-app",
+        "severity": null,
+        "code_block": [
+          [
+            10,
+            "  containers:\n"
+          ],
+          [
+            11,
+            "  - name: app\n"
+          ]
+        ],
+        "guideline": "https://docs.example.com/k8s/readonly-fs"
+      }
+    ]
+  },
+  "summary": {
+    "passed": 5,
+    "failed": 2,
+    "skipped": 0,
+    "parsing_errors": 0,
+    "resource_count": 1,
+    "checkov_version": "3.2.340"
+  }
+}

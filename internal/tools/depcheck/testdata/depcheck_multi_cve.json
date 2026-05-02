@@ -1,0 +1,32 @@
+{
+  "reportSchema": "1.1",
+  "scanInfo": {"engineVersion": "9.2.0"},
+  "projectInfo": {"name": "example-project", "reportDate": "2026-01-15T12:00:00.000000Z"},
+  "dependencies": [
+    {
+      "fileName": "log4j-core-2.14.0.jar",
+      "filePath": "repo/lib/log4j-core-2.14.0.jar",
+      "vulnerabilities": [
+        {"name": "CVE-2021-44228", "severity": "Critical", "cvssv3": {"baseScore": 10.0}, "cwes": ["CWE-502"], "description": "Log4Shell"},
+        {"name": "CVE-2021-45046", "severity": "Critical", "cvssv3": {"baseScore": 9.0}, "cwes": ["CWE-502"], "description": "Log4Shell follow-up"},
+        {"name": "CVE-2021-45105", "severity": "Medium", "cvssv3": {"baseScore": 5.9}, "cwes": ["CWE-674"], "description": "Recursive lookup DoS"}
+      ]
+    },
+    {
+      "fileName": "spring-core-5.2.0.jar",
+      "filePath": "repo/lib/spring-core-5.2.0.jar",
+      "vulnerabilities": [
+        {"name": "CVE-2022-22965", "severity": "Critical", "cvssv3": {"baseScore": 9.8}, "cwes": ["CWE-94"], "description": "Spring4Shell RCE"},
+        {"name": "CVE-2020-5421", "severity": "Medium", "cvssv3": {"baseScore": 6.5}, "cwes": ["CWE-352"], "description": "CSRF protection bypass"}
+      ]
+    },
+    {
+      "fileName": "guava-29.0-jre.jar",
+      "filePath": "repo/lib/guava-29.0-jre.jar",
+      "vulnerabilities": [
+        {"name": "CVE-2020-8908", "severity": "Low", "cvssv3": {"baseScore": 3.3}, "cwes": ["CWE-732"], "description": "Temp dir info disclosure"},
+        {"name": "CVE-2023-2976", "severity": "High", "cvssv3": {"baseScore": 7.1}, "cwes": ["CWE-552"], "description": "Files.createTempDir TOCTOU"}
+      ]
+    }
+  ]
+}

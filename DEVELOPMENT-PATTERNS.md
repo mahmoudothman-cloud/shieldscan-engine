@@ -178,4 +178,82 @@ M6.2, M6.5 instances above.
 
 ---
 
-*Last updated: 2026-05-02 at Task 6.5.*
+## 3. PYTHONWARNINGS=ignore Env for pipx-installed Python tool runners
+
+**Promoted at Task 6.7** with 3 instances (M6.2 Semgrep, M6.4 SSLyze,
+M6.7 Checkov). Every native-tool runner backed by a pipx-installed
+Python CLI sets `Env: []string{"PYTHONWARNINGS=ignore"}` regardless of
+whether warnings are currently observed.
+
+### Shape
+
+In the runner factory:
+
+```go
+return &tools.NativeRunner{
+    ToolName:    "...",
+    // ... other fields ...
+    Env:         []string{"PYTHONWARNINGS=ignore"},
+}
+```
+
+NativeRunner appends `Env` to inherited environment (per `cmd.Environ()`
+in 5.2's `native.go`), so PATH/HOME/etc. survive. The
+`PYTHONWARNINGS=ignore` setting suppresses Python `UserWarning` /
+`DeprecationWarning` lines on stderr.
+
+### Why defense-in-depth (not just observed-warning fix)
+
+Semgrep 1.95.0 on Python 3.12 emits `pkg_resources is deprecated`
+UserWarning at every invocation (verified at 6.2 pre-prep). SSLyze
+6.1.0 + Checkov 3.2.340 emit no observed warnings — but Python's
+deprecation cycle is continuous, and the `Env` setting is forward-
+compat at zero ongoing cost. Future versions of any pipx-installed
+tool may begin emitting deprecation noise; the pattern preempts the
+cleanup work.
+
+The cost-asymmetry mirrors the reasoning that justified ADR-023's
+NativeRunner OutputFile mode at 1st instance: when the cost of NOT
+applying a small abstraction (debugging mid-incident, triaging
+operationally noisy stderr) exceeds the cost of applying it
+preemptively (~3 lines per runner factory), preempt.
+
+### Why not a global engine-wide PYTHONWARNINGS setting
+
+NativeRunner's `Env` is per-runner; non-Python tools (Nuclei Go binary,
+Gitleaks Go binary, Dep-Check JVM) don't need it. Per-runner Env keeps
+the surface narrow.
+
+### Instances
+
+- `internal/tools/semgrep/semgrep.go` (M6.2; observed warning suppression)
+- `internal/tools/sslyze/sslyze.go` (M6.4; defense-in-depth)
+- `internal/tools/checkov/checkov.go` (M6.7; defense-in-depth)
+
+### When to use
+
+Every native-tool runner whose binary is a pipx-installed Python tool:
+sslyze, semgrep, wapiti, checkov, mobsf-cli, etc.
+
+### When NOT to use
+
+- **Go binaries:** Nuclei, Gitleaks (no Python runtime).
+- **JVM tools:** Dep-Check (Java warnings via different mechanism).
+- **Native binaries:** subfinder, httpx (no language runtime warnings).
+
+### Trigger to revisit
+
+A future Python tool emits warnings via a channel that ignores
+`PYTHONWARNINGS` (e.g., direct stderr writes from C extension). At
+that point, evaluate whether to extend pattern (e.g., wrap subprocess
+output stripping) or accept the noise.
+
+Pattern promoted at M6.7 per project's third-instance threshold
+convention (see preamble); cross-references to ADR-023 (asymmetric-
+cost reasoning that justifies threshold-overrides for the ADR-023
+case) and to engine DRIFT-LOG entries at M6.2, M6.4, M6.7 for the
+per-instance context.
+
+---
+
+*Last updated: 2026-05-02 at Task 6.7.*
