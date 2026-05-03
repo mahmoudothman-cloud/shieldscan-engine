@@ -8,6 +8,91 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-05-03 — SPEC §7.3 Phase 4 (cross-repo verification — task closed)
+
+**Phase 4 closes M6-close-followup task.** Cross-repo
+verification confirms:
+
+1. **Engine omitempty serialization end-to-end.** RawFinding with
+   nil/empty new fields serializes to JSON without the 4 new
+   field keys (verified via `TestRawFinding_NewFieldsOmitemptyWhenAbsent`
+   in `internal/events/events_test.go`).
+
+2. **Reductions counter post-§7.3 status confirmed.** 6 tools
+   populate new fields (Nuclei, Semgrep, Gitleaks, Dep-Check,
+   Checkov, Wapiti); 3 tools intentionally untouched (SSLyze,
+   Nikto, CORStest per ADR-024 §3.4 — `grep` confirms zero
+   References/Tags/CVSSVector/AdditionalCWEs references in their
+   parsers). 8/9 tools (89%) still have reductions; ~26 folds
+   remaining (down from ~38). Trigger remains fired per ADR-024
+   §3.5 for future incremental schema extensions.
+
+3. **Alembic migration roundtrip reconfirmed.** Forward + backward
+   + forward at Phase 4 close; head at `49e83eb3587c`.
+
+4. **SQLAlchemy model tests still green.** 20/20 in
+   `tests/models/test_findings.py`.
+
+5. **Engine full repo green.** All 19 packages pass `go test
+   -race -count=1 ./...`; `golangci-lint` 0 issues; `go vet`
+   clean; `gofmt -l internal/ cmd/` clean.
+
+**M6-close-followup task closed.** Cross-repo commit chain:
+
+| Phase | Repo | Commit | Description |
+|-------|------|--------|-------------|
+| 1a | shieldscan-docs | `59b0f3d` | ADR-024 + SPEC §7.3 + design doc + DRIFT entries |
+| 1b | shieldscan-docs | `8f90531` | ADR-024 verbatim alignment fixup (4 sections) |
+| 2 | shieldscan-api | `938ae80` | SQLAlchemy 4 columns + Alembic `49e83eb3587c` |
+| 3 | shieldscan-engine | `8fbd085` | RawFinding 4 fields + 6-tool retrofit + CVSS mapping + jsonx 7th helper |
+| 4 | shieldscan-engine | (this DRIFT entry) | Cross-repo verification close |
+
+**M6-close-followup outcomes:**
+
+- 4 fields land: References, Tags, CVSSVector, AdditionalCWEs.
+- ~12 fold rescues across 6 tools (~32% of pre-§7.3 reductions).
+- ADR-024 lands as M6's 3rd ADR (after ADR-022 recon-as-helpers
+  + ADR-023 NativeRunner OutputFile).
+- jsonx promoted to 7 helpers (`FilterEngineCategoryTags` 7th
+  helper added during Phase 3; clean 3-instance promotion
+  threshold met within the Phase).
+- 2 new tracked patterns at 1st instance:
+  - Multi-repo schema-coordination commits (Phase 1+2+3 strict
+    order)
+  - Optional-field additive migrations with backward-compat
+    (Alembic + Go omitempty)
+- Asymmetric-cost meta-principle 3rd invocation in project
+  corpus (after ADR-022, ADR-023).
+- Phase 0 verification pattern reinforced (3rd instance after
+  M6.6 Nikto stdout, M6.3 httpx stdin).
+
+**Load-bearing forward-pins for M9:**
+
+- §8.2 cross-layer correlation algorithm: must extend
+  `cwe_exact` + `cwe_parent` checks to consider intersection with
+  `additional_cwes` (per ADR-024 §3.1.4 + Phase 3 DRIFT entry 5).
+- §8.3 exploitability_multiplier derivation: CVSSVector reserved
+  for future direct AV/network parsing (replacing separate
+  publicly-accessible detection logic; per ADR-024 §3.1.3).
+
+**Triggers remaining open:**
+
+- Trigger remains fired (8/9 tools still have reductions);
+  future incremental schema extensions may address tool-specific
+  metadata when M7+ data informs which patterns warrant
+  first-class fields (per ADR-024 §3.5 + trigger #3).
+- Findings-ingest task (M4-completion or M9-prerequisite) lands
+  Pydantic schema + CompletionsConsumer extension + ingest tests
+  per ADR-024 trigger #6. Schema columns from Phase 2 are
+  already in place.
+
+**Next directions (per Mahmoud's choice):**
+
+- M7 Docker service tools (landscape pass needed)
+- OPS milestone (`provision-worker.sh` consolidation)
+- Findings-ingest task (closes ADR-024 §3.2 columns-ready
+  posture)
+
 ### 2026-05-03 — M6-close-followup Phase 3: SPEC §7.3 schema extension — Engine struct + 6-tool retrofit
 
 **Phase 3 of M6-close-followup task.** Engine commit follows Phase 1 (shieldscan-docs ADR-024 + SPEC §7.3 update at `59b0f3d` + `8f90531`) and Phase 2 (shieldscan-api SQLAlchemy model + Alembic migration at `938ae80`). Cross-repo coordination per ADR-024 strict-ordering rule (Docs → Python → Engine).
