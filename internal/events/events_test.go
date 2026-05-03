@@ -24,6 +24,7 @@ func TestEvents_MaxFindingsPerEvent(t *testing.T) {
 func TestEvents_RecognizedEventTypes(t *testing.T) {
 	progress := []EventType{
 		EventJobStarted, EventReconStarted, EventSubdomainsDiscovered,
+		EventLivenessProbed, EventReconCompleted, // M6.3 additions
 		EventJobProgress, EventFindingDiscovered, EventJobCanceled, EventJobFailed,
 	}
 	completion := []EventType{EventJobCompleted, EventPartialFindings}

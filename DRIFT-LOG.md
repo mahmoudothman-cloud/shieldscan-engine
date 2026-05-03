@@ -291,6 +291,270 @@ All three regression-guarded engine-side: `TestBuildArgs_NoTextFormat` (Nikto), 
 
 ---
 
+### 2026-05-03 — Task 6.3: Subfinder + httpx recon helpers (ADR-022)
+
+**Files shipped (single atomic engine commit):**
+- NEW `internal/tools/recon/recon.go` (RunRecon orchestrator + ReconResult + LiveHost + publishIfNotNil + resolveBinary)
+- NEW `internal/tools/recon/subfinder.go` (runSubfinder + parseSubfinderOutput)
+- NEW `internal/tools/recon/httpx.go` (runHttpx + parseHttpxOutput; stdin pipe per empirical re-eval)
+- NEW `internal/tools/recon/{recon,subfinder,httpx}_test.go` (16 tests with goleak TestMain)
+- NEW 8 testdata fixtures + README
+- UPDATE `internal/events/events.go` (+EventLivenessProbed, +EventReconCompleted)
+- UPDATE `internal/events/events_test.go` (regression-guard new constants)
+
+**Companion docs commit (`shieldscan-docs/`)** lands ADR-022 + 2 TOOL-ARCH patches.
+
+**16 net-new tests at 6.3 close** (5 subfinder + 5 httpx + 6 recon orchestrator). Engine total: **270 tests** across 16 packages. Race-clean, vet-clean, golangci-lint v2 reports 0 issues.
+
+**Architecturally distinct M6 task:** recon does NOT fit ToolRunner contract. ADR-022 codifies the decision; recon ships as helpers in `internal/tools/recon/` (first non-tool-runner package under `internal/tools/`).
+
+### 2026-05-03 — Task 6.3: ADR-022 lands (M6's 2nd ADR after ADR-023)
+
+**Pin (load-bearing).** ADR-022 (recon-as-pre-scan-helpers) lands at `shieldscan-docs/SPECIFICATION.md §13`. Codifies the architectural decision that recon tools (Subfinder + httpx) do NOT fit `tools.ToolRunner` because their output is target-discovery data, not `events.RawFinding`.
+
+**M6's 2nd ADR after ADR-023** (M6.7 NativeRunner OutputFile mode). Both ADRs invoke the same asymmetric-cost meta-principle: architectural commitments are made when the alternative is operationally worse, not when a generic threshold is met.
+
+**Cross-reference between ADRs preserved** in ADR-022's text (per H.NEW.9 refinement). Future ADRs may invoke similar cross-referencing pattern.
+
+### 2026-05-03 — Task 6.3: internal/tools/recon/ package (FIRST non-tool-runner package)
+
+**Pin.** `internal/tools/recon/` is the first package under `internal/tools/` that does NOT contain a ToolRunner factory. Sibling to:
+- `internal/tools/jsonx/` (helpers — no NewXRunner)
+- Per-tool ToolRunner packages (`nuclei/`, `semgrep/`, `gitleaks/`, etc.) — each with `NewXRunner`
+
+The recon package exports `RunRecon` (orchestrator) + `ReconResult` + `LiveHost` types. No `NewReconRunner` factory; no NativeRunner construction; no Registry registration.
+
+**Layout:**
+- `recon.go` — RunRecon orchestrator + types + helpers (publishIfNotNil, resolveBinary)
+- `subfinder.go` — runSubfinder + parseSubfinderOutput
+- `httpx.go` — runHttpx + parseHttpxOutput
+
+**Per-tool files split** (subfinder.go + httpx.go) for parser-ownership clarity, symmetric with how 6.7 split parse.go from severity.go.
+
+### 2026-05-03 — Task 6.3: RunRecon signature + ReconResult composition + LiveHost 6-field shape
+
+**Pin.** `RunRecon` signature:
+
+```go
+func RunRecon(
+    ctx context.Context,
+    domain string,
+    limit int,
+    publisher *redis.ProgressPublisher,
+    log zerolog.Logger,
+) (*ReconResult, error)
+```
+
+Two extensions beyond plan §6.3 literal:
+1. **Logger arg added** (per scope §16). Plan literal omits but every other 6.x parser takes one — symmetric for fail-soft logging within RunRecon.
+2. **`limit <= 0` defensive default → `defaultLimit = 100`** (matches TOOL-ARCH §8.1 max-100-subdomains-per-scan).
+
+**ReconResult shape** matches plan §6.3 literal: `{Subdomains []string, LiveHosts []LiveHost}`.
+
+### 2026-05-03 — Task 6.3: LiveHost extended beyond plan literal (3 → 6 fields per H.NEW.1)
+
+**Pin.** Plan §6.3 LiveHost has 3 fields (`URL, StatusCode, Tech`). 6.3 implementation extends to 6 fields:
+
+| Field | Source (httpx JSONL) |
+|---|---|
+| `URL` | `url` |
+| `StatusCode` | `status_code` |
+| `Title` | `title` |
+| `Tech` | `tech` |
+| `Webserver` | `webserver` |
+| `ContentType` | `content_type` |
+
+**Why extend.** httpx emits ~25 fields per host; M8's downstream consumers may benefit from more than just URL/status/tech for target-list construction + tool-selection routing + UI display. The 6-field shape is conservative — it covers M8's likely needs without forcing a future-iteration refactor.
+
+**Trigger to extend further:** M8 implementation surfaces a need for a field currently dropped (e.g., latency, IP for network-policy scoping). Extend additively; existing M8 callers remain compatible.
+
+### 2026-05-03 — Task 6.3: Direct exec.CommandContext (NOT NativeRunner) per H.NEW.5
+
+**Pin.** `runSubfinder` and `runHttpx` invoke `exec.CommandContext` directly. They do NOT use `tools.NativeRunner`.
+
+**Architectural consistency with ADR-022:** NativeRunner enrichment loop (ToolName / EngineCategory / DiscoveredAt / Fingerprint) is irrelevant when the output isn't `[]events.RawFinding`. Forcing the abstraction would add complexity for no value — and would suggest recon belongs in the ToolRunner ecosystem when it explicitly doesn't (per ADR-022).
+
+**Subprocess management uses standard ADR-021 patterns:**
+- `context.WithTimeout(ctx, 60s)` for subfinder; `120s` for httpx
+- Caller-cancel ctx error takes precedence over subprocess error (`if ctxErr := ctx.Err(); ctxErr != nil` check)
+- `exec.CommandContext` ensures ctx cancel SIGKILLs the subprocess
+
+### 2026-05-03 — Task 6.3: httpx input strategy — stdin pipe (empirical re-eval reverses lean)
+
+**Pin.** Per H.NEW.6 lean was inline-tempfile. Empirical re-eval at 6.3 implementation REVERSES the lean: **stdin pipe works cleanly**.
+
+**Empirical verification:**
+
+```bash
+{ echo "https://example.com"
+  echo "https://www.cloudflare.com"
+  echo "https://github.com"
+} | httpx -silent -json -status-code -title -tech-detect -web-server
+```
+
+→ 3 hosts piped via stdin, 3 valid JSONL records on stdout. No corruption, no mixing issues like Wapiti's `-o /dev/stdout` bug at M6.6.
+
+**Implementation choice:** `cmd.Stdin = strings.NewReader(strings.Join(subdomains, "\n") + "\n")` in `runHttpx`. Cleaner than inline-tempfile (no tempfile lifecycle to manage; no `os.Remove` defer; no error-path leakage).
+
+**Pattern instance count recalibrated:**
+- Inline-tempfile workaround: stays at **1 instance** (CORStest at 6.6 only)
+- InputFile framework extension trigger: **still 1st-instance need;** unchanged
+
+**Empirical re-eval discipline pattern (track-only):**
+- 6.6 Nikto stdout XML (confirmed empirically — clean)
+- 6.3 httpx stdin (confirmed empirically — clean; reverses lean)
+- 2 instances of "implementation overrides pre-prep lean based on empirical data"; track for 3rd-instance promotion to DEVELOPMENT-PATTERNS
+
+### 2026-05-03 — Task 6.3: Failure-tolerant orchestration (errors NEVER propagate)
+
+**Pin.** Per plan §6.3 literal + scope §E table: subfinder/httpx failures NEVER propagate to RunRecon's caller. Partial data is the useful state for M8's routing decisions.
+
+| Scenario | RunRecon returns |
+|---|---|
+| Happy (both succeed) | `{Subdomains: [...N], LiveHosts: [...M]}, nil` |
+| Subfinder fails | `{}, nil` (empty; no error) |
+| httpx fails | `{Subdomains: [...N]}, nil` (subdomains preserved; no error) |
+| Both fail | `{}, nil` (empty; no error — subfinder fails first; httpx not invoked) |
+| 0 subdomains | `{Subdomains: []}, nil` (httpx skipped) |
+
+**Recon-completed event always fires** with `status` field signaling outcome (`ok` / `subfinder_failed` / `httpx_failed` / `no_subdomains`). M8 can react to status in addition to data presence.
+
+**4 failure-tolerance tests** in `recon_test.go` cover each scenario explicitly.
+
+### 2026-05-03 — Task 6.3: Publisher nil-safety (publishIfNotNil helper)
+
+**Pin.** `RunRecon` accepts `publisher *redis.ProgressPublisher` which MAY be nil. Tiny package-private helper:
+
+```go
+func publishIfNotNil(ctx context.Context, publisher *redis.ProgressPublisher, eventType events.EventType, payload events.ProgressEvent) {
+    if publisher == nil {
+        return
+    }
+    _, _ = publisher.Publish(ctx, eventType, payload)
+}
+```
+
+Tests pass `nil` (no Redis client needed for parser tests + orchestrator tests). Production callers always supply a real publisher.
+
+**Publish errors are intentionally swallowed** — recon should not fail because progress publishing failed. Per ADR-021 fail-soft posture; matches 5.6 Heartbeat's WARN-and-continue behavior.
+
+### 2026-05-03 — Task 6.3: Two new event types (EventLivenessProbed + EventReconCompleted)
+
+**Pin.** `internal/events/events.go` adds two `EventType` constants:
+
+```go
+EventLivenessProbed EventType = "liveness_probed"  // emitted by recon.RunRecon after httpx phase
+EventReconCompleted EventType = "recon_completed"  // emitted by recon.RunRecon at end of pipeline
+```
+
+Existing event types reused:
+- `EventReconStarted` (defined at 5.1; emitted at RunRecon entry)
+- `EventSubdomainsDiscovered` (defined at 5.1; emitted after subfinder)
+
+**4-event recon progress sequence** (in order): `recon_started` → `subdomains_discovered` → `liveness_probed` → `recon_completed`.
+
+**Cross-repo verification completed pre-implementation:** `shieldscan-api/src/app/services/completions_consumer.py:167` uses string-based dispatch with default skip-unknown behavior (`if event.get("event_type") != "job_completed":`). New event types accepted without rejection. **No blocker.**
+
+`internal/events/events_test.go` regression-guard updated to include both new constants in the EventType verification table.
+
+### 2026-05-03 — Task 6.3: TOOL-ARCH §6.3 Subfinder JSONL invocation patch
+
+**Pin.** Companion docs commit updates TOOL-ARCH §6.3 line 545:
+- BEFORE: `subfinder -d example.com -silent -o - -max-time 60`
+- AFTER: `subfinder -d example.com -oJ -silent -max-time 60`
+
+**Why.** `-o -` produces text output (one hostname per line, no metadata). `-oJ` produces JSONL with `{host, input, source}` per record, more parser-stable across versions and surfaces the source field for operational diagnostics (debugging which intel source contributed which subdomain).
+
+### 2026-05-03 — Task 6.3: TOOL-ARCH §6.4 httpx flag-list extension patch
+
+**Pin.** Companion docs commit updates TOOL-ARCH §6.4 line 574 invocation:
+- BEFORE: `httpx -silent -json -status-code -tech-detect`
+- AFTER: `httpx -silent -json -status-code -title -tech-detect -web-server`
+
+**Why.** Adds `-title` and `-web-server` flags to populate `LiveHost.Title` and `LiveHost.Webserver` (per H.NEW.1 6-field LiveHost extension). Without these flags, httpx omits the corresponding fields from output, leaving 2 of 6 LiveHost fields empty.
+
+### 2026-05-03 — Task 6.3: 6.8 forward-pin (non-registration code comment)
+
+**Pin (forward-look).** When 6.8 wiring lands, `cmd/worker/run.go` will populate `worker.NewRegistry` with the 9 ToolRunners (Nuclei + Semgrep + Gitleaks + SSLyze + Dep-Check + Checkov + Nikto + Wapiti + CORStest). Subfinder and httpx will be ABSENT.
+
+**Required code comment text** (per H.11 refinement):
+
+```go
+// Note: Subfinder and httpx are NOT registered with the Registry.
+// Per ADR-022 (M6.3), they are pre-scan helpers (recon.RunRecon)
+// invoked by M8's Recon-First Pipeline before per-target scan jobs
+// are dispatched. They produce target-discovery data
+// (recon.ReconResult), not events.RawFinding, so the ToolRunner
+// contract doesn't apply.
+//
+// If you're adding a new tool: check whether your tool produces
+// events.RawFinding (vulnerability findings) or some other shape
+// (target lists, wordlists, configuration data, etc.). If
+// findings → register here. If non-finding output → ship as a
+// helper package under internal/tools/<name>/ following the
+// recon precedent + ADR-022.
+```
+
+DRIFT entry pinned so 6.8's author finds the canonical text and includes it verbatim.
+
+### 2026-05-03 — Task 6.3: Subfinder passive-only default (no -all flag)
+
+**Pin.** `runSubfinder` deliberately omits the `-all` flag. Conservative default — `-all` enables active enumeration across all sources (including ones that may flag aggressive enumeration as DoS).
+
+**Trigger to revisit:** customer demand for active enumeration OR M9 AI pipeline value-add from the additional discovery data. At that point, add a `ScanConfig.SubfinderActive bool` opt-in.
+
+### 2026-05-03 — Task 6.3: ProjectDiscovery tool family consistency
+
+**Pin (positive signal).** Subfinder + httpx are the same tool family as Nuclei (M6.1). All three:
+- Install via `go install github.com/projectdiscovery/<tool>@<version>` (no apt package; no pipx)
+- Path: `~/go/bin/<tool>` (Go install convention)
+- CLI patterns: `-silent` to suppress banner; JSONL output via `-j` / `-oJ` / `-json`
+- Naturally-clean exit codes (no flag needed)
+
+**Pattern instance count update (positive):** PYTHONWARNINGS=ignore Env pattern does NOT apply (Go binaries, not Python tools). Env=nil for both Subfinder + httpx in their direct exec.CommandContext invocation paths. SHIELDSCAN_<TOOL>_BINARY pattern (DEVELOPMENT-PATTERNS Pattern 2): 11th + 12th instances — reinforces Pattern 2 without triggering anything new.
+
+### 2026-05-03 — Task 6.3: Plan §6.3 thinness divergence + LiveHost extension rationale
+
+**Pin.** Plan §6.3 (lines 1817-1869) is substantively closer to scope intent than prior 6.x plan literals — it provides RunRecon signature, ReconResult composition, and a code skeleton. **6.3 is the most plan-faithful task in M6** (smaller divergence than 6.1/6.2/6.5/6.4/6.7/6.6).
+
+Material divergences:
+1. **LiveHost extended 3 → 6 fields** (per H.NEW.1; documented entry 4 above). Conservative extension; covers M8's likely needs.
+2. **Logger arg added to RunRecon** (per scope §16; documented entry 3 above). Symmetric with all other 6.x parser closures; fail-soft logging discipline.
+3. **Defensive `defaultLimit=100`** when `limit <= 0` (matches TOOL-ARCH §8.1).
+
+Otherwise: scope substantially matches plan literal. Honoring the spirit, expanding modestly.
+
+### 2026-05-03 — Task 6.3: pattern landscape impact (recon contributes to ADR-022 only)
+
+**Pin.** Recon doesn't add to most pattern instance counts (recon is helpers, not tools):
+- Pattern 1 (Trigger-based deferral): unchanged
+- Pattern 2 (`SHIELDSCAN_<TOOL>_BINARY`): 11→12 instances (Subfinder + httpx; reinforces)
+- Pattern 3 (`PYTHONWARNINGS=ignore`): unchanged (recon tools are Go binaries; not pipx-Python)
+- Pattern 4 (Constants-only field mapping): unchanged (recon doesn't produce findings)
+- ADR-023 (NativeRunner OutputFile mode): unchanged (recon uses direct exec; not NativeRunner)
+- jsonx helpers: 8→10 instances (Subfinder + httpx parsers use ExtractString / ExtractStringSlice / ExtractFloat)
+- Inline-tempfile workaround: stays at 1 (CORStest only — empirical re-eval at httpx reversed to stdin)
+- Naturally-clean exit: unchanged at 6 (recon helpers don't strictly use exit-code vocabulary; manage own subprocess)
+
+**ADR-022 is the architectural artifact** that legitimizes the recon-as-helpers commitment. It's documentation tier (cross-repo), not pattern tier (engine-side). DEVELOPMENT-PATTERNS.md unchanged at 6.3.
+
+**New tracked-pattern candidate at 6.3:** "empirical re-eval discipline" (2nd instance — 6.6 Nikto stdout + 6.3 httpx stdin). Both reversed pre-prep leans based on concrete data. Track for 3rd-instance promotion. Future task authors: grep for "empirical re-eval" in DRIFT-LOG.
+
+### 2026-05-03 — Task 6.3: M8 forward-pin (speculative invocation pattern)
+
+**Pin (forward-look).** ADR-022's "Speculative M8 invocation pattern" section warns explicitly that the example call site is best-effort prediction, NOT a binding contract. M8 implementation may refine the API.
+
+**The recon-as-helpers principle holds regardless of how M8's call site evolves.** ReconResult + LiveHost types are stable; how M8 invokes RunRecon (or wraps it in a coordinator type, batches across scan-job batches, applies filtering layers, etc.) is M8's design choice.
+
+**M8's binding contract from M6.3:**
+- `recon.ReconResult` shape (Subdomains + LiveHosts)
+- `recon.LiveHost` shape (6 fields)
+- `recon.RunRecon` signature (ctx, domain, limit, publisher, log → ReconResult, err)
+- 4-event progress sequence (recon_started → subdomains_discovered → liveness_probed → recon_completed) with `status` field on terminal event
+- Failure-tolerant semantics (errors NEVER propagate; partial data canonical)
+
+---
+
 ### 2026-05-02 — Task 6.7: Dep-Check + Checkov runners + NativeRunner OutputFile extension (ADR-023)
 
 **Files shipped (single atomic engine commit):**

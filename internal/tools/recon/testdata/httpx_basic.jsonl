@@ -1,0 +1,1 @@
+{"timestamp":"2026-01-15T12:00:00.000Z","port":"443","url":"https://api.example.com","input":"https://api.example.com","title":"Example API","scheme":"https","webserver":"nginx","content_type":"application/json","method":"GET","host":"192.0.2.10","path":"/","time":"45ms","tech":["Nginx","Node.js"],"words":12,"lines":1,"status_code":200,"content_length":256,"failed":false}

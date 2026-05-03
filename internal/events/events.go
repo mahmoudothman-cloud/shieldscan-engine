@@ -44,6 +44,8 @@ const (
 	EventJobStarted           EventType = "job_started"
 	EventReconStarted         EventType = "recon_started"
 	EventSubdomainsDiscovered EventType = "subdomains_discovered"
+	EventLivenessProbed       EventType = "liveness_probed" // M6.3: emitted by recon.RunRecon after httpx phase
+	EventReconCompleted       EventType = "recon_completed" // M6.3: emitted by recon.RunRecon at end of pipeline
 	EventJobProgress          EventType = "job_progress"
 	EventFindingDiscovered    EventType = "finding_discovered"
 	EventJobCanceled          EventType = "job_canceled"

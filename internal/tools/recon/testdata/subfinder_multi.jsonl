@@ -1,0 +1,8 @@
+{"host":"api.example.com","input":"example.com","source":"crtsh"}
+{"host":"www.example.com","input":"example.com","source":"crtsh"}
+{"host":"admin.example.com","input":"example.com","source":"anubis"}
+{"host":"staging.example.com","input":"example.com","source":"anubis"}
+{"host":"dev.example.com","input":"example.com","source":"shodan"}
+{"host":"test.example.com","input":"example.com","source":"shodan"}
+{"host":"old.example.com","input":"example.com","source":"crtsh"}
+{"host":"vpn.example.com","input":"example.com","source":"shodan"}

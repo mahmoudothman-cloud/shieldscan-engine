@@ -1,0 +1,5 @@
+{"host":"good1.example.com","input":"example.com","source":"crtsh"}
+{"host":"good2.example.com","input":"example.com","source":"anubis"}
+{not valid json
+{"input":"example.com","source":"shodan"}
+{"host":"good3.example.com","input":"example.com","source":"crtsh"}
