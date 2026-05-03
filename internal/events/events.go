@@ -147,6 +147,15 @@ type RawFinding struct {
 	CipherSuite string `json:"cipher_suite,omitempty"`
 	CertSubject string `json:"cert_subject,omitempty"`
 
+	// SPEC §7.3 schema extension (M6-close-followup, ADR-024).
+	// Optional fields with omitempty; backward-compatible.
+	// Per ADR-024 "Python ingest scope": columns-ready posture
+	// (Engine emission lands; Python ingest path deferred).
+	References     []string `json:"references,omitempty"`
+	Tags           []string `json:"tags,omitempty"`
+	CVSSVector     string   `json:"cvss_vector,omitempty"`
+	AdditionalCWEs []string `json:"additional_cwes,omitempty"`
+
 	// Metadata
 	RawOutputRef string `json:"raw_output_ref,omitempty"`
 	DiscoveredAt string `json:"discovered_at,omitempty"` // RFC3339

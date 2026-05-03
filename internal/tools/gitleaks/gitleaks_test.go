@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/odyssey/shieldscan-engine/internal/events"
 	"github.com/odyssey/shieldscan-engine/internal/tools"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -146,6 +147,46 @@ func TestParseOutput_MultiFindings(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, len(rules), 4,
 		"multi fixture covers diverse rules")
+
+	// SPEC §7.3 schema extension (M6-close-followup, ADR-024) —
+	// Gitleaks retrofit per design doc §4.1.3: Tags from Tags[]
+	// (currently dropped pre-§7.3). The github-pat finding in the
+	// fixture has Tags=["secret","github"] — both survive
+	// engine_category filtering ("secret" ≠ "secrets" canonical).
+	var githubPATFinding *events.RawFinding
+	for i := range findings {
+		if findings[i].FindingType == "github-pat" {
+			githubPATFinding = &findings[i]
+			break
+		}
+	}
+	require.NotNil(t, githubPATFinding, "fixture has github-pat finding")
+	assert.Equal(t, []string{"secret", "github"}, githubPATFinding.Tags,
+		"Tags populated from Gitleaks Tags[] field")
+}
+
+// TestParseOutput_TagsFilteredAgainstEngineCategory pins the
+// ADR-024 §3.1.2 invariant: Tags must NOT duplicate engine_category.
+// Synthesizes a record with Tags=["secrets","aws"]; expects parser
+// to strip "secrets" via jsonx.FilterEngineCategoryTags.
+func TestParseOutput_TagsFilteredAgainstEngineCategory(t *testing.T) {
+	raw := []byte(`[{"RuleID":"r","File":"f","StartLine":1,"Tags":["secrets","aws"]}]`)
+	findings, err := parseOutput(noopLog())(raw)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	assert.Equal(t, []string{"aws"}, findings[0].Tags,
+		"engine_category-shaped tag (secrets) must be filtered out")
+}
+
+// TestParseOutput_BackwardCompatTagsAbsent pins the empty-tags case
+// (Tags=[] in basic fixture): RawFinding.Tags stays nil so omitempty
+// drops the field on the wire.
+func TestParseOutput_BackwardCompatTagsAbsent(t *testing.T) {
+	raw := readFixture(t, "gitleaks_basic.json")
+	findings, err := parseOutput(noopLog())(raw)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	assert.Nil(t, findings[0].Tags, "empty Tags[] → nil (omitempty)")
 }
 
 func TestParseOutput_Empty(t *testing.T) {

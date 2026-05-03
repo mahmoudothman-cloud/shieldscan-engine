@@ -8,6 +8,139 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+### 2026-05-03 — M6-close-followup Phase 3: SPEC §7.3 schema extension — Engine struct + 6-tool retrofit
+
+**Phase 3 of M6-close-followup task.** Engine commit follows Phase 1 (shieldscan-docs ADR-024 + SPEC §7.3 update at `59b0f3d` + `8f90531`) and Phase 2 (shieldscan-api SQLAlchemy model + Alembic migration at `938ae80`). Cross-repo coordination per ADR-024 strict-ordering rule (Docs → Python → Engine).
+
+**Files shipped (single atomic engine commit):**
+- `internal/events/events.go` — `RawFinding` struct extended with 4 new fields (References, Tags, CVSSVector, AdditionalCWEs); all `omitempty`; backward-compatible.
+- `internal/events/events_test.go` — 2 new tests (roundtrip + omitempty regression guard) + extended fixture-decode assertions.
+- `internal/events/testdata/job_completed_python_v1.json` — 1st finding populated with all 4 new fields; 2nd finding left bare (omitempty regression guard).
+- `internal/tools/jsonx/jsonx.go` — 7th helper added: `FilterEngineCategoryTags`. Promoted at SPEC §7.3 followup per the project's three-instance-threshold convention (4 callsites: Nuclei + Semgrep + Gitleaks + Wapiti).
+- `internal/tools/jsonx/jsonx_test.go` — 8-case table-driven test for `FilterEngineCategoryTags`.
+- `internal/tools/depcheck/cvss_mapping.go` — NEW. CVSS 6-dimension word→letter mapping table per FIRST.org CVSS v3.1 Specification Document; `composeCVSSVector` graceful-degrades to "" on unknown values.
+- `internal/tools/depcheck/cvss_mapping_test.go` — NEW. 8 tests covering full vectors, word→letter mappings, graceful degradation, and map-completeness invariants.
+- 6 tool retrofits (`parse.go` + `*_test.go`): Nuclei, Semgrep, Gitleaks, Dep-Check, Checkov, Wapiti.
+
+**3 tools NOT retrofitted** per ADR-024 §3.4: SSLyze (plugin-rules synthesizes findings; no upstream metadata), Nikto (XML emits description-only), CORStest (text-with-ANSI parser extracts URL/origin/headers only). Their reductions stay folded.
+
+**Test counts (engine-wide, post-Phase-3):** all 19 packages green under `go test -race -count=1`. golangci-lint v2.11.4 reports 0 issues. Net-new tests at Phase 3: ~17 (2 events + 1 jsonx + 8 cvss_mapping + 6 across tool retrofits).
+
+**6-tool retrofit outcomes** (per ADR-024 §3.4 retrofit checklist + design doc §4):
+
+| Tool | New fields populated | Reductions rescued |
+|---|---|---|
+| Nuclei | References + Tags + CVSSVector | 3 → 0 |
+| Semgrep | References + Tags (metadata-dependent) | 0–2 (existing baseline 0) |
+| Gitleaks | Tags | 5 → 4 (commit-metadata + entropy/columns/endline still folded) |
+| Dep-Check | References + CVSSVector + AdditionalCWEs | 5 → 2 (vulnerableSoftware/hashes/evidenceCollected still dropped) |
+| Checkov | References (from `guideline`) | 6 → 5 |
+| Wapiti | References (`wstg`) + Tags (`module`) | 5 → 3 |
+
+**Reductions counter post-§7.3: 8/9 tools (89%) STILL with reductions.** Per-tool fold counts reduced; no tool's folds eliminated to zero. Trigger remains fired per ADR-024 trigger #3 (future incremental schema extensions may address tool-specific metadata when M7+ data informs which patterns warrant first-class fields).
+
+**AdditionalCWEs § 8.2 forward-pin (LOAD-BEARING).** Per ADR-024 §3.1.4: SPEC §8.2 cross-layer correlation algorithm currently uses `cwe_id` singular. M9 implementation MUST extend the `cwe_exact` / `cwe_parent` checks to consider intersection with `additional_cwes` ({primary} ∪ AdditionalCWEs). Without this extension, M9 misses multi-CWE matches — especially Dep-Check, which routinely emits 2–4 CWEs per CVE. Engine emission populates AdditionalCWEs from `cwes[1:]` for both Nuclei (rare multi-CWE) and Dep-Check (routine multi-CWE); M9 consumer-side algorithm extension lands when M9 implementation arrives.
+
+### 2026-05-03 — M6-close-followup: jsonx 7th helper — `FilterEngineCategoryTags` (3-instance threshold met cleanly)
+
+**Pin.** `internal/tools/jsonx/jsonx.go::FilterEngineCategoryTags` added as the 7th helper in the package. Returns a new slice containing only input tags that do NOT match a canonical engine_category value per SPEC §5.3 (13-value enum: dast/sast/sca/mobile/infrastructure/recon/ssl/api/iac/secrets/container/spa/discovery).
+
+Returns `nil` when the filtered slice is empty so callers assign directly to `RawFinding.Tags` and `omitempty` drops the field on the wire (no spurious `"tags":[]`).
+
+**3-instance threshold met cleanly (4 callsites at promotion):** Nuclei + Semgrep + Gitleaks + Wapiti per-tool retrofits all enforce ADR-024 §3.1.2's "Tags MUST NOT duplicate engine_category" invariant via this helper. Per the project's three-instance promotion convention (DEVELOPMENT-PATTERNS preamble), centralizing the engine_category set in `jsonx` keeps the SPEC §5.3 list as a single source of truth — adding a 14th category requires updating one map, not four parsers.
+
+**Cross-repo schema-coordination note.** The `engineCategoryTagSet` mirrors the Python `EngineCategory` enum in `shieldscan-api/src/app/models/raw_findings.py`. If SPEC §5.3 grows, both sides update together (same cross-repo schema-coordination pattern as adding new RawFinding fields per ADR-024).
+
+### 2026-05-03 — M6-close-followup: CVSS 6-dimension word→letter mapping (Dep-Check)
+
+**Pin.** `internal/tools/depcheck/cvss_mapping.go` provides the authoritative CVSS 3.1 word→letter mapping per FIRST.org CVSS v3.1 Specification Document. Dep-Check emits CVSS metric values as full uppercase words (`"NETWORK"`); CVSS canonical uses single-letter codes (`"N"`).
+
+**8 dimensions covered** (per CVSS 3.1 spec):
+
+| Dimension | Word values | Letter codes |
+|---|---|---|
+| AttackVector | NETWORK / ADJACENT_NETWORK / LOCAL / PHYSICAL | N / A / L / P |
+| AttackComplexity | LOW / HIGH | L / H |
+| PrivilegesRequired | NONE / LOW / HIGH | N / L / H |
+| UserInteraction | NONE / REQUIRED | N / R |
+| Scope | UNCHANGED / CHANGED | U / C |
+| ConfidentialityImpact | NONE / LOW / HIGH | N / L / H |
+| IntegrityImpact | NONE / LOW / HIGH | N / L / H |
+| AvailabilityImpact | NONE / LOW / HIGH | N / L / H |
+
+Each dimension has its own subtable to avoid ambiguity (e.g., `"NONE"` maps to `"N"` for PR/UI/Impact, but the dimensions are distinct per CVSS spec).
+
+**Graceful degradation.** `composeCVSSVector` returns `""` if any dimension fails to map (preferring an empty CVSSVector over a malformed string). This handles real-world Dep-Check fixtures where `cvssv3` carries only a partial subset of dimensions (`baseScore` + `attackVector` only is common in older fixtures). The empty result triggers `omitempty` on the wire — backward-compatible with consumers that expect either a complete vector or no vector.
+
+**Future enhancement trigger:** customer report of "expected CVSSVector but got empty" → instrument `composeCVSSVector` with a logger to surface mapping failures by dimension. Not needed at SPEC §7.3 time.
+
+### 2026-05-03 — M6-close-followup: Reductions counter post-§7.3 status (8/9 still with reductions; trigger remains fired)
+
+**Pin.** Per-tool reductions inventory post-Phase-3 (compare to M6-close-followup pre-implementation tally documented in design doc §2.1):
+
+| Tool | Pre-§7.3 folds | Post-§7.3 folds | Rescued |
+|---|---|---|---|
+| Nuclei | 3 | 0 | 3 |
+| Semgrep | 0 | 0 | 0 (baseline) |
+| Gitleaks | 5 | 4 | 1 (Tags) |
+| SSLyze | 5–6 | 5–6 | 0 (no retrofit) |
+| Dep-Check | 5 | 2 | 3 |
+| Checkov | 6 | 5 | 1 |
+| Nikto | 3 | 3 | 0 (no retrofit) |
+| Wapiti | 5 | 3 | 2 |
+| CORStest | 2 | 2 | 0 (no retrofit) |
+| **Total** | **~38** | **~26** | **~12 (~32%)** |
+
+**Counter remains at 8/9 tools (89%) with reductions** — no tool's fold count dropped to zero. Trigger remains fired per ADR-024 trigger #3.
+
+**Honest accounting.** The brainstorming-time estimate of 66% rescue rate was inaccurate; the realized 32% reflects the categorical-pattern scope (the 4 fields capture cross-tool patterns: References, Tags, CVSSVector, multi-CWE) but does not address tool-specific metadata. Future incremental schema extensions may target NucleiTemplateID + GitleaksRuleID (per-tool identifiers) or surface SSLyze plugin-output structure if M11 dashboard query patterns surface.
+
+### 2026-05-03 — M6-close-followup: 2 new tracked patterns at 1st instance
+
+**Pattern 1 — Multi-repo schema-coordination commits.** Strict-ordering Docs → Python → Engine (Phase 1 / Phase 2 / Phase 3) enforced by ADR-024 to maintain cross-repo schema agreement. The reverse failure mode (Engine ships first; Python rejects unknown fields) doesn't materialize in this instance because Python ingest is deferred (Path A; ADR-024 "Python ingest scope"); but the workflow is exercised end-to-end as the canonical pattern shape for future schema extensions.
+
+- Instance 1: SPEC §7.3 followup (this task).
+- Trigger to promote to DEVELOPMENT-PATTERNS: 3rd instance.
+
+**Pattern 2 — Optional-field additive migrations with backward-compat.** Alembic `add_column` with `nullable=True` + Go struct `omitempty` JSON tags. Existing wire-format fixtures parse cleanly without the new fields; existing DB rows accept the new columns as NULL. Forward + backward migration verified at Phase 2.
+
+- Instance 1: SPEC §7.3 followup (this task).
+- Trigger to promote to DEVELOPMENT-PATTERNS: 3rd instance.
+
+Both patterns track-only at this stage; ADR-024 documents them for future cross-reference.
+
+### 2026-05-03 — M6-close-followup: asymmetric-cost meta-principle 3rd ADR invocation
+
+**Pin.** ADR-024 is the 3rd ADR in the project corpus to invoke the asymmetric-cost meta-principle to justify an architectural commitment:
+
+| ADR | Architectural commitment | Asymmetric-cost framing |
+|---|---|---|
+| ADR-022 (M6.3) | Recon-as-pre-scan-helpers, NOT ToolRunner-registered | Cost of forcing recon into ToolRunner > cost of architectural carve-out |
+| ADR-023 (M6.7) | NativeRunner OutputFile mode (3-instance threshold OVERRIDDEN) | Cost of race-prone hacks > cost of premature framework abstraction (~50 LoC) |
+| ADR-024 (M6-followup) | SPEC §7.3 schema extension (4 fields) | Cost of compounding folds across M7+ tools + missing M9 multi-CWE correlation > cost of cross-repo extension (~4.5–5h post-Path-A) |
+
+**The shared meta-principle, now invoked across three consecutive M6 ADRs, is project corpus norm:** *architectural commitments are made when the alternative is operationally worse, not when a generic threshold is met.*
+
+**Trigger to promote to DEVELOPMENT-PATTERNS:** if a 4th+ ADR invokes the same meta-principle, document the reasoning shape explicitly (when to invoke vs when to defer to threshold-based promotion). 3 instances is the threshold; ADR-024's invocation puts the meta-principle at exactly the promotion bar — but per Pattern 1's "trigger-based deferral" discipline, a 4th instance is desirable to confirm the pattern before formalization.
+
+### 2026-05-03 — M6-close-followup: Phase 0 verification pattern reinforced (3rd instance)
+
+**Pin.** Phase 0 verification before implementation surfaced state-of-repo deviations from pre-phase instructions in two concrete instances during this task:
+
+| Phase | Surface | Outcome |
+|---|---|---|
+| Phase 0 | Design doc assumed Pydantic schema + CompletionsConsumer ingest path exists; verification confirmed neither does | Path A adoption (Python ingest deferred); ADR-024 "Python ingest scope" subsection codifies |
+| Phase 2 Step 1 | Verbatim Alembic migration template assumed `dc5ca2edbd3f` was the head; `alembic heads` confirmed actual head is `d4f6b1e9a527` | Auto-corrected per "factual deviations: auto-correct + document" protocol |
+
+These join two prior project-corpus self-catches (M6.3 httpx stdin pipe; M6.6 Nikto XML support discovery) — collectively the 3rd, 4th, and 5th instances of the empirical-verification-before-implementation discipline.
+
+**Track for promotion.** If a 6th+ instance surfaces, consider DEVELOPMENT-PATTERNS entry "verification-before-implementation" formalizing the discipline:
+- Pre-phase instructions are starting points, not guarantees of repo state.
+- Phase 0 (or equivalent verification step) is mandatory for cross-repo concerns and any task whose scope depends on assumed system state.
+- Mechanical/factual deviations auto-correct + document; architectural deviations surface + pause.
+
+The pattern is operationally critical — without it, a chain of plausible-but-wrong assumptions compounds into Phase 2 / Phase 3 implementation churn.
+
 ### 2026-05-03 — Task 6.8 (M6 CLOSE): Registry wiring — 9 ToolRunners registered + recon helper not registered
 
 **M6 CLOSED. 8/8 tasks complete.** This is the canonical M6 retrospective entry. Future engineers reading the M6 milestone shape years from now should be able to reconstruct the milestone from this entry alone.

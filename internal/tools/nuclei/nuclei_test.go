@@ -150,6 +150,46 @@ func TestParseOutput_SingleXSSFinding(t *testing.T) {
 	assert.NotEmpty(t, f.Response)
 	// CVE id (no dedicated RawFinding field) folded into Description.
 	assert.Contains(t, f.Description, "CVE-2024-1234")
+
+	// SPEC §7.3 schema extension (M6-close-followup, ADR-024) —
+	// Nuclei retrofit per design doc §4.1.1: References + Tags +
+	// CVSSVector populated from info.reference[] / info.tags[] /
+	// info.classification.cvss-metrics. Tags filter drops
+	// engine_category-shaped values; the fixture has no engine_category
+	// overlap so all source tags survive.
+	assert.Equal(t, []string{"https://example.com/security/CVE-2024-1234"}, f.References)
+	assert.Equal(t, []string{"cve", "cve2024", "xss", "example"}, f.Tags)
+	assert.Equal(t, "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N", f.CVSSVector)
+	// Single-CWE finding: AdditionalCWEs nil.
+	assert.Nil(t, f.AdditionalCWEs)
+}
+
+// TestParseOutput_TagsFilterEngineCategoryDuplicates pins the
+// ADR-024 §3.1.2 invariant: Tags MUST NOT duplicate engine_category.
+// Synthesizes a JSONL line with `info.tags = ["dast","cve","xss"]`;
+// expects the parser to strip "dast" via jsonx.FilterEngineCategoryTags.
+func TestParseOutput_TagsFilterEngineCategoryDuplicates(t *testing.T) {
+	raw := []byte(`{"template-id":"t1","matched-at":"https://x.test/","info":{"name":"n","severity":"low","tags":["dast","cve","xss","sast"]}}`)
+	findings, err := parseOutput(noopLog())(raw)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	assert.Equal(t, []string{"cve", "xss"}, findings[0].Tags,
+		"engine_category-shaped tags (dast, sast) must be filtered out")
+}
+
+// TestParseOutput_BackwardCompatNoNewFields pins backward-compat:
+// a JSONL line without info.reference / cvss-metrics still parses
+// cleanly with the new fields nil/empty.
+func TestParseOutput_BackwardCompatNoNewFields(t *testing.T) {
+	raw := []byte(`{"template-id":"t1","matched-at":"https://x.test/","info":{"name":"n","severity":"low"}}`)
+	findings, err := parseOutput(noopLog())(raw)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	f := findings[0]
+	assert.Nil(t, f.References)
+	assert.Nil(t, f.Tags)
+	assert.Empty(t, f.CVSSVector)
+	assert.Nil(t, f.AdditionalCWEs)
 }
 
 func TestParseOutput_MultiFindings(t *testing.T) {

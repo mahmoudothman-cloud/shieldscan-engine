@@ -445,4 +445,78 @@ func TestDecodeJobCompletedEvent_PythonFixture(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(data), `"event_type":"job_completed"`)
 	assert.Contains(t, string(data), `"event_seq":{"index":1,"total":1}`)
+
+	// SPEC §7.3 schema extension (M6-close-followup, ADR-024):
+	// finding[0] in the canonical fixture populates all 4 new fields.
+	assert.Equal(t, []string{
+		"https://nvd.nist.gov/vuln/detail/CVE-2024-1234",
+		"https://example.com/advisory/2024-001",
+	}, ev.Findings[0].References)
+	assert.Equal(t, []string{"xss", "owasp-top-10"}, ev.Findings[0].Tags)
+	assert.Equal(t, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H", ev.Findings[0].CVSSVector)
+	assert.Equal(t, []string{"CWE-20", "CWE-78"}, ev.Findings[0].AdditionalCWEs)
+
+	// finding[1] leaves the new fields unset; backward-compat regression
+	// guard (omitempty discipline holds on both encode + decode paths).
+	assert.Nil(t, ev.Findings[1].References)
+	assert.Nil(t, ev.Findings[1].Tags)
+	assert.Empty(t, ev.Findings[1].CVSSVector)
+	assert.Nil(t, ev.Findings[1].AdditionalCWEs)
+}
+
+// TestRawFinding_NewFieldsRoundtrip verifies the 4 ADR-024 fields
+// survive a full marshal → unmarshal cycle without truncation or
+// reordering. Pins the wire-format symmetry SPEC §7.3 + ADR-024
+// rely on.
+func TestRawFinding_NewFieldsRoundtrip(t *testing.T) {
+	original := RawFinding{
+		ToolName:       "nuclei",
+		EngineCategory: "dast",
+		Title:          "XSS",
+		Severity:       "high",
+		FindingType:    "xss",
+		References: []string{
+			"https://nvd.nist.gov/vuln/detail/CVE-2024-1234",
+			"https://example.com/advisory/2024-001",
+		},
+		Tags:           []string{"xss", "owasp-top-10"},
+		CVSSVector:     "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+		AdditionalCWEs: []string{"CWE-20", "CWE-78"},
+	}
+
+	data, err := json.Marshal(original)
+	require.NoError(t, err)
+
+	var decoded RawFinding
+	require.NoError(t, json.Unmarshal(data, &decoded))
+
+	assert.Equal(t, original.References, decoded.References)
+	assert.Equal(t, original.Tags, decoded.Tags)
+	assert.Equal(t, original.CVSSVector, decoded.CVSSVector)
+	assert.Equal(t, original.AdditionalCWEs, decoded.AdditionalCWEs)
+}
+
+// TestRawFinding_NewFieldsOmitemptyWhenAbsent verifies the 4 new
+// fields disappear from JSON when unset. Backward-compat regression
+// guard: existing engine emissions without these fields produce
+// identical wire bytes to the pre-§7.3 era (no spurious empty
+// `"references":null` etc.).
+func TestRawFinding_NewFieldsOmitemptyWhenAbsent(t *testing.T) {
+	finding := RawFinding{
+		ToolName:       "gitleaks",
+		EngineCategory: "secrets",
+		Title:          "Hardcoded credential",
+		Severity:       "critical",
+		FindingType:    "secret",
+		// New fields deliberately not set.
+	}
+
+	data, err := json.Marshal(finding)
+	require.NoError(t, err)
+
+	jsonStr := string(data)
+	for _, field := range []string{"references", "tags", "cvss_vector", "additional_cwes"} {
+		assert.NotContains(t, jsonStr, field,
+			"omitempty must drop %q when unset; got JSON: %s", field, jsonStr)
+	}
 }

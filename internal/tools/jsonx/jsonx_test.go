@@ -199,3 +199,25 @@ func TestTruncate(t *testing.T) {
 		})
 	}
 }
+
+func TestFilterEngineCategoryTags(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"nil-input", nil, nil},
+		{"empty-input", []string{}, nil},
+		{"all-tags-survive", []string{"xss", "owasp-top-10", "automated"}, []string{"xss", "owasp-top-10", "automated"}},
+		{"drops-engine-category-dast", []string{"dast", "xss"}, []string{"xss"}},
+		{"drops-multiple-categories", []string{"dast", "sast", "xss", "automated"}, []string{"xss", "automated"}},
+		{"all-categories-filtered-to-nil", []string{"dast", "ssl"}, nil},
+		{"preserves-order", []string{"a", "dast", "b", "sast", "c"}, []string{"a", "b", "c"}},
+		{"case-sensitive-DAST-uppercase-survives", []string{"DAST", "xss"}, []string{"DAST", "xss"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, FilterEngineCategoryTags(c.in))
+		})
+	}
+}

@@ -110,6 +110,15 @@ func recordToFinding(rec map[string]any) (events.RawFinding, bool) {
 	date := jsonx.ExtractString(rec, "Date")
 	description := commitFold(baseDescription, commit, author, date)
 
+	// SPEC §7.3 schema extension (M6-close-followup, ADR-024).
+	// Gitleaks retrofit per design doc §4.1.3:
+	//   - Tags ← Tags[] (currently dropped per 6.5 reductions),
+	//            filtered against engine_category to drop "secrets"-
+	//            shaped duplicates.
+	// Constants-only Pattern 4 preserved: SeverityCritical and
+	// CWEHardcodedCredentials still constants. Tags is per-finding.
+	tags := jsonx.FilterEngineCategoryTags(jsonx.ExtractStringSlice(rec, "Tags"))
+
 	return events.RawFinding{
 		Title:       ruleID,
 		Description: description,
@@ -119,6 +128,7 @@ func recordToFinding(rec map[string]any) (events.RawFinding, bool) {
 		CodeFile:    file,
 		CodeLine:    startLine,
 		CodeSnippet: match,
+		Tags:        tags,
 	}, true
 }
 

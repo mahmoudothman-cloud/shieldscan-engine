@@ -139,6 +139,30 @@ func TestParseOutput_BasicSingleFinding(t *testing.T) {
 	assert.NotEmpty(t, f.OWASP, "OWASP first-element extracted")
 	assert.NotEmpty(t, f.Description)
 	assert.NotEmpty(t, f.CodeSnippet)
+
+	// SPEC §7.3 schema extension (M6-close-followup, ADR-024) —
+	// Semgrep retrofit per design doc §4.1.2: References from
+	// extra.metadata.references[]; Tags from extra.metadata.category
+	// wrapped (filtered against engine_category — "security" survives).
+	assert.Equal(t, []string{
+		"https://stackoverflow.com/questions/3172470/actual-meaning-of-shell-true-in-subprocess",
+		"https://docs.python.org/3/library/subprocess.html",
+	}, f.References)
+	assert.Equal(t, []string{"security"}, f.Tags)
+	// Semgrep doesn't emit CVSS or multi-CWE → fields stay nil/empty.
+	assert.Empty(t, f.CVSSVector)
+	assert.Nil(t, f.AdditionalCWEs)
+}
+
+// TestParseOutput_BackwardCompatNoMetadata pins backward-compat:
+// custom rules often lack metadata; new fields stay nil.
+func TestParseOutput_BackwardCompatNoMetadata(t *testing.T) {
+	raw := []byte(`{"results":[{"check_id":"x","path":"a.py","start":{"line":1},"extra":{"severity":"INFO","message":"m","lines":"l"}}]}`)
+	findings, err := parseOutput(noopLog())(raw)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	assert.Nil(t, findings[0].References)
+	assert.Nil(t, findings[0].Tags)
 }
 
 func TestParseOutput_MultiFindings(t *testing.T) {

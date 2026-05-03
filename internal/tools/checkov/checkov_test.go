@@ -127,6 +127,28 @@ func TestParseOutput_BasicSingleFinding(t *testing.T) {
 	assert.Equal(t, CWEIaCMisconfiguration, f.CWEID)
 	assert.NotEmpty(t, f.Title, "Title from check_name")
 	assert.NotEmpty(t, f.CodeSnippet, "CodeSnippet from flattened code_block")
+
+	// SPEC §7.3 schema extension (M6-close-followup, ADR-024) —
+	// Checkov retrofit per design doc §4.1.5: References from
+	// guideline (single URL string wrapped as []string).
+	assert.Equal(t, []string{
+		"https://docs.prismacloud.io/en/enterprise-edition/policy-reference/aws-policies/aws-networking-policies/networking-31",
+	}, f.References)
+	// Other new fields stay nil/empty (Checkov has no tags/CVSS/multi-CWE source).
+	assert.Nil(t, f.Tags)
+	assert.Empty(t, f.CVSSVector)
+	assert.Nil(t, f.AdditionalCWEs)
+}
+
+// TestParseOutput_BackwardCompatNoGuideline pins the empty-guideline
+// case: when Checkov omits guideline (custom rules; older versions),
+// References stays nil so omitempty drops the field.
+func TestParseOutput_BackwardCompatNoGuideline(t *testing.T) {
+	raw := []byte(`{"results":{"failed_checks":[{"check_id":"X","file_path":"f","check_name":"n","file_line_range":[1,1],"resource":"r"}]}}`)
+	findings, err := parseOutput(noopLog())(raw)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	assert.Nil(t, findings[0].References, "missing guideline → nil References")
 }
 
 func TestParseOutput_MultiFindings(t *testing.T) {

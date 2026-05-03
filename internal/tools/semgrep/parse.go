@@ -137,6 +137,18 @@ func recordToFinding(rec map[string]any) (events.RawFinding, bool) {
 	cweID := cweFromMetadata(metadata)
 	owasp := jsonx.FirstString(jsonx.ExtractStringSlice(metadata, "owasp"))
 
+	// SPEC §7.3 schema extension (M6-close-followup, ADR-024).
+	// Semgrep retrofit per design doc §4.1.2:
+	//   - References ← extra.metadata.references[] (when present;
+	//                  custom rules often lack metadata → nil)
+	//   - Tags       ← extra.metadata.category wrapped as []string
+	//                  (filtered against engine_category; nil if dup)
+	references := jsonx.ExtractStringSlice(metadata, "references")
+	if len(references) == 0 {
+		references = nil
+	}
+	tags := jsonx.FilterEngineCategoryTags(extractCategoryAsTags(metadata))
+
 	return events.RawFinding{
 		Title:       checkID,
 		Description: description,
@@ -147,7 +159,20 @@ func recordToFinding(rec map[string]any) (events.RawFinding, bool) {
 		CodeFile:    path,
 		CodeLine:    line,
 		CodeSnippet: snippet,
+		References:  references,
+		Tags:        tags,
 	}, true
+}
+
+// extractCategoryAsTags wraps Semgrep's metadata.category single
+// string value as a []string for RawFinding.Tags. Returns nil when
+// category is absent. Per ADR-024 design doc §4.1.2.
+func extractCategoryAsTags(metadata map[string]any) []string {
+	cat := jsonx.ExtractString(metadata, "category")
+	if cat == "" {
+		return nil
+	}
+	return []string{cat}
 }
 
 // cweFromMetadata extracts the "CWE-N" prefix from the first element

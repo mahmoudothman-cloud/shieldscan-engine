@@ -137,6 +137,21 @@ func instanceToFinding(className string, rec map[string]any, baseTarget string) 
 		description = description + " (referer: " + referer + ")"
 	}
 
+	// SPEC §7.3 schema extension (M6-close-followup, ADR-024).
+	// Wapiti retrofit per design doc §4.1.6:
+	//   - References ← wstg[] (OWASP WSTG identifiers; currently dropped
+	//                  per 6.6 reductions)
+	//   - Tags       ← module wrapped as []string (filtered against
+	//                  engine_category to drop "dast"-shaped duplicates)
+	references := jsonx.ExtractStringSlice(rec, "wstg")
+	if len(references) == 0 {
+		references = nil
+	}
+	var tags []string
+	if module := jsonx.ExtractString(rec, "module"); module != "" {
+		tags = jsonx.FilterEngineCategoryTags([]string{module})
+	}
+
 	return events.RawFinding{
 		Title:       className,
 		Description: description,
@@ -145,6 +160,8 @@ func instanceToFinding(className string, rec map[string]any, baseTarget string) 
 		TargetURL:   targetURL,
 		Parameter:   parameter,
 		Request:     jsonx.Truncate(httpRequest, requestMaxBytes),
+		References:  references,
+		Tags:        tags,
 	}
 }
 

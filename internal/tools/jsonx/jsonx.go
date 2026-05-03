@@ -126,6 +126,61 @@ func FirstString(s []string) string {
 	return s[0]
 }
 
+// engineCategoryTagSet is the set of canonical engine_category
+// values per SPEC §5.3. Used by FilterEngineCategoryTags to enforce
+// ADR-024 §3.1.2's "Tags MUST NOT duplicate engine_category" rule.
+//
+// Mirrors the Python EngineCategory enum in
+// shieldscan-api/src/app/models/raw_findings.py. If the SPEC §5.3
+// list grows, update this set + the Python enum together (cross-repo
+// schema-coordination per ADR-024 — same pattern as adding new
+// RawFinding fields).
+var engineCategoryTagSet = map[string]struct{}{
+	"dast":           {},
+	"sast":           {},
+	"sca":            {},
+	"mobile":         {},
+	"infrastructure": {},
+	"recon":          {},
+	"ssl":            {},
+	"api":            {},
+	"iac":            {},
+	"secrets":        {},
+	"container":      {},
+	"spa":            {},
+	"discovery":      {},
+}
+
+// FilterEngineCategoryTags returns a new slice containing only the
+// input tags that do NOT match a canonical engine_category value.
+// Per ADR-024 §3.1.2: Tags is for finer-grained per-tool sub-
+// categorization and MUST NOT duplicate engine_category (which is
+// the broad classification per SPEC §5.3).
+//
+// Returns nil if the filtered slice is empty (rather than an empty
+// non-nil slice) so callers can assign directly to RawFinding.Tags
+// and have omitempty drop the field on the wire.
+//
+// 7th helper in jsonx; added at the SPEC §7.3 followup task per the
+// project's three-instance-threshold convention (4 callsites:
+// Nuclei + Semgrep + Gitleaks + Wapiti tag retrofits).
+func FilterEngineCategoryTags(tags []string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if _, isCategory := engineCategoryTagSet[t]; isCategory {
+			continue
+		}
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // Truncate caps s to n bytes; appends "..." if cut. Used by tool
 // parsers to bound CodeSnippet / Request / Response field sizes
 // per task-specific decisions (typically 2 KiB or 4 KiB caps).

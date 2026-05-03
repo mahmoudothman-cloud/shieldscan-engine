@@ -121,13 +121,69 @@ func vulnToFinding(name, filePath, fileName string, v map[string]any) events.Raw
 	cvssv3 := jsonx.ExtractMap(v, "cvssv3")
 	score := jsonx.ExtractFloat(cvssv3, "baseScore")
 
-	return events.RawFinding{
-		Title:       name,
-		Description: description,
-		Severity:    mapSeverity(jsonx.ExtractString(v, "severity")),
-		FindingType: name,
-		CWEID:       jsonx.FirstString(jsonx.ExtractStringSlice(v, "cwes")),
-		CVSSScore:   score,
-		CodeFile:    filePath,
+	// SPEC §7.3 schema extension (M6-close-followup, ADR-024).
+	// Dep-Check retrofit per design doc §4.1.4:
+	//   - References    ← references[].url (extract URL from each
+	//                     reference object)
+	//   - CVSSVector    ← composed from cvssv3 word-form metric values
+	//                     (composeCVSSVector graceful-degrades to ""
+	//                     on unknown values)
+	//   - AdditionalCWEs← cwes[1:] when multi-CWE; LOAD-BEARING for
+	//                     SPEC §8.2 forward-pin per ADR-024 §3.1.4
+	cweIDs := jsonx.ExtractStringSlice(v, "cwes")
+	cweID := jsonx.FirstString(cweIDs)
+	var additionalCWEs []string
+	if len(cweIDs) > 1 {
+		additionalCWEs = cweIDs[1:]
 	}
+
+	references := extractReferenceURLs(v)
+	cvssVector := composeCVSSVector(cvssV3{
+		AttackVector:          jsonx.ExtractString(cvssv3, "attackVector"),
+		AttackComplexity:      jsonx.ExtractString(cvssv3, "attackComplexity"),
+		PrivilegesRequired:    jsonx.ExtractString(cvssv3, "privilegesRequired"),
+		UserInteraction:       jsonx.ExtractString(cvssv3, "userInteraction"),
+		Scope:                 jsonx.ExtractString(cvssv3, "scope"),
+		ConfidentialityImpact: jsonx.ExtractString(cvssv3, "confidentialityImpact"),
+		IntegrityImpact:       jsonx.ExtractString(cvssv3, "integrityImpact"),
+		AvailabilityImpact:    jsonx.ExtractString(cvssv3, "availabilityImpact"),
+	})
+
+	return events.RawFinding{
+		Title:          name,
+		Description:    description,
+		Severity:       mapSeverity(jsonx.ExtractString(v, "severity")),
+		FindingType:    name,
+		CWEID:          cweID,
+		CVSSScore:      score,
+		CodeFile:       filePath,
+		References:     references,
+		CVSSVector:     cvssVector,
+		AdditionalCWEs: additionalCWEs,
+	}
+}
+
+// extractReferenceURLs walks v["references"] expecting an array of
+// {"url": "...", "name": "...", "source": "..."} objects (Dep-Check
+// per-CVE reference shape) and returns the extracted URLs. Returns
+// nil if absent or empty.
+func extractReferenceURLs(v map[string]any) []string {
+	refs, ok := v["references"].([]any)
+	if !ok || len(refs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(refs))
+	for _, r := range refs {
+		rm, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		if url := jsonx.ExtractString(rm, "url"); url != "" {
+			out = append(out, url)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

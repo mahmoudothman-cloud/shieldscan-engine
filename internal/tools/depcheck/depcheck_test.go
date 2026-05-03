@@ -132,6 +132,47 @@ func TestParseOutputFile_BasicSingleCVE(t *testing.T) {
 	assert.Equal(t, "repo/lib/log4j-core-2.14.0.jar", f.CodeFile)
 	assert.Contains(t, f.Description, "log4j-core-2.14.0.jar",
 		"fileName folded into Description")
+
+	// SPEC §7.3 schema extension (M6-close-followup, ADR-024) —
+	// Dep-Check retrofit per design doc §4.1.4.
+	//
+	// References: extracted from references[].url.
+	assert.Equal(t, []string{"https://nvd.nist.gov/vuln/detail/CVE-2021-44228"},
+		f.References)
+	// AdditionalCWEs: cwes is ["CWE-502","CWE-20"] → primary CWEID
+	// stays "CWE-502", AdditionalCWEs picks up ["CWE-20"]. LOAD-BEARING
+	// for SPEC §8.2 forward-pin per ADR-024 §3.1.4.
+	assert.Equal(t, []string{"CWE-20"}, f.AdditionalCWEs)
+	// CVSSVector: fixture has only attackVector populated (no full
+	// 8-dimension cvssv3); composeCVSSVector graceful-degrades to "".
+	assert.Empty(t, f.CVSSVector,
+		"partial cvssv3 → composeCVSSVector returns \"\" (graceful)")
+}
+
+// TestParseOutputFile_FullCVSSv3Composition pins the happy path
+// for CVSSVector composition: a synthetic vulnerability with all
+// 8 cvssv3 dimensions populated produces a canonical CVSS:3.1/...
+// string via composeCVSSVector + the cvssWordToLetter map.
+func TestParseOutputFile_FullCVSSv3Composition(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "full_cvss.json")
+	full := `{"dependencies":[{"filePath":"/p/lib.jar","fileName":"lib.jar","vulnerabilities":[{"name":"CVE-2024-9999","severity":"Critical","description":"d","cwes":["CWE-89","CWE-20","CWE-78"],"cvssv3":{"baseScore":9.8,"attackVector":"NETWORK","attackComplexity":"LOW","privilegesRequired":"NONE","userInteraction":"NONE","scope":"UNCHANGED","confidentialityImpact":"HIGH","integrityImpact":"HIGH","availabilityImpact":"HIGH"},"references":[{"url":"https://example.com/a"},{"url":"https://example.com/b"}]}]}]}`
+	require.NoError(t, os.WriteFile(tmp, []byte(full), 0o644))
+
+	findings, err := parseOutputFile(noopLog())(tmp)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	f := findings[0]
+
+	// CVSSVector composed from all 8 dimensions (per FIRST.org CVSS
+	// 3.1 spec; see internal/tools/depcheck/cvss_mapping.go).
+	assert.Equal(t,
+		"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+		f.CVSSVector)
+	// Multi-CWE intersection: primary stays CWE-89; remaining 2 → AdditionalCWEs.
+	assert.Equal(t, "CWE-89", f.CWEID)
+	assert.Equal(t, []string{"CWE-20", "CWE-78"}, f.AdditionalCWEs)
+	// References: both URLs extracted.
+	assert.Equal(t, []string{"https://example.com/a", "https://example.com/b"}, f.References)
 }
 
 func TestParseOutputFile_MultiCVEAcrossDeps(t *testing.T) {

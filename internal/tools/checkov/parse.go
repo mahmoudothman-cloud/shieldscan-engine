@@ -119,6 +119,17 @@ func recordToFinding(rec map[string]any) (events.RawFinding, bool) {
 
 	snippet := flattenCodeBlock(rec["code_block"])
 
+	// SPEC §7.3 schema extension (M6-close-followup, ADR-024).
+	// Checkov retrofit per design doc §4.1.5:
+	//   - References ← guideline (single URL string wrapped as []string;
+	//                  nil if empty). Constants-only Pattern 4
+	//                  preserved: SeverityMedium and
+	//                  CWEIaCMisconfiguration still constants.
+	var references []string
+	if guideline := jsonx.ExtractString(rec, "guideline"); guideline != "" {
+		references = []string{guideline}
+	}
+
 	return events.RawFinding{
 		Title:       title,
 		Description: description,
@@ -128,6 +139,7 @@ func recordToFinding(rec map[string]any) (events.RawFinding, bool) {
 		CodeFile:    filePath,
 		CodeLine:    startLine,
 		CodeSnippet: snippet,
+		References:  references,
 	}, true
 }
 

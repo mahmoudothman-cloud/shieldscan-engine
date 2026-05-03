@@ -138,9 +138,29 @@ func lineToFinding(raw map[string]any) (events.RawFinding, bool) {
 	description := jsonx.ExtractString(info, "description")
 
 	classification := jsonx.ExtractMap(info, "classification")
-	cweID := jsonx.FirstString(jsonx.ExtractStringSlice(classification, "cwe-id"))
+	cweIDs := jsonx.ExtractStringSlice(classification, "cwe-id")
+	cweID := jsonx.FirstString(cweIDs)
 	cveID := jsonx.FirstString(jsonx.ExtractStringSlice(classification, "cve-id"))
 	cvssScore := jsonx.ExtractFloat(classification, "cvss-score")
+
+	// SPEC §7.3 schema extension (M6-close-followup, ADR-024).
+	// Nuclei retrofit per design doc §4.1.1:
+	//   - References ← info.reference[]
+	//   - Tags       ← info.tags[] (filtered to drop engine_category)
+	//   - CVSSVector ← info.classification.cvss-metrics
+	references := jsonx.ExtractStringSlice(info, "reference")
+	if len(references) == 0 {
+		references = nil
+	}
+	tags := jsonx.FilterEngineCategoryTags(jsonx.ExtractStringSlice(info, "tags"))
+	cvssVector := jsonx.ExtractString(classification, "cvss-metrics")
+	// Nuclei typically emits a single CWE; AdditionalCWEs stays nil
+	// when cweIDs has 0 or 1 entries. Multi-CWE Nuclei templates exist
+	// (rare); populate AdditionalCWEs with cweIDs[1:] for those.
+	var additionalCWEs []string
+	if len(cweIDs) > 1 {
+		additionalCWEs = cweIDs[1:]
+	}
 
 	// CVE id has no dedicated RawFinding field at SPEC §7's schema; fold
 	// into Description so it surfaces in dedup + UI without losing the
@@ -155,14 +175,18 @@ func lineToFinding(raw map[string]any) (events.RawFinding, bool) {
 	}
 
 	return events.RawFinding{
-		Title:       title,
-		Description: description,
-		Severity:    severity,
-		FindingType: templateID,
-		CWEID:       cweID,
-		CVSSScore:   cvssScore,
-		TargetURL:   targetURL,
-		Request:     jsonx.Truncate(jsonx.ExtractString(raw, "request"), 4096),
-		Response:    jsonx.Truncate(jsonx.ExtractString(raw, "response"), 4096),
+		Title:          title,
+		Description:    description,
+		Severity:       severity,
+		FindingType:    templateID,
+		CWEID:          cweID,
+		CVSSScore:      cvssScore,
+		TargetURL:      targetURL,
+		Request:        jsonx.Truncate(jsonx.ExtractString(raw, "request"), 4096),
+		Response:       jsonx.Truncate(jsonx.ExtractString(raw, "response"), 4096),
+		References:     references,
+		Tags:           tags,
+		CVSSVector:     cvssVector,
+		AdditionalCWEs: additionalCWEs,
 	}, true
 }

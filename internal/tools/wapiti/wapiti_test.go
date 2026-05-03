@@ -118,6 +118,30 @@ func TestParseOutputFile_BasicSingleFinding(t *testing.T) {
 	assert.Equal(t, "info", f.Severity, "level=1 maps to info")
 	assert.Contains(t, f.TargetURL, "example.com",
 		"TargetURL combines infos.target + path")
+
+	// SPEC §7.3 schema extension (M6-close-followup, ADR-024) —
+	// Wapiti retrofit per design doc §4.1.6: References from wstg[];
+	// Tags from module wrapped (filtered against engine_category —
+	// "http_headers" survives).
+	assert.Equal(t, []string{"OSHP-X-Frame-Options"}, f.References)
+	assert.Equal(t, []string{"http_headers"}, f.Tags)
+	assert.Empty(t, f.CVSSVector)
+	assert.Nil(t, f.AdditionalCWEs)
+}
+
+// TestParseOutputFile_TagsFilteredAgainstEngineCategory pins the
+// ADR-024 §3.1.2 invariant: a synthetic Wapiti record whose module
+// equals "dast" must produce nil Tags via FilterEngineCategoryTags.
+func TestParseOutputFile_TagsFilteredAgainstEngineCategory(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "engcat.json")
+	doc := `{"infos":{"target":"https://x.test/"},"vulnerabilities":{"X":[{"info":"i","level":1,"path":"/","module":"dast","wstg":["W-1"]}]}}`
+	require.NoError(t, os.WriteFile(tmp, []byte(doc), 0o644))
+	findings, err := parseOutputFile(noopLog())(tmp)
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	assert.Nil(t, findings[0].Tags,
+		"module=\"dast\" matches engine_category → filtered to nil")
+	assert.Equal(t, []string{"W-1"}, findings[0].References)
 }
 
 func TestParseOutputFile_MultiFindings(t *testing.T) {
