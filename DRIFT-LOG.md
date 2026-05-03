@@ -8,6 +8,168 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+### 2026-05-03 — Task 6.8 (M6 CLOSE): Registry wiring — 9 ToolRunners registered + recon helper not registered
+
+**M6 CLOSED. 8/8 tasks complete.** This is the canonical M6 retrospective entry. Future engineers reading the M6 milestone shape years from now should be able to reconstruct the milestone from this entry alone.
+
+**Files shipped (single atomic engine commit):**
+- NEW `cmd/worker/binary_resolution.go` + `binary_resolution_test.go` (4 tests)
+- NEW `cmd/worker/registry_wiring.go` (`buildRegistry` + 9-tool spec table)
+- UPDATE `cmd/worker/run.go` (replaces empty `worker.NewRegistry(map[string]tools.ToolRunner{})` from 5.6 with `buildRegistry(log)` call; populates `StartupDeps.NativeTools`)
+- UPDATE `cmd/worker/run_test.go` (4 net-new tests + `installMockBinaries` helper + `syncWriter` for log capture)
+
+**No companion docs commit at 6.8.** SPEC §7.3 schema-extension proposal (8/9 tools = 89% with reductions) is queued for a separate M6-close-followup task per H.A — keeps 6.8 focused on the wiring assembly. M6 close is the semantic milestone; SPEC §7.3 is a cross-repo concern deserving its own scope proposal.
+
+**M6 milestone shape (8 tasks; 9 tools across 8 categories; 1 helper; 4 patterns; 2 ADRs):**
+
+| Task | Scope | Tool(s) | Category |
+|---|---|---|---|
+| 6.1 | Nuclei runner + chassis exercising | nuclei | dast |
+| 6.2 | Semgrep runner + per-rule severity | semgrep | sast |
+| 6.3 | Subfinder + httpx (recon helpers; NOT ToolRunners per ADR-022) | — | recon |
+| 6.4 | Dep-Check + Checkov runners | depcheck, checkov | sca, iac |
+| 6.5 | SSLyze runner + plugin-rules + jsonx extraction | sslyze | ssl |
+| 6.6 | Nikto + Wapiti + CORStest runners + Pattern 4 promotion | nikto, wapiti, corstest | dast, dast, api |
+| 6.7 | Gitleaks runner + NativeRunner OutputFile mode (ADR-023) | gitleaks | secrets |
+| 6.8 | Registry wiring (M6 CLOSE) | — | — |
+
+**9 ToolRunners registered alphabetically** (matches `buildRegistry` spec table + DRIFT entry below): `checkov, corstest, depcheck, gitleaks, nikto, nuclei, semgrep, sslyze, wapiti`.
+
+**1 helper package not registered** (`internal/tools/recon`): pre-scan helpers per ADR-022; M8 imports + invokes `recon.RunRecon` directly.
+
+**4 DEVELOPMENT-PATTERNS entries promoted across M6:**
+1. Pattern 1 — Trigger-based deferral (5.5; promoted at framework tier; reinforced across M6)
+2. Pattern 2 — `SHIELDSCAN_<TOOL>_BINARY` env-var-binary (6.5 promotion; 12 instances by M6 close)
+3. Pattern 3 — `PYTHONWARNINGS=ignore` for pipx-Python tools (6.7 promotion; 5 instances by M6 close)
+4. Pattern 4 — Constants-only field mapping (6.6 promotion; 4 instances)
+
+**2 ADRs added in M6:**
+- ADR-022 — Recon-as-pre-scan-helpers (M6.3): rejects forcing Subfinder/httpx into the ToolRunner contract; codifies architectural distinction between target-discovery data and findings.
+- ADR-023 — NativeRunner OutputFile mode (M6.7): bimodal NativeRunner gains `OutputFile`/`OutputFilePlaceholder`/`ParseOutputFile` fields for tools whose JSON-to-stdout is broken (Wapiti `-o /dev/stdout` corruption) or absent (Dep-Check writes to file). 2 consumers by M6 close (Dep-Check + Wapiti).
+
+**Test counts (engine-wide, post-6.8):** 296 tests across 19 packages (292 at 6.6 close + 4 at 6.8). All race-clean, vet-clean, golangci-lint v2.11.4 reports 0 issues.
+
+**Reductions counter at 8/9 (89%).** SPEC §7.3 trigger fired (>50%); proposal scoped + queued for M6-close-followup task per H.A.
+
+**Self-catches accumulated across M5+M6 (load-bearing pattern-velocity examples):**
+- M5.5 → ctx-discipline forcing function via goleak
+- M6.3 → empirical re-eval reversed inline-tempfile lean (httpx stdin pipe is correct shape)
+- M6.6 → empirical re-eval surfaced Nikto XML support (sidestepped fragile text parser)
+- M6.7 → Wapiti `-o /dev/stdout` corruption empirically verified, motivated ADR-023
+- M6.8 → 5.6 forward-pin (empty-registry WARN) closed; verified by `TestRunMain_NoEmptyRegistryWarning`
+
+**Pattern landscape at M6 close** (for M7 forward-pinning):
+- Naturally-clean exit-code: 6 instances (track; promotion deferred per H.NEW.8)
+- Domain-rules severity mapping: 2 instances (track for 3rd)
+- Plugin-rules parser: 1 instance (SSLyze; track)
+- Inline-tempfile workaround: 1 instance (CORStest)
+- jsonx helpers: 10 callsites (extracted at 6.5)
+- `resolveBinary` helper: 2 instances at different layers (recon package + cmd/worker; H.E preserves placement)
+
+**5.6 forward-pin closed.** The "empty registry warning" guarded by `internal/worker/startup.go` (added at 5.6 with explicit M6 forward-pin) MUST NOT fire post-6.8. Verified by `TestRunMain_NoEmptyRegistryWarning` (log capture asserts substring absence + presence of `registered_engines` Info path).
+
+**M5 chassis + M6 tools end-to-end functional.** Worker process can now: bootstrap with binary verification (Phase 1) → register in Redis (Phase 4) → BRPOP scan jobs → dispatch to one of 9 native runners → stream findings via processor → emit `job_completed`. Ready for M7 (Docker service tools) after SPEC §7.3 followup.
+
+### 2026-05-03 — Task 6.8: Plan §6.8 redefinition (consolidating M6.1/M6.4/M6.6/M6.7 plan-staleness briefs)
+
+**Pin.** Plan §6.8's literal text (written pre-M6) describes "wire all 6 tool runners into the worker.Registry, populate the engine map" with a tool list that doesn't match the M6 outcome. Consolidating prior plan-staleness briefs from 6.1, 6.4, 6.6, 6.7:
+
+**Actual M6 outcome differs in three respects:**
+1. **Tool count** — plan §6.8 anticipated 6; M6 ships 9 native tools (3 added during M6.6 trifecta). Recon (Subfinder + httpx) discovered to be architecturally distinct (ADR-022) and not ToolRunners — no count delta there.
+2. **Recon non-registration** — plan §6.8 implies all M6 tools register; ADR-022 (introduced at M6.3) splits recon into a separate helper class with no Registry entry.
+3. **Per-tool config shapes** — plan §6.8 didn't anticipate that some tools need additional runtime config beyond `BinaryPath` (Nuclei needs `TemplatesDir` + `DefaultRPS`); `buildRegistry` handles per-tool shape inline.
+
+**Resolution.** Implementation followed the M6-derived shape (9 tools registered + recon helper not registered + per-tool config shapes inline) rather than the literal plan text. Plan §6.8 is a planning artifact, superseded by ADR-022 + the M6 task close-out commits.
+
+### 2026-05-03 — Task 6.8: Recon non-registration code comment (canonical text)
+
+**Pin.** `cmd/worker/registry_wiring.go` `buildRegistry` docstring carries the canonical recon non-registration comment so future engineers reading the registration code see the explanation immediately:
+
+> Recon helpers (Subfinder + httpx) are intentionally NOT registered here per ADR-022: they're pre-scan helpers (target discovery), not ToolRunners (their output is target-discovery data, not events.RawFinding). M8 (Recon-First Pipeline) imports internal/tools/recon and invokes recon.RunRecon directly as a pre-scan phase before per-target scan jobs are dispatched here.
+
+Comment placement adjacent to the spec table (the "registered tools" listing) ensures it cannot drift during refactoring without an obvious diff. `cmd/worker/run.go` carries a shorter cross-reference at the `buildRegistry` call site pointing here.
+
+### 2026-05-03 — Task 6.8: 9 ToolRunners registered + 1 recon helper not registered
+
+**Pin.** Final M6 registration manifest (alphabetical engine name → category → constructor):
+
+| Engine | Category | Constructor |
+|---|---|---|
+| `checkov` | `iac` | `checkov.NewCheckovRunner` |
+| `corstest` | `api` | `corstest.NewCORStestRunner` |
+| `depcheck` | `sca` | `depcheck.NewDepCheckRunner` |
+| `gitleaks` | `secrets` | `gitleaks.NewGitleaksRunner` |
+| `nikto` | `dast` | `nikto.NewNiktoRunner` |
+| `nuclei` | `dast` | `nuclei.NewNucleiRunner` |
+| `semgrep` | `sast` | `semgrep.NewSemgrepRunner` |
+| `sslyze` | `ssl` | `sslyze.NewSSLyzeRunner` |
+| `wapiti` | `dast` | `wapiti.NewWapitiRunner` |
+
+**Helper not registered:** `internal/tools/recon` (Subfinder + httpx) per ADR-022.
+
+**Category coverage:** 8 distinct categories (`api, dast, iac, sast, sca, secrets, ssl` + recon-via-helper). DAST has 3 tools (Nuclei + Nikto + Wapiti) — the only multi-tool category at M6 close. Trigger to add a 9th category: M7 container scanners (Trivy → `container`).
+
+**Spec-table single source of truth.** `buildRegistry`'s inline `[]spec` literal drives both registration AND the `[]NativeBinary` list passed to Phase 1. `TestBuildRegistry_NativeBinariesMatchEngines` asserts the bijection so any future drift between the two lists trips a test.
+
+### 2026-05-03 — Task 6.8: Empty-registry warning clearance (5.6 forward-pin closed)
+
+**Pin.** `internal/worker/startup.go` lines 109-115 emit a WARN when `len(registry.Engines()) == 0` ("worker started with empty registry; no jobs will be processed…"). At 5.6 this warning fired on every worker start — explicit forward-pin to M6.
+
+Post-6.8: warning MUST NOT fire under normal operation. Verified two ways:
+1. **Automated** — `TestRunMain_NoEmptyRegistryWarning` captures worker log output via a `syncWriter`-wrapped `strings.Builder`; asserts the WARN substring is absent AND the alternative `Info`-with-`registered_engines` path fires.
+2. **Smoke-equivalent** — the same fixture used by other `runMain` tests (`runMainFixture` + `installMockBinaries`) sets up 9 mock binaries via `t.Setenv`, so any real-binary smoke test would be redundant with the automated check.
+
+**Sub-note: two distinct failure modes at different layers** (per Watch item D):
+- `resolveBinary` (`cmd/worker/binary_resolution.go`) — **fail-fast at startup** when binary path cannot be derived (env unset AND not on `$PATH`). Returns error → `runMain` exits 1.
+- Phase 1 stat-check (`internal/worker/startup.go::checkNativeBinaries`) — **fail-soft at runtime** when path was derived but file is missing/non-executable. Logs WARN, continues. Different failure mode from `resolveBinary` because the binary could be present at resolve time and removed later (live system).
+
+Future engineers should not conflate the two.
+
+### 2026-05-03 — Task 6.8: SPEC §7.3 schema-extension trigger fire status + deferral
+
+**Pin.** Schema-reduction trigger (RawFinding fields populated by parsers but not yet in SPEC §7.3) is at **8/9 tools = 89%** post-M6 close — well over the 50% trigger threshold informally agreed at M6.5.
+
+**Reductions inventory** (per-tool field-pop summary, accumulated across M6.5/6.6/6.7 DRIFT entries):
+- 8 tools populate fields beyond SPEC §7.3's literal listing (CipherSuite/CertSubject from SSLyze, level-int-derived severity from Wapiti, OWASP-Top-10 tags from Wapiti, etc.)
+- 1 tool (Nikto) is uniformly within current SPEC shape
+
+**Deferred per H.A** to a separate M6-close-followup task — keeps 6.8 focused on the wiring assembly. Followup task scope:
+1. Audit field-population matrix across all 9 tools (DRIFT entries already provide draft material)
+2. Propose specific SPEC §7.3 additions (or argue for keeping fields engine-side, with rationale)
+3. Cross-repo verification: Python `RawFinding` schema acceptance of new fields
+4. Single docs commit (cross-repo) once Python side confirms shape
+
+**Lean.** Shape additions (additive); no breaking changes anticipated. Python side already accepts unknown JSON fields per ADR-017 inline-findings shape; new fields are zero-cost on Python side until consumed.
+
+### 2026-05-03 — Task 6.8: Pattern 2 env-var-binary at wiring tier (12 cumulative instances)
+
+**Pin (track-only).** SHIELDSCAN_<TOOL>_BINARY env-var-binary pattern (DEVELOPMENT-PATTERNS Pattern 2; promoted at 6.5) reaches 12 cumulative call sites at M6 close:
+
+| # | Layer | Instance | Resolved by |
+|---|---|---|---|
+| 1-9 | Tool packages | Each `Config.BinaryPath` doc reference | `buildRegistry` (cmd/worker) |
+| 10-11 | Recon helpers | Subfinder + httpx | `internal/tools/recon/recon.go::resolveBinary` |
+| 12 | Wiring (templates sibling) | `SHIELDSCAN_NUCLEI_TEMPLATES` | `buildRegistry` direct |
+
+Pattern continues to reinforce; nothing new architecturally. Track for sanity-check during M7 Docker service wiring (Pattern 2 doesn't apply to Docker — they use service URLs, not binaries; expect a sibling pattern to emerge).
+
+### 2026-05-03 — Task 6.8: resolveBinary 2nd instance (different layers; 3rd-instance promotion trigger preserved)
+
+**Pin (track-only).** `resolveBinary(envVar, toolName) (string, error)` now has 2 implementations:
+
+| # | Path | Scope | Decision |
+|---|---|---|---|
+| 1 | `internal/tools/recon/recon.go::resolveBinary` | package-private to `recon` | Lives where consumed (recon helpers self-resolve) |
+| 2 | `cmd/worker/binary_resolution.go::resolveBinary` | package-private to `main` | Lives at the wiring-assembly tier |
+
+**Explicit non-promotion at 2 instances** per H.E from M6.8 scope: the two helpers sit at **different architectural layers** (leaf tool package vs binary-assembly tier). Promotion to a shared `internal/binresolve` package would be premature abstraction — the two callers don't share lifecycle, dependency graph, or evolution pressure.
+
+**Promotion triggers preserved** for the future:
+- 3rd different-layer instance OR
+- 3rd wiring-tier instance
+
+If either fires, extract to `internal/binresolve` (or similar) and consolidate. Until then, the 2-instance state at different layers is the correct architectural placement.
+
 ### 2026-05-02 — Task 6.6: Nikto + Wapiti + CORStest runners + Pattern 4 promotion + 2 new parser shapes
 
 **Files shipped (single atomic engine commit):**

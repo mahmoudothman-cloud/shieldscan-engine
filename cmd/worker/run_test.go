@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +20,41 @@ import (
 	"github.com/odyssey/shieldscan-engine/internal/config"
 )
 
+// mockToolEnvs lists the 9 SHIELDSCAN_<TOOL>_BINARY env vars that
+// buildRegistry resolves at startup. Mirrors the spec table in
+// registry_wiring.go's buildRegistry. Adding a 10th tool requires
+// updating BOTH lists (no shared source — kept duplicate so the
+// production wiring stays declarative).
+var mockToolEnvs = []string{
+	"SHIELDSCAN_CHECKOV_BINARY",
+	"SHIELDSCAN_CORSTEST_BINARY",
+	"SHIELDSCAN_DEPCHECK_BINARY",
+	"SHIELDSCAN_GITLEAKS_BINARY",
+	"SHIELDSCAN_NIKTO_BINARY",
+	"SHIELDSCAN_NUCLEI_BINARY",
+	"SHIELDSCAN_SEMGREP_BINARY",
+	"SHIELDSCAN_SSLYZE_BINARY",
+	"SHIELDSCAN_WAPITI_BINARY",
+}
+
+// installMockBinaries creates 9 executable shell-script mock
+// binaries in t.TempDir() and points each SHIELDSCAN_<TOOL>_BINARY
+// env var at one of them. Reuses the 6.7 framework-test mock pattern
+// (shell-script with executable bit). Sufficient for Phase 1's
+// stat+0o111 verification; jobs are never dispatched to these mocks
+// in cmd/worker tests (no jobs queued).
+func installMockBinaries(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	for _, env := range mockToolEnvs {
+		// e.g. SHIELDSCAN_NUCLEI_BINARY → "nuclei"
+		base := strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(env, "SHIELDSCAN_"), "_BINARY"))
+		path := filepath.Join(dir, base)
+		require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+		t.Setenv(env, path)
+	}
+}
+
 // TestMain wires goleak.VerifyTestMain — load-bearing because
 // runMain spawns the heartbeat + Worker goroutines. Leak detection
 // here is the ADR-021 Rule 2 forcing function for the full assembly.
@@ -28,9 +66,15 @@ func TestMain(m *testing.M) {
 }
 
 // runMainFixture spins up miniredis + builds the runMainDeps. Auto-
-// cleans via t.Cleanup.
+// cleans via t.Cleanup. Also installs 9 mock tool binaries via
+// t.Setenv so buildRegistry's binary-resolution succeeds without
+// the real tools being on $PATH (per H.F mock infrastructure).
+// Mocks are shell-script no-ops sufficient to satisfy Phase 1
+// stat+executable-bit verification.
 func runMainFixture(t *testing.T) (runMainDeps, *miniredis.Miniredis, *redis.Client) {
 	t.Helper()
+	installMockBinaries(t)
+
 	mr := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
@@ -138,6 +182,119 @@ func TestRunMain_StartupFailureExitsOne(t *testing.T) {
 	code := runMain(ctx, deps)
 
 	assert.Equal(t, 1, code, "startup failure returns exit code 1")
+}
+
+// TestBuildRegistry_RegistersAllNineTools pins the M6 CLOSE wiring:
+// buildRegistry returns a Registry with exactly 9 engines, in
+// alphabetical order. Adding a 10th tool requires updating the
+// expected list and the spec table in registry_wiring.go.
+func TestBuildRegistry_RegistersAllNineTools(t *testing.T) {
+	installMockBinaries(t)
+
+	registry, _, err := buildRegistry(zerolog.Nop())
+	require.NoError(t, err)
+
+	got := registry.Engines()
+	want := []string{
+		"checkov", "corstest", "depcheck", "gitleaks", "nikto",
+		"nuclei", "semgrep", "sslyze", "wapiti",
+	}
+	assert.Equal(t, want, got, "9 engines registered alphabetically")
+}
+
+// TestBuildRegistry_NativeBinariesMatchEngines pins that buildRegistry
+// returns a NativeBinary list matching the registered engines (Phase 1
+// stat-checks every binary that backs a runner — drift between the
+// two lists would cause a missing-binary warning OR a registered
+// runner whose binary was never verified).
+func TestBuildRegistry_NativeBinariesMatchEngines(t *testing.T) {
+	installMockBinaries(t)
+
+	registry, natives, err := buildRegistry(zerolog.Nop())
+	require.NoError(t, err)
+	require.Len(t, natives, 9, "9 NativeBinary entries — one per registered runner")
+
+	engines := registry.Engines()
+	nativeNames := make([]string, len(natives))
+	for i, n := range natives {
+		nativeNames[i] = n.Name
+		assert.NotEmpty(t, n.Path, "binary path resolved for %s", n.Name)
+	}
+	// Sort independent: natives is in spec order; engines is sorted.
+	assert.ElementsMatch(t, engines, nativeNames, "NativeBinary names ↔ Registry engines bijection")
+}
+
+// TestBuildRegistry_FailFastOnMissingBinary pins fail-fast wiring:
+// when one tool's binary cannot be resolved (env unset AND not on
+// $PATH), buildRegistry returns an error naming the failing tool.
+// runMain converts this to exit code 1.
+func TestBuildRegistry_FailFastOnMissingBinary(t *testing.T) {
+	installMockBinaries(t)
+
+	// Sabotage one tool: clear its env var AND poison PATH so the
+	// fallback fails too. Easiest way is to point the env at empty
+	// AND override PATH for this test to a directory without the
+	// real binary.
+	t.Setenv("SHIELDSCAN_NUCLEI_BINARY", "")
+	t.Setenv("PATH", t.TempDir()) // no nuclei here
+
+	_, _, err := buildRegistry(zerolog.Nop())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nuclei", "error names the failing tool for remediation")
+}
+
+// TestRunMain_NoEmptyRegistryWarning pins the M6 CLOSE acceptance
+// criterion: with all 9 binaries resolved, the empty-registry WARN
+// from internal/worker/startup.go (added at 5.6 with explicit M6+
+// forward-pin) MUST NOT fire. Closes the 5.6 forward-pin.
+//
+// Mechanism: capture the worker's log output via a custom zerolog
+// writer; assert the WARN substring is absent. Mocked binaries are
+// sufficient for Phase 1 verification + the empty-registry check
+// (which only inspects len(registry.Engines())).
+func TestRunMain_NoEmptyRegistryWarning(t *testing.T) {
+	deps, _, _ := runMainFixture(t)
+
+	buf := &strings.Builder{}
+	sw := &syncWriter{w: buf}
+	deps.Logger = zerolog.New(sw)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	exitCh := make(chan int, 1)
+	go func() { exitCh <- runMain(ctx, deps) }()
+
+	// Let startup complete.
+	require.Eventually(t, func() bool {
+		sw.mu.Lock()
+		defer sw.mu.Unlock()
+		return strings.Contains(buf.String(), "phase 4 worker registration complete")
+	}, 3*time.Second, 50*time.Millisecond, "phase 4 should complete")
+
+	cancel()
+	<-exitCh
+
+	sw.mu.Lock()
+	logs := buf.String()
+	sw.mu.Unlock()
+	assert.NotContains(t, logs, "worker started with empty registry",
+		"M6 CLOSE: empty-registry WARN must not fire when 9 runners are registered")
+	assert.Contains(t, logs, "registered_engines",
+		"non-empty registry path emits Info with registered engines list")
+}
+
+// syncWriter wraps a strings.Builder with a no-op mutex so the
+// zerolog Logger (used concurrently by multiple goroutines —
+// heartbeat + worker.Run) writes safely. strings.Builder.Write is
+// not goroutine-safe; without this, -race trips.
+type syncWriter struct {
+	mu sync.Mutex
+	w  *strings.Builder
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
 }
 
 // TestShortUUID_Distinct pins worker ID uniqueness: two calls produce

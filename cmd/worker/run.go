@@ -12,7 +12,6 @@ import (
 
 	"github.com/odyssey/shieldscan-engine/internal/config"
 	rdsh "github.com/odyssey/shieldscan-engine/internal/redis"
-	"github.com/odyssey/shieldscan-engine/internal/tools"
 	"github.com/odyssey/shieldscan-engine/internal/worker"
 )
 
@@ -50,8 +49,19 @@ func runMain(ctx context.Context, deps runMainDeps) int {
 	log := deps.Logger
 	client := deps.Redis
 
-	// Empty registry at 5.6; M6+ task constructors populate engines.
-	registry := worker.NewRegistry(map[string]tools.ToolRunner{})
+	// Build the M6 ToolRunner registry. buildRegistry resolves binary
+	// paths via DEVELOPMENT-PATTERNS Pattern 2 (env first, $PATH
+	// fallback, fail-fast on missing) and constructs all 9 runners.
+	//
+	// Recon helpers (Subfinder + httpx) are intentionally NOT
+	// registered here per ADR-022 — see buildRegistry's docstring.
+	// M8 (Recon-First Pipeline) imports internal/tools/recon and
+	// invokes recon.RunRecon directly.
+	registry, natives, err := buildRegistry(log)
+	if err != nil {
+		log.Error().Err(err).Msg("registry wiring failed")
+		return 1
+	}
 
 	// Build Processor + Worker via convenience constructor.
 	processor := worker.NewProcessorFromRedis(registry, client, log)
@@ -76,13 +86,15 @@ func runMain(ctx context.Context, deps runMainDeps) int {
 		"engines":     registry.Engines(),
 	}, log)
 
-	// Run startup sequence.
+	// Run startup sequence. NativeTools populated at 6.8 (M6 CLOSE)
+	// from buildRegistry's resolved binaries; Phase 1 stat-checks
+	// each path. DockerSvcs remains empty until M7 (Docker service
+	// tools) populates it via DockerServiceRunner instances.
 	startup := worker.NewStartup(worker.StartupDeps{
-		Registry:  registry,
-		Heartbeat: heartbeat,
-		Logger:    log,
-		// NativeTools / DockerSvcs empty at 5.6; M6+ populates
-		// via these fields when task constructors register tools.
+		Registry:    registry,
+		NativeTools: natives,
+		Heartbeat:   heartbeat,
+		Logger:      log,
 	})
 	if err := startup.Run(ctx); err != nil {
 		log.Error().Err(err).Msg("startup failed")
