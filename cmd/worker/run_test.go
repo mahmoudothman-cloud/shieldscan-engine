@@ -161,8 +161,17 @@ func TestRunMain_HeartbeatRefreshesTTL(t *testing.T) {
 	exitCh := make(chan int, 1)
 	go func() { exitCh <- runMain(ctx, deps) }()
 
+	// Don't call findWorkerKey (which uses require.X) inside the
+	// Eventually callback — testify v1.11+ propagates require failures
+	// from Eventually callbacks immediately rather than retrying. Use
+	// plain bool returns inside the callback; defer require.X to
+	// post-Eventually verification.
 	require.Eventually(t, func() bool {
-		ttl, err := client.TTL(t.Context(), "shieldscan:workers:"+findWorkerKey(t, client)).Result()
+		keys, err := client.Keys(t.Context(), "shieldscan:workers:*").Result()
+		if err != nil || len(keys) == 0 {
+			return false
+		}
+		ttl, err := client.TTL(t.Context(), keys[0]).Result()
 		return err == nil && ttl > 0
 	}, 2*time.Second, 50*time.Millisecond, "worker key should have positive TTL")
 
@@ -314,15 +323,4 @@ func TestGenerateWorkerID_Format(t *testing.T) {
 	// Last segment should be 8 hex chars.
 	last := parts[len(parts)-1]
 	assert.Len(t, last, 8, "last segment is 8-char UUID")
-}
-
-// findWorkerKey is a small helper for tests that need the worker_id
-// suffix from the Redis key. Returns the suffix portion (after the
-// "shieldscan:workers:" prefix).
-func findWorkerKey(t *testing.T, client *redis.Client) string {
-	t.Helper()
-	keys, err := client.Keys(t.Context(), "shieldscan:workers:*").Result()
-	require.NoError(t, err)
-	require.NotEmpty(t, keys, "no worker key found")
-	return strings.TrimPrefix(keys[0], "shieldscan:workers:")
 }

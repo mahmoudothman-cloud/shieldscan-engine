@@ -8,6 +8,188 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-05-04 — Task 7.5a (Warm Pool Primitive + DockerRunner Framework)
+
+**Closes Task 7.5a per IMPLEMENTATION-PLAN.** Lands warm pool primitive
+(`internal/tools/docker/warmpool.go`) + DockerRunner framework type
+(`internal/tools/docker/dockerrunner.go`) + Container Docker SDK
+abstraction (`internal/tools/docker/container.go`) + comprehensive
+test coverage (43 tests across 4 test files in
+`internal/tools/docker/`). All 20 packages green under
+`go test -race -count=1`; golangci-lint 0 issues.
+
+### Entry 1: ADR-026 lands (5th asymmetric-cost ADR in project corpus)
+
+ADR-026 "DockerRunner framework + lazy warm pool — M7 container
+lifecycle architecture" is the project corpus's 5th ADR invoking
+the asymmetric-cost meta-principle (after ADR-022, ADR-023,
+ADR-024, ADR-025). The pattern is well-established norm; promotion
+candidate to DEVELOPMENT-PATTERNS at next architectural decision-
+point. ADR-026 full text lands in `shieldscan-docs/SPECIFICATION.md`
+§13 separately (post-implementation per Mahmoud handling — see
+Entry 7).
+
+### Entry 2: Two-runner-type architecture confirmed (Option β resolution)
+
+Per pre-design SPEC scan, ADR-006 + ADR-008 + SPEC §3 architecture
+diagram explicitly specify two distinct Docker-tool runner types:
+DockerRunner (CLI-shaped; warm pool) + DockerServiceRunner (HTTP-
+shaped; persistent services). Brainstorming initially anticipated
+all M7 tools using the warm pool; the SPEC scan caught this before
+the design doc landed. Option β resolution preserved warm pool
+primitive scope for CLI tools (Trivy, Nmap, SQLMap) while deferring
+ZAP + MobSF to a future Task 7.5b DockerServiceRunner.
+
+`internal/tools/runner.go` package docstring updated at this
+commit to reflect actual M7.x consumer assignments (Trivy + SQLMap
+moved from DockerServiceRunner to DockerRunner per Option β; the
+previous docstring at runner.go lines 18-23 was stale pre-
+brainstorming and listed Trivy + SQLMap under DockerServiceRunner).
+
+### Entry 3: Lazy warm pool semantics
+
+Pool starts empty; first checkout triggers spin-up; max-bound
+prevents runaway resource usage. Resource floor is zero for unused
+tools — customers running only SAST scans pay zero container cost
+for the Trivy / Nmap / SQLMap pools. Pinned by
+`TestWarmPool_Checkout_LazySpinUpOnFirstCall`.
+
+### Entry 4: Cleanup hook contract + explicit NoCleanup
+
+Per-tool `CleanupFunc` runs between checkouts to guarantee tenant
+isolation (no state leak between scans). Stateless tools must use
+exported `NoCleanup` explicitly — no nil functions allowed; New
+returns an error if `cfg.Cleanup == nil`. Statelessness is
+architecturally visible; future engineers reading per-tool
+constructors see the explicit cleanup contract for every tool.
+
+### Entry 5: 15 deviations across Phases 0-3 (verify-then-adapt-then-document discipline)
+
+The verify-then-adapt-then-document discipline established during
+M6-close-followup work continued to operate cleanly. Total 15
+factual / mechanical deviations; **zero architectural deviations**
+needing pause.
+
+**Phase 0 (3 deviations):**
+1. Docker SDK `+incompatible` versioning quirk (canonical Docker
+   SDK module-system gap). Auto-document.
+2. `internal/tools/docker_service.go` (M5.3 DockerServiceRunner) vs
+   new `internal/tools/docker/` package conceptual overlap.
+   Auto-document via package docstring on the new package.
+3. `runner.go` package docstring stale (Trivy / SQLMap listed under
+   DockerServiceRunner pre-Option-β). Fixed at Phase 4.
+
+**Phase 1 (4 deviations):**
+4. Docker SDK API drift v20.x → v28.5.2 substantial: 9 type
+   relocations (`types.ImagePullOptions` → `image.PullOptions`;
+   `types.ContainerStartOptions` → `container.StartOptions`;
+   `types.ExecConfig` → `container.ExecOptions`;
+   `types.ExecStartCheck` → `container.ExecAttachOptions`;
+   `types.IDResponse` → `container.ExecCreateResponse`;
+   `types.ContainerExecInspect` → `container.ExecInspect`;
+   `types.ContainerRemoveOptions` → `container.RemoveOptions`;
+   `v1.Platform` → `ocispec.Platform`; HijackedResponse adapter
+   layer added). All verified via `go doc` against installed SDK.
+5. `productionClient` adapter pattern added (`client_adapter.go`)
+   to bridge `*client.Client` → package-local `dockerClient`
+   interface. The interface returns package-local `HijackedResponse`
+   (Reader + Close) for testability; production wraps the SDK type.
+6. `testify v1.9.0 → v1.11.1` auto-bump (forced by OpenTelemetry
+   transitives pulled in via Docker SDK) broke pre-existing
+   `TestRunMain_HeartbeatRefreshesTTL` via `require.Eventually`
+   callback semantics change in testify v1.11+. Refactored test to
+   use plain bool returns inside `Eventually` (anti-pattern fix;
+   project posture strictly better post-fix). Removed now-unused
+   `findWorkerKey` helper.
+
+**Phase 2 (3 deviations) — LOAD-BEARING CONCURRENCY BUGS IN VERBATIM:**
+7. Verbatim `WarmPool.Shutdown` closed `available` channel; races
+   with `Return`'s send-to-closed-channel and **panics**. Fix:
+   separate `done chan struct{}` for shutdown signal; `available`
+   never closed; `Shutdown` drains under mutex; closed-flag check
+   + send atomic.
+8. Verbatim blocking `Checkout` blocking-select didn't observe
+   shutdown signal — silent nil-Container hazard if Shutdown
+   closed `available` (which it doesn't post-fix-7, but the
+   discipline applies). Fix: `<-p.done` in blocking-select. Pinned
+   by `TestWarmPool_Shutdown_UnblocksWaitingCheckout`.
+9. Verbatim health-check replacement size leak: `_ = c.Stop(ctx);
+   p.size--; return p.spinUp(ctx)` — `spinUp` creates new
+   container that should count in `size`, but the verbatim never
+   re-incremented. Net effect: size leaks downward by one per
+   replacement. Fix: replacement is **size-neutral on success**;
+   `size--` only on `spinUp` failure.
+
+**Phase 3 (5 deviations):**
+10. Default timeout 30 min (matches `tools.DefaultNativeTimeout`);
+    verbatim said 10 min.
+11. 3-tier timeout precedence extracted to `effectiveTimeout(cfg)`
+    method symmetric with `internal/tools/native.go:297`. Operator
+    UX symmetric across NativeRunner + DockerRunner.
+12. Finding enrichment loop honors ToolRunner contract per
+    `runner.go` lines 65-69 docstring: ToolName / EngineCategory /
+    DiscoveredAt / Fingerprint populated by the runner, NOT by
+    ParseOutput. Mirrors `internal/tools/native.go:284-289`. Pinned
+    by `TestDockerRunner_Run_ReturnsParsedFindingsEnriched`.
+13. `context.WithoutCancel(ctx)` for `defer Return` cleanup avoids
+    canceled-ctx-during-cleanup hazard. If Run hits its timeout,
+    `runCtx` is canceled — but Return's cleanup hook still needs
+    to run. Detached ctx with 30s grace bound. Matches the M6.7
+    Wapiti file-output cleanup pattern (see Entry 6 below).
+14. `stubDockerClient.ContainerExecAttach` returns
+    `HijackedResponse{Reader: strings.NewReader("")}` — an empty
+    valid Reader — instead of nil. `stdcopy.StdCopy(.., .., nil)`
+    panics; the empty-reader fix prevents Phase 3 full-Run-path
+    tests from panicking.
+
+### Entry 6: New tracked patterns at 1st / 2nd instance
+
+**Pattern: Cleanup-uses-parent-context anti-pattern (2nd instance).**
+- 1st: M6.7 Wapiti file-output cleanup using parent ctx that hit
+  timeout
+- 2nd: M7.5a `DockerRunner.Run` defer Return — fixed via
+  `context.WithoutCancel(ctx)` + 30s grace
+- Track for 3rd-instance promotion to DEVELOPMENT-PATTERNS
+
+**Pattern: Compile-time interface assertion (`var _ Iface = (*Type)(nil)`).**
+- 1st: NativeRunner (`internal/tools/native.go:147`)
+- 2nd: DockerRunner (`internal/tools/docker/dockerrunner.go`)
+- Track for 3rd-instance promotion if reused for other framework
+  types (e.g., DockerServiceRunner explicit assertion at Task 7.5b)
+
+**Pattern: dockerClient interface boundary with productionClient
+adapter for SDK testability (1st instance).**
+- 1st: `internal/tools/docker/{dockerClient interface, productionClient}`
+- Track for 3rd-instance promotion if reused for other SDK
+  abstractions (AWS SDK, GCP SDK in future tasks)
+
+### Entry 7: M7 task structure confirmed (7 tasks not 6)
+
+The pre-brainstorming IMPLEMENTATION-PLAN listed 6 M7 tasks. Option
+β resolution split Task 7.5 into 7.5a (this commit; warm pool +
+DockerRunner) + 7.5b (future; DockerServiceRunner) — making M7 a
+7-task milestone:
+
+| Task | Scope | Runner type |
+|---|---|---|
+| 7.5a | Warm pool + DockerRunner framework (this task; **CLOSED**) | — |
+| 7.5b | DockerServiceRunner framework (future) | — |
+| 7.1 | Trivy (DockerRunner consumer; per-task brainstorm) | DockerRunner |
+| 7.2 | Nmap (DockerRunner consumer; per-task brainstorm) | DockerRunner |
+| 7.3 | ZAP (DockerServiceRunner consumer; per-task brainstorm) | DockerServiceRunner |
+| 7.4 | MobSF (DockerServiceRunner consumer; per-task brainstorm) | DockerServiceRunner |
+| 7.6 | SQLMap (DockerRunner consumer; per-task brainstorm) | DockerRunner |
+
+ADR-026 + design doc revisions in `shieldscan-docs` follow post-
+implementation (Mahmoud handles separately; see also adjustments
+needed: §3.2 WarmPool code shape corrections from Phase 2 deviations
+7-9; §6 Forcing functions section addition for done-channel
+test pin; §6 Anti-patterns section additions for channel-close-as-
+signal + decrement-without-increment-accounting; §9 Phase 2 design-
+doc concurrency-bug acknowledgment).
+
+---
+
 ## 2026-05-03 — SPEC §7.3 Phase 4 (cross-repo verification — task closed)
 
 **Phase 4 closes M6-close-followup task.** Cross-repo

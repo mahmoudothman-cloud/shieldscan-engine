@@ -15,12 +15,29 @@
 //   - ADR-021: ctx propagation is mandatory. Run takes ctx and
 //     subprocesses spawn via exec.CommandContext.
 //
-// Concrete implementations:
-//   - NativeRunner (this package, Task 5.2) — subprocess wrapper for
-//     binaries on the worker filesystem (Nuclei, Semgrep, Subfinder,
-//     etc.).
-//   - DockerServiceRunner (Task 5.3) — HTTP API wrapper for persistent
-//     Docker services (MobSF, ZAP, Trivy, SQLMap).
+// Three concrete ToolRunner implementations exist:
+//
+//   - NativeRunner (M5.2 + ADR-023 OutputFile mode):
+//     subprocess wrapper for native CLI binaries (Nuclei, Semgrep,
+//     Gitleaks, SSLyze, Dep-Check, Checkov, Nikto, Wapiti, CORStest).
+//     Lives at internal/tools/native.go.
+//
+//   - DockerRunner (M7.5a + ADR-026):
+//     warm-pool wrapper for short-lived CLI-shaped Docker tools
+//     (Trivy, Nmap, SQLMap). Containers are pre-warmed lazily;
+//     reused with cleanup hook between checkouts. Lives at
+//     internal/tools/docker/dockerrunner.go.
+//
+//   - DockerServiceRunner (M5.3 + ADR-006 + ADR-008):
+//     HTTP-API wrapper for persistent Docker services (MobSF, ZAP).
+//     Long-lived service containers; runner makes HTTP requests.
+//     Lives at internal/tools/docker_service.go.
+//
+// Per Option β resolution at M7.5a brainstorming: Trivy + SQLMap
+// route through DockerRunner (warm pool semantics fit short-lived
+// CLI invocations) NOT through DockerServiceRunner. The pre-M7.5a
+// docstring listed them under DockerServiceRunner; that listing was
+// stale and is corrected here per ADR-026 consumer assignments.
 package tools
 
 import (
