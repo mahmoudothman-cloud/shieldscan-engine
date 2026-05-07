@@ -369,4 +369,139 @@ Pattern promoted at M6.6; cross-references explicit instances at
 
 ---
 
-*Last updated: 2026-05-02 at Task 6.6.*
+## 5. Cleanup uses detached context
+
+**Promoted at Task 7.2 with 3 instances.** 3rd-instance threshold met per ADR-026 §Triggers-to-revisit #3.
+
+When `defer cleanup` runs after the parent context is cancelled
+(timeout, shutdown, error propagation), using parent context for
+cleanup makes cleanup fail-fast against an already-cancelled context.
+The fix is a **detached context** for cleanup work.
+
+### Shape
+
+```go
+// ANTI-PATTERN — DO NOT USE
+func Run(ctx context.Context, ...) error {
+    runCtx, cancel := context.WithTimeout(ctx, timeout)
+    defer cancel()
+
+    resource, err := acquire(runCtx)
+    if err != nil { return err }
+    defer release(runCtx, resource)  // ← BUG: runCtx is cancelled by the time this runs
+
+    return doWork(runCtx, resource)
+}
+```
+
+```go
+// CORRECT — Option (a): in-scope cleanup with values preserved
+defer func() {
+    cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+    defer cancel()
+    if err := release(cleanupCtx, resource); err != nil {
+        log.Warn().Err(err).Msg("release failed")
+    }
+}()
+```
+
+```go
+// CORRECT — Option (b): full lifecycle separation; suitable for shutdown paths
+shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+for _, resource := range resources {
+    if err := resource.Shutdown(shutdownCtx); err != nil {
+        log.Error().Err(err).Msg("resource shutdown failed")
+    }
+}
+```
+
+### Why
+
+If `doWork` hits its timeout or returns error, `runCtx` is cancelled.
+The deferred `release(runCtx, resource)` then runs against a cancelled
+context — release fails fast; cleanup hook never executes; resource
+lingers in stale state OR returns error that may mask the original
+error. Resource leaks under load (load test that triggers context
+cancellation cascades into resource exhaustion via leaked containers
+/ files / connections).
+
+The fix uses a detached cleanup context — either
+`context.WithoutCancel(parent) + timeout` (preserves values like
+logger context, trace IDs) or `context.Background() + timeout`
+(full lifecycle separation when parent context has already cancelled
+and value inheritance is unnecessary).
+
+### Instances
+
+| Instance | Location | Pattern Used |
+|---|---|---|
+| 1 (M6.7) | Wapiti file-output cleanup at `internal/tools/wapiti/` | Option (a) — first instance; established the detached-cleanup intuition |
+| 2 (Task 7.5a) | DockerRunner.Run defer Pool.Return at `internal/tools/docker/dockerrunner.go` | Option (a) — `context.WithoutCancel(ctx)` + 30s timeout; preserves logger context; ADR-026 §Forcing functions documents this |
+| 3 (Task 7.2) | Worker drain pool shutdown at `cmd/worker/run.go` | Option (b) — `context.Background()` + 30s grace; lifecycle boundary; parent worker ctx already cancelled |
+
+### When to use
+
+Apply this pattern whenever:
+
+1. A `defer` cleanup function runs after parent context is cancelled
+2. The cleanup hook needs to execute work (network calls, container
+   shutdown, file writes) requiring a non-cancelled context
+3. Cleanup correctness is load-bearing for resource integrity
+   (not just best-effort logging)
+
+Choice between options:
+
+- **Option (a) `context.WithoutCancel(parent)`**: cleanup happens
+  within Run/Process/Handler scope; want to inherit logger/trace/
+  tenant context; cleanup is logically part of same operation
+- **Option (b) `context.Background()`**: cleanup happens at lifecycle
+  boundaries (shutdown, drain, restart); parent context has already
+  cancelled; cleanup is independent of primary operation's scope
+
+Pattern does NOT apply when cleanup is purely synchronous in-process
+state mutation (closing a `chan` doesn't need ctx); cleanup is
+best-effort logging that can fail-fast safely; parent context is
+guaranteed live at defer execution.
+
+### Anti-patterns this prevents
+
+- **Decrement-without-cleanup:** parent-cancelled cleanup may
+  decrement resource counts without actually releasing resources,
+  leaking resource handles.
+- **Silent partial failure:** failing cleanup masked by primary-
+  context cancellation; engineer reads failed scan job + sees
+  "context cancelled" without realizing cleanup hook never ran.
+- **Resource leak under load:** load test that triggers context
+  cancellation (timeouts, deadlines) cascades into resource
+  exhaustion via leaked containers/files/connections.
+
+### Trigger to revisit
+
+- **4th instance lands** → pattern is well-established; further
+  instances confirm rather than evolve it.
+- **Cleanup-contract semantics shift** → if a future architectural
+  decision requires cleanup hooks to receive parent-context
+  cancellation as signal (e.g., "abort cleanup if scan is
+  force-killed"), this pattern needs reconciliation.
+- **`context.WithoutCancel` deprecation** → Go 1.21+ added the
+  function; if Go ecosystem deprecates it, migration to
+  `context.Background()` everywhere becomes the canonical choice.
+
+### Cross-references
+
+- ADR-021 (Context discipline; foundational ctx propagation).
+- ADR-026 §Forcing functions (DockerRunner.Run usage of
+  `context.WithoutCancel`).
+- ADR-026 §Triggers-to-revisit #3 (3rd-instance threshold trigger
+  that promoted this pattern).
+- Task 7.2 commit `872b2b0` (3rd instance landed in
+  `cmd/worker/run.go` drain path).
+- Task 7.5a commit `f5d77c8` (2nd instance in
+  `internal/tools/docker/dockerrunner.go`).
+- shieldscan-docs commit `aa0d034` §10 (Task 7.2 design doc
+  post-implementation acknowledgment).
+
+---
+
+*Last updated: 2026-05-06 at Task 7.2 Phase 5.C.*
