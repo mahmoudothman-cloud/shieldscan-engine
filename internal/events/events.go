@@ -156,7 +156,19 @@ type RawFinding struct {
 	CVSSVector     string   `json:"cvss_vector,omitempty"`
 	AdditionalCWEs []string `json:"additional_cwes,omitempty"`
 
-	// Metadata
+	// Metadata carries per-tool structured payload as key-value pairs.
+	// Nil for tools that don't emit structured metadata. Per ADR-027
+	// (lands as Phase 5 docs followup of Task 7.2).
+	//
+	// Currently consumed by Nmap (host, port, protocol, service, product,
+	// version, extra_info, target keys); future consumers (Trivy, SQLMap,
+	// ZAP, MobSF) inherit the Metadata pattern.
+	//
+	// M9 AI Pipeline + M8 Recon-First Pipeline consume Metadata downstream
+	// for CVE matching and recon-helper input respectively.
+	Metadata map[string]string `json:"metadata,omitempty"`
+
+	// Provenance + identity
 	RawOutputRef string `json:"raw_output_ref,omitempty"`
 	DiscoveredAt string `json:"discovered_at,omitempty"` // RFC3339
 	Fingerprint  string `json:"fingerprint,omitempty"`

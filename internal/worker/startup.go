@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"github.com/rs/zerolog"
+
+	"github.com/odyssey/shieldscan-engine/internal/tools/docker"
 )
 
 // NativeBinary describes a native scan tool whose binary should be
@@ -35,9 +37,12 @@ type dockerHealthChecker interface {
 //
 //	reason; M7 task scope decides per-tool fail-fast opt-in).
 //
-// Phase 3: warm pool init — DEFERRED to M7.5 (Nmap-specific). Not
+// Phase 3: warm pool init — Task 7.2 D4 lock; pools list passed by
 //
-//	invoked at 5.6.
+//	cmd/worker/docker_wiring.go's buildDockerRegistry. Phase 3
+//	logs the pool count; pool shutdown is wired into run.go's
+//	drain path (not Startup) since pool shutdown happens AFTER
+//	worker drain, not at startup time.
 //
 // Phase 4: worker registration via Heartbeat.WriteOnce (fail-fast —
 //
@@ -47,6 +52,7 @@ type StartupDeps struct {
 	Registry    *Registry
 	NativeTools []NativeBinary
 	DockerSvcs  []dockerHealthChecker
+	WarmPools   []*docker.WarmPool
 	Heartbeat   *Heartbeat
 	Logger      zerolog.Logger
 }
@@ -56,6 +62,7 @@ type Startup struct {
 	registry    *Registry
 	nativeTools []NativeBinary
 	dockerSvcs  []dockerHealthChecker
+	warmPools   []*docker.WarmPool
 	heartbeat   *Heartbeat
 	log         zerolog.Logger
 }
@@ -74,6 +81,7 @@ func NewStartup(deps StartupDeps) *Startup {
 		registry:    deps.Registry,
 		nativeTools: deps.NativeTools,
 		dockerSvcs:  deps.DockerSvcs,
+		warmPools:   deps.WarmPools,
 		heartbeat:   deps.Heartbeat,
 		log:         deps.Logger,
 	}
@@ -90,8 +98,16 @@ func (s *Startup) Run(ctx context.Context) error {
 	// Phase 2: Docker services.
 	s.checkDockerServices(ctx)
 
-	// Phase 3: warm pool — deferred to M7.5.
-	s.log.Debug().Msg("phase 3 (warm pool init) deferred to M7.5")
+	// Phase 3: warm pool init — Task 7.2 D4 lock; pools constructed
+	// lazily so spin-up is on first Checkout. Phase 3 logs the count;
+	// shutdown is orchestrated by runMain alongside worker drain.
+	if len(s.warmPools) == 0 {
+		s.log.Debug().Msg("phase 3 (warm pool init): none configured")
+	} else {
+		s.log.Info().
+			Int("count", len(s.warmPools)).
+			Msg("phase 3 (warm pool init): pools registered (lazy spin-up on first checkout)")
+	}
 
 	// Phase 4: worker registration (fail-fast).
 	if err := s.heartbeat.WriteOnce(ctx); err != nil {

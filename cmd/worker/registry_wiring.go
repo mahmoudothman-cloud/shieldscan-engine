@@ -59,7 +59,7 @@ const nucleiDefaultRPS = 50
 // failing tool's name and returned. runMain treats this as exit 1
 // (startup failure) — operationally preferable to silently
 // registering a runner that points at a missing binary.
-func buildRegistry(log zerolog.Logger) (*worker.Registry, []worker.NativeBinary, error) {
+func buildRegistry(log zerolog.Logger) (map[string]tools.ToolRunner, []worker.NativeBinary, error) {
 	// Tool spec drives both registration and Phase 1 NativeBinary list.
 	// Defined inline (not as a package-level var) so tests building
 	// alternative wiring shapes don't pick up shared mutable state.
@@ -120,5 +120,5 @@ func buildRegistry(log zerolog.Logger) (*worker.Registry, []worker.NativeBinary,
 		"wapiti":  wapiti.NewWapitiRunner(wapiti.Config{BinaryPath: paths["wapiti"]}, log),
 	}
 
-	return worker.NewRegistry(runners), natives, nil
+	return runners, natives, nil
 }

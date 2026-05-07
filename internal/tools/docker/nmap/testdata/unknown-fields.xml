@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -sT -sV -oX - 192.0.2.60" start="1778156974" version="7.94" xmloutputversion="1.05" future_top_attr="forward-compat">
+<scaninfo type="connect" protocol="tcp" numservices="1000"/>
+<future_top_element>this element does not exist in our struct</future_top_element>
+<host starttime="1778156975" endtime="1778156987" future_host_attr="ignored"><status state="up" reason="reset" reason_ttl="44"/>
+<address addr="192.0.2.60" addrtype="ipv4"/>
+<future_host_child>data</future_host_child>
+<ports>
+<port protocol="tcp" portid="80" future_port_attr="ignored"><state state="open" reason="syn-ack" reason_ttl="0"/><service name="http" product="Apache httpd" version="2.4.7" method="probed" conf="10"><cpe>cpe:/a:apache:http_server:2.4.7</cpe><future_service_child>data</future_service_child></service></port>
+</ports>
+</host>
+<runstats><finished time="1778156987" elapsed="12.07" exit="success"/><hosts up="1" down="0" total="1"/></runstats>
+</nmaprun>

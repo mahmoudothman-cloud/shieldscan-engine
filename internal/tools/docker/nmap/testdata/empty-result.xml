@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -sT -sV -oX - 192.0.2.20" start="1778156974" version="7.94" xmloutputversion="1.05">
+<scaninfo type="connect" protocol="tcp" numservices="1000"/>
+<host starttime="1778156975" endtime="1778156987"><status state="up" reason="reset" reason_ttl="44"/>
+<address addr="192.0.2.20" addrtype="ipv4"/>
+<ports><extraports state="closed" count="1000">
+<extrareasons reason="conn-refused" count="1000" proto="tcp"/>
+</extraports>
+</ports>
+</host>
+<runstats><finished time="1778156987" elapsed="5.20" exit="success"/><hosts up="1" down="0" total="1"/></runstats>
+</nmaprun>

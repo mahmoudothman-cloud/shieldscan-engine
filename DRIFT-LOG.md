@@ -8,6 +8,187 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-05-06 — Task 7.2 (Nmap as first DockerRunner consumer)
+
+**Closes Task 7.2 engine-side per IMPLEMENTATION-PLAN.** Lands Nmap as the first
+DockerRunner consumer per ADR-026 framework. Validates the framework against
+real tool integration; establishes per-tool-task pattern for future Trivy +
+SQLMap + ZAP + MobSF consumers. All 21 packages green under `go test -race
+-count=1`; golangci-lint 0 issues.
+
+### Entry 1: ADR-027 + cleanup-uses-parent-context promotion forward-pinned to Phase 5
+
+ADR-027 "RawFinding.Metadata field for per-tool structured payload" is the
+project corpus's 6th asymmetric-cost ADR (after ADR-022, ADR-023, ADR-024,
+ADR-025, ADR-026). Lands in shieldscan-docs Phase 5 docs followup alongside
+SPEC §7.3 RawFinding schema extension. ADR-027 was the load-bearing
+architectural decision from Task 7.2 brainstorming Decision 1; ungrounded
+in implementation reality at brainstorming time, now grounded in actual
+nmap/parser.go RawFinding.Metadata population.
+
+Cleanup-uses-parent-context anti-pattern hit 3rd instance per ADR-026
+§Triggers-to-revisit #3. Instances:
+  - M6.7 Wapiti file-output cleanup (1st)
+  - ADR-026 DockerRunner.Run defer Pool.Return via context.WithoutCancel (2nd)
+  - Task 7.2 runMain pool shutdown via context.Background() + 30s grace (3rd)
+
+DEVELOPMENT-PATTERNS entry warranted; lands in Phase 5 alongside ADR-027.
+
+### Entry 2: Schema extensions backward-compatible
+
+ScanConfig gained two top-level fields per Task 7.2 Decision 2:
+  - Ports string (Nmap-specific port range; "" or "top-1000" defaults to
+    Nmap top-1000 behavior; explicit values like "80,443" or "1-65535"
+    pass through to -p flag)
+  - AllowPrivateTargets bool (defense-in-depth flag; defaults false;
+    tenant-controllable for legitimate internal-network scanning with
+    VPN/peered worker access)
+
+RawFinding gained one field per Task 7.2 Decision 1 (and ADR-027 forward-pin):
+  - Metadata map[string]string (per-tool structured payload; nil-safe
+    nullable; json:"metadata,omitempty" tag for backward-compat with
+    shieldscan-api findings-ingest consumer)
+
+Section comment retitled `// Metadata` → `// Provenance + identity` to
+disambiguate from the new Metadata field name.
+
+All baseline tests preserved: 43/43 framework + M5/M6 native + events +
+worker tests pass after schema extensions.
+
+### Entry 3: Nmap parser captures CPE + Tunnel beyond Q6 minimalism
+
+Phase 2 canonical-reference grounding (real Nmap 7.94 output via
+instrumentisto/nmap:7.94 against scanme.nmap.org) revealed `<cpe>` child
+elements + `<service tunnel="ssl">` attribute in actual Nmap XML output.
+Per Phase 2 surface report direction:
+  - CPEs []string field (xml:"cpe") added to nmapService; emitted as
+    comma-joined metadata["cpe"] when non-empty (M9 CVE-matching
+    forward-readiness)
+  - Tunnel string field (xml:"tunnel,attr,omitempty") added; emitted as
+    metadata["tunnel"] when non-empty (SSL-vs-cleartext semantic
+    distinction; M9 finding correlation + M8 recon helper)
+
+Asymmetric-cost meta-principle applied: ~10 LoC + 5 tests now vs M9 task
+backfill + historical-data gap. Honors the 6th-ADR-instance pattern.
+
+### Entry 4: 10 deviations across Phases 1-3 (verify-then-adapt-then-document)
+
+Phase 1 (3 deviations):
+  - stripPort IPv6 bug: verbatim's "no further colons after last" check
+    incorrectly stripped bare ::1 to :. RFC4291 IPv6 has multiple colons;
+    fixed by gating on strings.Count(addr, ":") == 1 (single-colon form
+    rules out any IPv6 representation per RFC4291).
+  - Multicast/link-local ordering bug: verbatim ordered IsLinkLocalUnicast
+    before IsMulticast, but 224.0.0.1 is link-local-multicast per RFC5771
+    (within 224.0.0.0/4 broader multicast space) — Go's
+    IsLinkLocalMulticast() returns true; first-checked branch fired with
+    wrong "link-local" rejection message. Fixed by reordering IsMulticast()
+    first (catches 224.0.0.0/4 in full), then IsLinkLocalUnicast() only
+    (cloud metadata at 169.254.169.254).
+  - Test naming: TestValidateTarget_StripScheme/StripPort renamed to
+    TestStripScheme/TestStripPort (helper-level scope; verbatim was
+    misleading).
+
+Phase 2 (1 deviation):
+  - Removed unused strings import + sentinel from parser.go +
+    parser_test.go. Verbatim included var _ = strings.TrimSpace as
+    "future-use placeholder" — golangci-lint catches unused imports;
+    YAGNI violation. Auto-cleaned. (Strings import re-added in Phase 3.1
+    when CPE join required it.)
+
+Phase 3 (6 deviations):
+  - docker.NewProductionClient signature: verbatim assumed no-args
+    constructor; actual takes *client.Client. Adapted: NewPool takes
+    *dockerclient.Client and internally calls NewProductionClient,
+    bridging unexported dockerClient interface boundary cleanly.
+  - Registry frozen-at-construction: verbatim assumed
+    registry.RegisterEngine(engine, runner) method exists; Registry is
+    frozen-at-construction per docstring. Refactored: changed
+    buildRegistry return type from (*Registry, ...) to
+    (map[string]ToolRunner, ...) so caller can merge with
+    buildDockerRegistry's runners before single worker.NewRegistry call.
+  - docker.BuildArgsFunc type undefined: verbatim referenced this assumed
+    named type for compile-time assertion; doesn't exist (BuildArgs is
+    anonymous func field). Removed assertion; existing
+    var _ tools.ToolRunner = (*DockerRunner)(nil) in dockerrunner.go
+    covers framework-side compile-time check.
+  - Missing tools import in nmap.go (buildArgsAdapter parameters); added.
+  - Missing worker import in run_test.go (after buildRegistry signature
+    change cascade); added.
+  - Pool shutdown placement: verbatim suggested Startup.Shutdown method
+    that doesn't exist; Startup is setup-only. Inverted: pool shutdown
+    wired in run.go's drain path AFTER worker drain + heartbeat exit,
+    using context.Background() + 30s grace (cleanup-uses-parent-context
+    anti-pattern at 3rd instance).
+
+Total: 10 factual deviations across Phases 1-3; zero architectural
+deviations needing pause. Discipline pattern holds.
+
+### Entry 5: New tracked patterns
+
+Pattern: Stub testhelper replication across packages. Phase 3 replicated
+stubDockerClient from internal/tools/docker/testhelpers_test.go to
+internal/tools/docker/nmap/testhelpers_test.go (75 LoC). Go's structural
+interface satisfaction allows the local stub to satisfy the unexported
+docker.dockerClient interface without referring to the unexported name.
+1st instance now; 3rd-instance promotion candidate is shared
+internal/tools/docker/dockertest/ subpackage (when Trivy + SQLMap consumer
+tasks land their own stub-backed tests).
+
+Pattern: Adapter wrapper for framework signature mismatches. Phase 3
+introduced two adapters in nmap.go:
+  - buildArgsAdapter: bridges buildArgs error-return to DockerRunner
+    no-error-return BuildArgs contract
+  - parseOutputForDocker: bridges parseOutput stdout+target signature to
+    DockerRunner stdout-only ParseOutput contract
+1st instance now; if 2nd consumer (Trivy/SQLMap) needs same adapters,
+consider DockerRunner framework signature changes (BuildArgs error return;
+ParseOutput target propagation). Forward-pin documented in nmap.go
+comments.
+
+Pattern: Top-level tool-specific ScanConfig fields. TemplateCategories
+(M6 Nuclei) + Ports + AllowPrivateTargets (M7.2 Nmap) all use top-level
+field with documented tool-specificity vs ExtraArgs map (escape hatch).
+2nd instance now; if 3rd consumer follows the same pattern, established
+norm for project corpus.
+
+### Entry 6: M7 task structure progress
+
+  - Task 7.5a (warm pool + DockerRunner framework): CLOSED at f5d77c8
+  - Task 7.5b (DockerServiceRunner): future; brainstorming + design + impl
+  - Task 7.1 (Trivy): future; per-task brainstorm + DockerRunner consumer
+  - Task 7.2 (Nmap): CLOSED engine-side (this commit); Phase 5 docs
+    followup pending in shieldscan-docs
+  - Task 7.3 (ZAP): future; depends on Task 7.5b
+  - Task 7.4 (MobSF): future; depends on Task 7.5b
+  - Task 7.6 (SQLMap): future; per-task brainstorm + DockerRunner consumer
+
+### Entry 7: Forward-pins for future tasks
+
+  - Phase 5 docs followup (shieldscan-docs):
+    * ADR-027 (RawFinding.Metadata) lands in SPEC §13
+    * SPEC §7.3 RawFinding schema extension documents Metadata field
+    * DEVELOPMENT-PATTERNS entry for cleanup-uses-parent-context
+      anti-pattern (3rd instance threshold met)
+    * Task 7.2 design doc post-implementation alignment (mirrors a8e36a2
+      pattern from Task 7.5a)
+  - Future Trivy + SQLMap consumer tasks: leverage CPE + Tunnel
+    metadata patterns; potential framework signature changes if
+    BuildArgs error return + ParseOutput target propagation become
+    cross-consumer needs
+  - M9 AI Pipeline: CVE matching consumes Nmap CPEs + product+version
+    from Metadata; severity escalation based on CVE matches
+  - M8 Recon-First Pipeline: Nmap structured port/service/version/CPE
+    metadata feeds downstream scanners (Nuclei, ZAP, SQLMap target
+    list population)
+  - Layer 4 network policy hardening (pre-launch infrastructure task):
+    worker-host egress filtering + dedicated Docker network
+  - SHIELDSCAN_INFRA_CIDRS env var: operator documentation when
+    deployment infra lands
+  - DNS rebinding mitigation: platform team forward-pin
+
+---
+
 ## 2026-05-04 — Task 7.5a (Warm Pool Primitive + DockerRunner Framework)
 
 **Closes Task 7.5a per IMPLEMENTATION-PLAN.** Lands warm pool primitive

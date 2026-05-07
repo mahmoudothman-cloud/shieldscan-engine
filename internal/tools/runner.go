@@ -179,6 +179,21 @@ type ScanConfig struct {
 	// Empty for non-Nuclei tools.
 	TemplateCategories []string
 
+	// Ports is the Nmap-specific port range specification (e.g., "80,443"
+	// or "1-65535"). Empty or "top-1000" defaults to Nmap's top 1000
+	// most common ports. Ignored by non-Nmap tools.
+	// Per ADR-026 + Task 7.2 design (plans/2026-05-06-task-7.2-nmap-design.md
+	// in shieldscan-docs).
+	Ports string
+
+	// AllowPrivateTargets permits scanning RFC1918 ranges (10.0.0.0/8,
+	// 172.16.0.0/12, 192.168.0.0/16). Defaults false. Tenant-controllable
+	// for legitimate internal-network scanning with VPN/peered worker
+	// access. Layer 3 defense-in-depth flag; Layer 1 (shieldscan-api
+	// tenant target ownership validation) remains required precondition.
+	// Currently consumed by Nmap; future Docker tool consumers may inherit.
+	AllowPrivateTargets bool
+
 	// ExtraArgs is an escape hatch for tool-specific tuning that
 	// doesn't warrant a top-level field. Nuclei: "rate-limit-minute"
 	// override. Wapiti: "scope" tuning. Etc.

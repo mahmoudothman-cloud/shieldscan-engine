@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -sT -sV -oX - 192.0.2.0/29" start="1778156974" version="7.94" xmloutputversion="1.05">
+<scaninfo type="connect" protocol="tcp" numservices="1000"/>
+<host starttime="1778156975" endtime="1778156987"><status state="up" reason="reset" reason_ttl="44"/>
+<address addr="198.51.100.1" addrtype="ipv4"/>
+<ports><extraports state="closed" count="999">
+<extrareasons reason="conn-refused" count="999" proto="tcp"/>
+</extraports>
+<port protocol="tcp" portid="22"><state state="open" reason="syn-ack" reason_ttl="0"/><service name="ssh" product="OpenSSH" version="8.9p1" method="probed" conf="10"/></port>
+</ports>
+</host>
+<host starttime="1778156988" endtime="1778156990"><status state="down" reason="host-unreach" reason_ttl="0"/>
+<address addr="198.51.100.2" addrtype="ipv4"/>
+</host>
+<host starttime="1778156991" endtime="1778157003"><status state="up" reason="reset" reason_ttl="44"/>
+<address addr="198.51.100.3" addrtype="ipv4"/>
+<ports><extraports state="closed" count="1000">
+<extrareasons reason="conn-refused" count="1000" proto="tcp"/>
+</extraports>
+</ports>
+</host>
+<runstats><finished time="1778157003" elapsed="29.01" exit="success"/><hosts up="2" down="1" total="3"/></runstats>
+</nmaprun>

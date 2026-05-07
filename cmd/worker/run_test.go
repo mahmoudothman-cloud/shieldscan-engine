@@ -18,6 +18,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/odyssey/shieldscan-engine/internal/config"
+	"github.com/odyssey/shieldscan-engine/internal/worker"
 )
 
 // mockToolEnvs lists the 9 SHIELDSCAN_<TOOL>_BINARY env vars that
@@ -200,10 +201,10 @@ func TestRunMain_StartupFailureExitsOne(t *testing.T) {
 func TestBuildRegistry_RegistersAllNineTools(t *testing.T) {
 	installMockBinaries(t)
 
-	registry, _, err := buildRegistry(zerolog.Nop())
+	runners, _, err := buildRegistry(zerolog.Nop())
 	require.NoError(t, err)
 
-	got := registry.Engines()
+	got := worker.NewRegistry(runners).Engines()
 	want := []string{
 		"checkov", "corstest", "depcheck", "gitleaks", "nikto",
 		"nuclei", "semgrep", "sslyze", "wapiti",
@@ -219,11 +220,11 @@ func TestBuildRegistry_RegistersAllNineTools(t *testing.T) {
 func TestBuildRegistry_NativeBinariesMatchEngines(t *testing.T) {
 	installMockBinaries(t)
 
-	registry, natives, err := buildRegistry(zerolog.Nop())
+	runners, natives, err := buildRegistry(zerolog.Nop())
 	require.NoError(t, err)
 	require.Len(t, natives, 9, "9 NativeBinary entries — one per registered runner")
 
-	engines := registry.Engines()
+	engines := worker.NewRegistry(runners).Engines()
 	nativeNames := make([]string, len(natives))
 	for i, n := range natives {
 		nativeNames[i] = n.Name

@@ -12,6 +12,7 @@ import (
 
 	"github.com/odyssey/shieldscan-engine/internal/config"
 	rdsh "github.com/odyssey/shieldscan-engine/internal/redis"
+	"github.com/odyssey/shieldscan-engine/internal/tools"
 	"github.com/odyssey/shieldscan-engine/internal/worker"
 )
 
@@ -57,11 +58,34 @@ func runMain(ctx context.Context, deps runMainDeps) int {
 	// registered here per ADR-022 — see buildRegistry's docstring.
 	// M8 (Recon-First Pipeline) imports internal/tools/recon and
 	// invokes recon.RunRecon directly.
-	registry, natives, err := buildRegistry(log)
+	nativeRunners, natives, err := buildRegistry(log)
 	if err != nil {
 		log.Error().Err(err).Msg("registry wiring failed")
 		return 1
 	}
+
+	// Build the M7 DockerRunner registry per ADR-026 + Task 7.2 D4.
+	// Parallel to buildRegistry; constructs WarmPool-backed runners
+	// for CLI-shaped Docker tools (Nmap at Task 7.2; Trivy + SQLMap
+	// future). Pools list flows through Startup (Phase 3 logging) +
+	// runMain shutdown orchestration (drain path below).
+	dockerRunners, pools, err := buildDockerRegistry(log)
+	if err != nil {
+		log.Error().Err(err).Msg("docker registry wiring failed")
+		return 1
+	}
+
+	// Merge native + docker runner maps. Registry is frozen-at-
+	// construction (per registry.go docstring) so a single NewRegistry
+	// call after merge is the load-bearing pattern.
+	allRunners := make(map[string]tools.ToolRunner, len(nativeRunners)+len(dockerRunners))
+	for k, v := range nativeRunners {
+		allRunners[k] = v
+	}
+	for k, v := range dockerRunners {
+		allRunners[k] = v
+	}
+	registry := worker.NewRegistry(allRunners)
 
 	// Build Processor + Worker via convenience constructor.
 	processor := worker.NewProcessorFromRedis(registry, client, log)
@@ -93,6 +117,7 @@ func runMain(ctx context.Context, deps runMainDeps) int {
 	startup := worker.NewStartup(worker.StartupDeps{
 		Registry:    registry,
 		NativeTools: natives,
+		WarmPools:   pools,
 		Heartbeat:   heartbeat,
 		Logger:      log,
 	})
@@ -148,6 +173,20 @@ func runMain(ctx context.Context, deps runMainDeps) int {
 	case <-heartbeatDone:
 	case <-time.After(2 * time.Second):
 		log.Warn().Msg("heartbeat did not exit cleanly within 2s")
+	}
+
+	// Shutdown warm pools (Task 7.2 D4) — runs AFTER worker drain so
+	// in-flight scans complete cleanly. Uses background ctx with grace
+	// since workerCtx is already cancelled at this point (cleanup-uses-
+	// parent-context anti-pattern explicitly avoided per ADR-026).
+	if len(pools) > 0 {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		for _, pool := range pools {
+			if err := pool.Shutdown(shutdownCtx); err != nil {
+				log.Warn().Err(err).Msg("warm pool shutdown failed")
+			}
+		}
+		shutdownCancel()
 	}
 
 	log.Info().Int("exit_code", exitCode).Msg("worker shutdown complete")
