@@ -131,6 +131,19 @@ rather than silent shipping.
   3rd-instance promotion threshold met (Nmap consumer + DockerServiceRunner
   consumer = 2 instances; Trivy/SQLMap may push to 3).
 
+### §14.1 invocation tracking note (Phase 5.E verdict)
+
+Task 7.5b V4/V5 resolutions invoked asymmetric-cost reasoning during Phase 0
+resolution-lock decisions (V4 ZAP `EphemeralContainer = true` default; V5 MobSF
+md5-tracked cleanup); not added to SPEC §14.1 invocation table because §14.1 is
+currently scoped to ADR invocations only (per shieldscan-docs commit 496cf6c;
+§14.1 lines 2216/2232/2247 enumerate "ADRs" specifically). Task 7.5b's design
+doc itself (commit 3067c92 §6 Out of Scope) explicitly disclaims §14.1
+invocation status: "framework infrastructure, not architectural commitment in
+§14.1 sense; standard threshold applies." If future scope expansion makes §14.1
+track non-ADR invocations (e.g., design-doc Phase 0 resolution locks),
+Task 7.5b V4/V5 are eligible candidates.
+
 ---
 
 ## 2026-05-06 — Task 7.2 (Nmap as first DockerRunner consumer)
