@@ -54,6 +54,10 @@ func (s *stubDockerClient) ContainerStart(_ context.Context, _ string, _ contain
 	return nil
 }
 
+func (s *stubDockerClient) ContainerInspect(_ context.Context, _ string) (container.InspectResponse, error) {
+	return container.InspectResponse{}, nil
+}
+
 func (s *stubDockerClient) ContainerExecCreate(_ context.Context, _ string, _ container.ExecOptions) (container.ExecCreateResponse, error) {
 	return container.ExecCreateResponse{}, nil
 }

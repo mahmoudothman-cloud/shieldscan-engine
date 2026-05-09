@@ -22,7 +22,7 @@ import (
 // Per ADR-006 (Hybrid Native + Persistent Docker, refined
 // 2026-04-18): this primitive is for CLI-shaped tools (Trivy, Nmap,
 // SQLMap). HTTP-shaped persistent services (ZAP, MobSF) use
-// DockerServiceRunner (internal/tools/docker_service.go) instead.
+// DockerServiceRunner (internal/tools/docker/service/) instead.
 //
 // Concurrency model: WarmPool is safe for concurrent use.
 //
@@ -42,6 +42,7 @@ type WarmPool struct {
 	maxSize int
 	cleanup CleanupFunc
 	health  HealthCheckFunc
+	factory ContainerFactoryFunc
 	cli     dockerClient
 	log     zerolog.Logger
 
@@ -66,14 +67,47 @@ type CleanupFunc func(ctx context.Context, c *Container) error
 // Optional; nil HealthCheckFunc means "always healthy."
 type HealthCheckFunc func(ctx context.Context, c *Container) bool
 
+// ContainerFactoryFunc constructs a *Container of the given image.
+// Hook on Config.ContainerFactory enables service-shape consumers
+// (DockerServiceRunner per Task 7.5b V2 lock) to inject custom
+// container creation (port mappings, no `sleep infinity` Cmd
+// override, readiness probing) without touching WarmPool's internals.
+//
+// The signature mirrors the package-private newContainer's signature
+// exactly so DefaultContainerFactory can wrap it without parameter
+// translation. Custom factories implement the same contract:
+// caller-side size accounting; spinUp decrements on error.
+//
+// Per Task 7.5b Phase 0 V2 resolution (Option α — Task 7.5a framework
+// extension; ~30-50 LoC additive). Backward-compat preserved: nil
+// ContainerFactory routes through DefaultContainerFactory whose body
+// is the existing newContainer behavior.
+type ContainerFactoryFunc func(ctx context.Context, cli dockerClient, image string, log zerolog.Logger) (*Container, error)
+
+// DefaultContainerFactory is the framework default for Config.ContainerFactory.
+// Wraps the package-private newContainer so existing DockerRunner
+// consumers (Task 7.2 Nmap; future Trivy + SQLMap) get exec-shape
+// container creation behavior unchanged when Config.ContainerFactory
+// is nil.
+//
+// Service-shape consumers (DockerServiceRunner; Task 7.5b future ZAP
+// + MobSF) provide their own factory via service.ServiceContainerFactory
+// or equivalent.
+func DefaultContainerFactory(ctx context.Context, cli dockerClient, image string, log zerolog.Logger) (*Container, error) {
+	return newContainer(ctx, cli, image, log)
+}
+
 // Config configures a WarmPool. Image is required; MaxSize defaults
 // to 4 if zero; Cleanup is required (use NoCleanup for stateless
-// tools); HealthCheck is optional.
+// tools); HealthCheck is optional; ContainerFactory is optional
+// (nil routes through DefaultContainerFactory; preserves existing
+// exec-shape behavior).
 type Config struct {
-	Image       string
-	MaxSize     int
-	Cleanup     CleanupFunc
-	HealthCheck HealthCheckFunc
+	Image            string
+	MaxSize          int
+	Cleanup          CleanupFunc
+	HealthCheck      HealthCheckFunc
+	ContainerFactory ContainerFactoryFunc
 }
 
 // New creates a WarmPool. Pool is empty; lazy spin-up on first
@@ -98,11 +132,16 @@ func New(cfg Config, cli dockerClient, log zerolog.Logger) (*WarmPool, error) {
 	if maxSize < 0 {
 		return nil, errors.New("warmpool: MaxSize must be non-negative")
 	}
+	factory := cfg.ContainerFactory
+	if factory == nil {
+		factory = DefaultContainerFactory
+	}
 	return &WarmPool{
 		image:     cfg.Image,
 		maxSize:   maxSize,
 		cleanup:   cfg.Cleanup,
 		health:    cfg.HealthCheck,
+		factory:   factory,
 		cli:       cli,
 		log:       log.With().Str("warmpool_image", cfg.Image).Logger(),
 		available: make(chan *Container, maxSize),
@@ -305,7 +344,7 @@ drain:
 // decrement on error per the Checkout / healthCheckOrReplace
 // contracts above).
 func (p *WarmPool) spinUp(ctx context.Context) (*Container, error) {
-	c, err := newContainer(ctx, p.cli, p.image, p.log)
+	c, err := p.factory(ctx, p.cli, p.image, p.log)
 	if err != nil {
 		return nil, fmt.Errorf("warmpool: spin up: %w", err)
 	}

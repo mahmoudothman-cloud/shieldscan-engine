@@ -18,9 +18,11 @@ type NativeBinary struct {
 	Path string // absolute path (e.g., "/usr/local/bin/nuclei")
 }
 
-// dockerHealthChecker is the surface Phase 2 calls. *DockerServiceRunner
-// (5.3) implements it via its HealthCheck method. Decoupled here so
-// tests can inject lightweight stubs without spinning miniredis.
+// dockerHealthChecker is the surface Phase 2 calls. Service-shape
+// runners under internal/tools/docker/service/ (Task 7.5b future
+// consumers ZAP + MobSF) may implement it via a per-tool HealthCheck
+// method. Decoupled here so tests can inject lightweight stubs
+// without spinning miniredis.
 type dockerHealthChecker interface {
 	Name() string
 	HealthCheck(ctx context.Context) error

@@ -8,6 +8,131 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-05-09 — Task 7.5b (DockerServiceRunner framework)
+
+**Status:** Engine-side closed. Doc-side close-out (Phase 5) forthcoming.
+
+**Commits.** Pre-implementation artifacts: shieldscan-docs commits 8bafa6b
+(design doc) + 2c8781f (implementation plan) + 3067c92 (design doc revision;
+Phase 0 resolution locks) + 1362c5c (implementation plan revision). Engine
+implementation: this commit (Phase 1+3 atomic).
+
+### Phase 0 acknowledgments
+
+**Brainstorming-chain misframing.** Q1–Q9 brainstorming chain (in conversation;
+pre-design-doc) made 9 decisions against an incorrect "design DockerServiceRunner
+from scratch" baseline. Phase 0 verification step (V8) surfaced pre-existing
+`internal/tools/docker_service.go` (366 LoC; M5.3 + ADR-006). Phase 0.5 verified
+zero active consumers; V8 Option (c) Replace locked. The discipline pattern's
+verification step caught the misframing at design-doc-Phase-0 boundary, not at
+implementation time. Pre-implementation artifacts (8bafa6b + 2c8781f) were
+revised (3067c92 + 1362c5c) to align with verified repo state.
+
+**4 architectural Phase 0 resolution locks.**
+
+- **V8 Option (c) Replace** — `internal/tools/docker_service.go` (366 LoC) deleted;
+  new framework lands at `internal/tools/docker/service/` subpackage;
+  framework-symmetric with Task 7.5a's `internal/tools/docker/`.
+- **V2 Option (α)** — Task 7.5a framework extended with `ContainerFactoryFunc` +
+  `Config.ContainerFactory` hook + `DefaultContainerFactory` exported function
+  (~30–50 LoC additive to f5d77c8); preserves Task 7.2 Nmap consumer
+  backward-compat (`DefaultContainerFactory` replicates existing `newContainer`
+  behavior).
+- **V4 Option (γ)** — `cfg.EphemeralContainer = true` as ZAP default v1;
+  rationale: ZAP `newSession` reset surfaces (9) NOT VERIFIED in public docs;
+  security-consequential uncertainty side-stepped via fresh-container-per-scan;
+  verification path forward-pinned to dedicated future task.
+- **V5 Option (γ)** — MobSF md5-tracked cleanup with WarmPool failure-replace
+  fallback; per Phase 0 source-code reading verified per-scan-by-hash model;
+  consumer tracks `lastScanMD5` in `CleanupFunc` closure; WarmPool
+  failure-replace handles in-progress-scan + network-failure edge cases.
+
+### Phase 1 deviations (auto-corrected at implementation time)
+
+- **D1.** `dockerClient` interface unexported — service subpackage cannot
+  reference type from another package. Resolution: added
+  `type DockerClient = dockerClient` single-line alias in `container.go`;
+  preserves all internal references; enables cross-package factory function
+  literals.
+- **D2.** `dockerClient` missing `ContainerInspect` method — required for
+  `ServiceContainerFactory` dynamic-port discovery. Resolution: extended
+  `dockerClient` interface with `ContainerInspect`; added passthrough on
+  `productionClient`; added stubs in 3 test helper files
+  (`docker/testhelpers_test.go`, `docker/nmap/testhelpers_test.go`,
+  `docker/container_test.go` `fakeClient`).
+- **D3.** `Container` struct unexported `cli`/`log` fields — service factory in
+  another package cannot construct via struct literal. Resolution: added
+  exported `NewServiceContainer(id, image, baseURL, cli, log) *Container`
+  constructor + `BaseURL` exported field on `Container` struct; preserves all
+  existing `Container` internal usage.
+- **D4.** `PollOpts.MaxDuration` default referenced non-existent
+  `ServiceConfig.ScanTimeout` (verbatim issue from design doc). Resolution: flat
+  30-minute default at framework level via `normalizePollOpts`; documented in
+  `client.go` docstring; rationale captured here.
+- **D5.** `container.NetworkSettingsBase` deprecation in Docker SDK v28.5 (will
+  move in v29). Resolution: populate via direct field assignment on
+  `container.NetworkSettings.Ports` + `nolint:staticcheck` pragma + comment for
+  future v29 migration; existing Docker SDK pinning preserved.
+- **D6.** `http.NewRequest` lint complaint — golangci-lint prefers
+  `http.NewRequestWithContext`. Resolution: converted to
+  `http.NewRequestWithContext(context.Background(), ...)` in 3 test sites.
+
+### Phase 2 compression
+
+**Phase 2 subsumed by Phase 1.** Implementation plan 1362c5c Phase 2 scope was
+"DockerServiceRunner.Run lifecycle wiring" — separated from Phase 1 "framework
+primitives." Reality: Phase 1's expanded scope (V2 framework extension + V8
+atomic replace) required `service.go`'s `Run` method to land coherently with its
+primitives (`ContainerFactoryFunc` + `NewServiceContainer` + `ContainerInspect`
++ `BaseURL`). Stub→flesh-out split would have produced unbuildable intermediate
+state. Phase 1 landed `Run` at full production shape with both
+`EphemeralContainer` + warm-pool branches + integration tests. Phase 2 had no
+remaining scope.
+
+### Phase 3 deviation
+
+- **D7.** `doc.go` skipped because `errors.go` already carries comprehensive
+  package-level docstring covering V8/V2/V4/V5 resolution locks + ADR-026
+  cross-reference. Plan-prescribed `doc.go` was strict subset. Verification
+  surfaced redundancy; created transiently; observed godoc concatenation
+  duplication; removed. Net Phase 3 substantive change: `DockerServiceRunner`
+  consumer-integration docstring expanded with ZAP example.
+
+### Discipline pattern observation
+
+6 Phase 1 implementation-time deviations + 1 Phase 3 verification-time deviation
+= 7 deviations caught by verification step; 0 deviations shipped without
+acknowledgment. The discipline pattern (verification at every load-bearing
+boundary) caught what pre-implementation guidance missed. Specifically: Phase 0
+caught brainstorming-chain misframing; Phase 1 implementation caught 6
+cross-package + framework-integration edge cases; Phase 3 caught documentation
+redundancy. Each surface report enabled auto-correction + audit-trail honesty
+rather than silent shipping.
+
+### Forward-pins
+
+- **Phase 5 docs followup** (forthcoming): design doc post-implementation
+  alignment commit; ADR-026 addendum evaluation for `ContainerFactory` hook (V2
+  framework extension); SPEC §3.2 architecture diagram update
+  (`docker_service.go` path → `docker/service/` subpackage); cross-references to
+  this commit.
+- **V4 ZAP cleanup verification** — dedicated future task (Task 7.5c or similar)
+  does empirical `newSession` verification (spin up local ZAP; populate state
+  across 9 surfaces; observe `newSession` behavior; OR Java source-code
+  reading); if `newSession` found COMPLETE, flip ZAP default from
+  `EphemeralContainer = true` to warm pool with reset cleanup; restores
+  warm-pool startup amortization for ZAP.
+- **Task 7.3 (ZAP) consumer** — first DockerServiceRunner consumer; consumer-side
+  `BuildScan` logic + parser; `AuthFunc` construction
+  (`service.WithAPIKeyHeader`); `EphemeralContainer = true` config.
+- **Task 7.4 (MobSF) consumer** — second consumer; md5-tracked `CleanupFunc`
+  closure; warm-pool path.
+- **Future shared `internal/tools/docker/dockertest/` subpackage** — if
+  3rd-instance promotion threshold met (Nmap consumer + DockerServiceRunner
+  consumer = 2 instances; Trivy/SQLMap may push to 3).
+
+---
+
 ## 2026-05-06 — Task 7.2 (Nmap as first DockerRunner consumer)
 
 **Closes Task 7.2 engine-side per IMPLEMENTATION-PLAN.** Lands Nmap as the first

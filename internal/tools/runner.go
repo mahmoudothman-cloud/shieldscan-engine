@@ -28,10 +28,13 @@
 //     reused with cleanup hook between checkouts. Lives at
 //     internal/tools/docker/dockerrunner.go.
 //
-//   - DockerServiceRunner (M5.3 + ADR-006 + ADR-008):
+//   - DockerServiceRunner (Task 7.5b + ADR-006 + ADR-008):
 //     HTTP-API wrapper for persistent Docker services (MobSF, ZAP).
 //     Long-lived service containers; runner makes HTTP requests.
-//     Lives at internal/tools/docker_service.go.
+//     Lives at internal/tools/docker/service/. Replaces the M5.3-era
+//     internal/tools/docker_service.go (deleted as part of Task 7.5b
+//     Phase 4 atomic commit; zero active consumers per Phase 0.5
+//     verification).
 //
 // Per Option β resolution at M7.5a brainstorming: Trivy + SQLMap
 // route through DockerRunner (warm pool semantics fit short-lived

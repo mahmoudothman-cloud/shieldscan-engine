@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -389,4 +390,69 @@ func TestNoCleanup_AlwaysReturnsNil(t *testing.T) {
 	c := &Container{ID: "test-id"}
 	err := NoCleanup(context.Background(), c)
 	assert.NoError(t, err)
+}
+
+// ─── ContainerFactory hook (Task 7.5b V2 lock) ───────────────────────
+
+func TestWarmPool_NilContainerFactoryRoutesToDefault(t *testing.T) {
+	// nil ContainerFactory → DefaultContainerFactory (preserves Task 7.2
+	// Nmap consumer + Task 7.5a backward-compat). Verified by checking
+	// that pool spin-up succeeds via the stub-backed default path.
+	pool := newTestPool(t, Config{
+		MaxSize: 1,
+		Cleanup: NoCleanup,
+		// ContainerFactory deliberately omitted (nil)
+	})
+	c, err := pool.Checkout(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, c, "default factory must produce a container")
+	assert.NotEmpty(t, c.ID, "default factory must populate ID")
+}
+
+func TestWarmPool_CustomContainerFactoryInvoked(t *testing.T) {
+	// Custom factory invoked with correct args; container returned.
+	var capturedImage string
+	customFactory := func(_ context.Context, _ dockerClient, image string, _ zerolog.Logger) (*Container, error) {
+		capturedImage = image
+		return &Container{ID: "custom-id", Image: image}, nil
+	}
+	pool := newTestPool(t, Config{
+		Image:            "custom-image",
+		MaxSize:          1,
+		Cleanup:          NoCleanup,
+		ContainerFactory: customFactory,
+	})
+	c, err := pool.Checkout(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, c)
+	assert.Equal(t, "custom-id", c.ID)
+	assert.Equal(t, "custom-image", capturedImage, "factory receives image from Config")
+}
+
+func TestWarmPool_FactoryErrorPropagates(t *testing.T) {
+	// Custom factory returning error propagates through spinUp; pool
+	// size accounting decrements on error per existing Checkout contract.
+	customFactory := func(_ context.Context, _ dockerClient, _ string, _ zerolog.Logger) (*Container, error) {
+		return nil, errors.New("factory boom")
+	}
+	pool := newTestPool(t, Config{
+		MaxSize:          1,
+		Cleanup:          NoCleanup,
+		ContainerFactory: customFactory,
+	})
+	_, err := pool.Checkout(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "factory boom")
+	assert.Equal(t, 0, pool.Size(), "size must decrement on factory error")
+}
+
+func TestDefaultContainerFactory_DelegatesToNewContainer(t *testing.T) {
+	// Sanity check that DefaultContainerFactory is the existing
+	// newContainer behavior — invoking it via the stub-backed client
+	// should produce a non-nil container with the expected image.
+	cli := newStubDockerClient(t)
+	c, err := DefaultContainerFactory(context.Background(), cli, "test-img:1", noopLog())
+	require.NoError(t, err)
+	require.NotNil(t, c)
+	assert.Equal(t, "test-img:1", c.Image)
 }

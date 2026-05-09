@@ -6,15 +6,18 @@
 // (Hybrid Native + Persistent Docker, refined 2026-04-18), this
 // package is the canonical M7 framework for CLI Docker tools.
 //
-// Distinct from internal/tools/docker_service.go (M5.3
+// Distinct from internal/tools/docker/service/ (Task 7.5b
 // DockerServiceRunner), which handles HTTP-shaped persistent
 // Docker services (MobSF, ZAP per ADR-008). The two abstractions
-// coexist:
+// coexist + share the WarmPool primitive (extended via
+// ContainerFactory hook per Task 7.5b V2 lock):
 //
 //   - DockerRunner (this package): exec into warmed containers;
 //     CLI-shaped tools; lazy-warm pool semantics.
-//   - DockerServiceRunner (docker_service.go): HTTP requests to
-//     long-lived service containers; persistent service shape.
+//   - DockerServiceRunner (internal/tools/docker/service/): HTTP
+//     requests to long-lived service containers; persistent
+//     service shape; ServiceContainerFactory provides port-mapped
+//     spin-up + readiness probing.
 //
 // Container is the framework's Docker SDK abstraction. Tool
 // runners do not import the Docker SDK directly; they consume
@@ -64,12 +67,21 @@ type dockerClient interface {
 		containerName string,
 	) (container.CreateResponse, error)
 	ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error
+	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
 	ContainerExecCreate(ctx context.Context, containerID string, options container.ExecOptions) (container.ExecCreateResponse, error)
 	ContainerExecAttach(ctx context.Context, execID string, config container.ExecAttachOptions) (HijackedResponse, error)
 	ContainerExecInspect(ctx context.Context, execID string) (container.ExecInspect, error)
 	ContainerStop(ctx context.Context, containerID string, options container.StopOptions) error
 	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
 }
+
+// DockerClient is the exported alias for the package-private
+// dockerClient interface. Type alias preserves identity — in-package
+// code references dockerClient as before; out-of-package code
+// (e.g., internal/tools/docker/service for service-shape factories
+// per Task 7.5b V2 lock) references DockerClient. Single source of
+// truth for the SDK abstraction surface.
+type DockerClient = dockerClient
 
 // HijackedResponse is the Container-package adapter for the Docker
 // SDK's types.HijackedResponse. We model the subset we need (Reader
@@ -102,8 +114,35 @@ func (h HijackedResponse) Close() {
 type Container struct {
 	ID    string
 	Image string
-	cli   dockerClient
-	log   zerolog.Logger
+	// BaseURL is populated by service-shape factories (see
+	// internal/tools/docker/service.ServiceContainerFactory) when the
+	// container exposes an HTTP service on a host-mapped port.
+	// Empty for exec-shape containers (Task 7.2 Nmap; future Trivy +
+	// SQLMap). Set once at spinUp time per Q6 readiness-at-spin-up-only
+	// lock; immutable thereafter.
+	BaseURL string
+	cli     dockerClient
+	log     zerolog.Logger
+}
+
+// NewServiceContainer is the exported constructor for service-shape
+// containers built by external factories (internal/tools/docker/service.
+// ServiceContainerFactory per Task 7.5b V2 lock). Out-of-package code
+// cannot set the unexported cli + log fields via struct literal; this
+// constructor closes that gap while keeping cli + log unexported.
+//
+// Caller is responsible for ensuring the underlying container at id
+// has been created + started + (optionally) verified ready. Caller
+// passes the cli used for creation so subsequent Stop/Exec calls
+// flow through the same SDK adapter.
+func NewServiceContainer(id, imageRef, baseURL string, cli DockerClient, log zerolog.Logger) *Container {
+	return &Container{
+		ID:      id,
+		Image:   imageRef,
+		BaseURL: baseURL,
+		cli:     cli,
+		log:     log.With().Str("container_id", shortID(id)).Logger(),
+	}
 }
 
 // newContainer creates a long-running container of the given image.

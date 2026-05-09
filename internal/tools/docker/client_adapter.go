@@ -55,6 +55,10 @@ func (p *productionClient) ContainerStart(ctx context.Context, containerID strin
 	return p.cli.ContainerStart(ctx, containerID, options)
 }
 
+func (p *productionClient) ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error) {
+	return p.cli.ContainerInspect(ctx, containerID)
+}
+
 func (p *productionClient) ContainerExecCreate(ctx context.Context, containerID string, options container.ExecOptions) (container.ExecCreateResponse, error) {
 	return p.cli.ContainerExecCreate(ctx, containerID, options)
 }

@@ -27,7 +27,7 @@ const DefaultDockerTimeout = 30 * time.Minute
 // Per ADR-026 (DockerRunner framework + lazy warm pool — M7 container
 // lifecycle architecture, 2026-05-XX): this is the CLI-tool framework.
 // HTTP-shaped persistent services (ZAP, MobSF) use DockerServiceRunner
-// (separate type at internal/tools/docker_service.go; Task 7.5b) per
+// (separate type at internal/tools/docker/service/; Task 7.5b) per
 // ADR-006 + ADR-008.
 //
 // Symmetric with tools.NativeRunner (M5.2 + ADR-023 OutputFile mode):

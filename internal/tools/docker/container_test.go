@@ -93,6 +93,10 @@ func (f *fakeClient) ContainerStart(ctx context.Context, id string, options cont
 	return f.startErr
 }
 
+func (f *fakeClient) ContainerInspect(ctx context.Context, id string) (container.InspectResponse, error) {
+	return container.InspectResponse{}, nil
+}
+
 func (f *fakeClient) ContainerExecCreate(ctx context.Context, id string, options container.ExecOptions) (container.ExecCreateResponse, error) {
 	return f.execCreateResp, f.execCreateErr
 }
