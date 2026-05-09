@@ -131,6 +131,30 @@ rather than silent shipping.
   3rd-instance promotion threshold met (Nmap consumer + DockerServiceRunner
   consumer = 2 instances; Trivy/SQLMap may push to 3).
 
+### DEVELOPMENT-PATTERNS evaluation note (Phase 5.D verdict)
+
+Three candidate patterns surfaced from Task 7.5b implementation:
+
+1. **Framework-extension hook with backward-compat default** (`Config.X` field +
+   `DefaultX` exported function + caller routes through field-or-default).
+2. **EphemeralContainer-vs-warm-pool consumer opt-out flag** (`cfg.X bool` →
+   `Run` branches into two distinct lifecycle paths).
+3. **Typed auth helpers + AuthFunc-style escape hatch** (`With*` constructors
+   returning function-type + arbitrary-closure escape hatch).
+
+Phase 5.D grep-grounded instance counts in shieldscan-engine corpus: candidate
+1 = 1 instance (`DefaultContainerFactory`/`ContainerFactoryFunc` in
+`internal/tools/docker/warmpool.go`; commit 1306ca8); candidate 2 = 1 instance
+(`EphemeralContainer` in `internal/tools/docker/service/service.go`; commit
+1306ca8); candidate 3 = 0 corpus-wide instances of the pattern (Task 7.5b's
+2 `With*` helpers are 2 helpers within 1 framework, not 2 corpus-pattern
+occurrences). None reached the 3-instance threshold for DEVELOPMENT-PATTERNS
+promotion. Forward-pin: re-evaluate when Task 7.3 (ZAP) + Task 7.4 (MobSF) +
+future M7 consumer tasks land additional instances. If candidate 1 picks up a
+2nd instance via M7 consumer-specific factory variants, evaluate at that
+point; same for candidate 2 if a future tool surfaces a similar
+warm-pool-vs-ephemeral opt-out shape.
+
 ### §14.1 invocation tracking note (Phase 5.E verdict)
 
 Task 7.5b V4/V5 resolutions invoked asymmetric-cost reasoning during Phase 0
