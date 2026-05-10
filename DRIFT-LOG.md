@@ -139,6 +139,54 @@ modified in this commit.
   §13 ADR-027 (RawFinding.Metadata schema); §14.1 (asymmetric-cost
   meta-principle).
 
+### §14.1 invocation tracking note (Phase 5.E verdict)
+
+Phase 5.E of Task 7.3 evaluated whether Q5/Q6/Q7/Q8 brainstorming locks +
+Phase 0/1/2 cost-asymmetry-driven decisions warrant new entries in
+SPECIFICATION.md §14.1 invocation enumeration table.
+
+**Verdict: OUTCOME β** — Task 7.3 decisions are NOT §14.1 invocations;
+DRIFT-LOG note added (mirrors Task 7.5b 5.E precedent c8840a1 OUTCOME γ).
+
+**Reasoning.** §14.1 is ADR-scoped per its own text (lines 2266 + 2275 +
+2284 in shieldscan-docs SPECIFICATION.md): *"invoked in 6 ADRs across the
+project corpus"*; *"ADR drafters should invoke §14.1 when..."*; *"§14.1
+only when cost-asymmetry is genuinely load-bearing for the decision;
+otherwise, standard threshold-counting reasoning suffices."* Task 7.3 is a
+CONSUMER task (not an ADR); decisions live in design doc 682cfcc +
+implementation plan e98a8e4 + DRIFT-LOG (this file), NOT §13 ADR registry.
+Per Task 7.5b 5.E precedent (c8840a1), non-ADR resolution-lock decisions
+do not constitute §14.1 invocations regardless of whether asymmetric-cost
+framing was rhetorically applied.
+
+**Per-decision evaluation:**
+
+- Q5 escape hatch over speculative custom policy → standard YAGNI;
+  not threshold-overriding
+- Q6 reframe iterations across Phase 0 V8 + Phase 1 D1 + Phase 2 V2.3 →
+  verification gating; not architectural threshold override
+- Q6 cookie-only-v1 over γ-full → verification-gating (V13 form-based
+  formats not empirically verified at design time); not §14.1 territory
+- Q7(B) doc-canonical over Q7(A) undocumented backward-compat → risk-
+  asymmetric ("ship documented behavior") but not threshold-overriding;
+  standard forward-stability reasoning
+- Q8(iv) bulk-fetch over Q8(ii) defensive-pagination → standard
+  trigger-fires-then-promote forward-pin; not threshold-overriding
+
+**Rhetorical use vs formal invocation.** Task 7.3 design doc 682cfcc §1
+Executive Summary + §7 Process Acknowledgment did rhetorically reference
+"asymmetric-cost" framing in Q6 lock + Path Y verification — but per
+§14.1's own "tension acknowledgment", rhetorical-frame use ≠ formal
+invocation. If future scope expansion makes §14.1 track non-ADR
+invocations (consumer-task design-doc decisions; Phase 0 resolution
+locks), Task 7.3 Q5/Q6/Q7/Q8 + Phase 0 V8 are eligible candidates
+alongside Task 7.5b V4/V5.
+
+**Cross-references:** shieldscan-engine commit c8840a1 (Task 7.5b 5.E
+precedent; OUTCOME γ); shieldscan-engine commit e905afe (Task 7.3 engine
+close); shieldscan-docs commit 26e9afa (Task 7.3 Phase 5.A); shieldscan-docs
+SPECIFICATION.md §14.1 (asymmetric-cost meta-principle promotion 496cf6c).
+
 ---
 
 ## 2026-05-09 — Task 7.5b (DockerServiceRunner framework)
