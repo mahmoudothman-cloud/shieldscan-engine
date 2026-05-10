@@ -139,6 +139,62 @@ modified in this commit.
   §13 ADR-027 (RawFinding.Metadata schema); §14.1 (asymmetric-cost
   meta-principle).
 
+### DEVELOPMENT-PATTERNS evaluation note (Phase 5.D verdict)
+
+Phase 5.D of Task 7.3 evaluated 5 candidate patterns surfaced from Phase 1
+implementation against the 3-instance promotion threshold (per
+DEVELOPMENT-PATTERNS entry #5 precedent commit 5503476).
+
+**Verdict: NO PROMOTIONS** — threshold gate held. DRIFT-LOG note added
+(mirrors Task 7.5b 5.D 3a17274 no-promotions precedent).
+
+**Per-candidate instance counts (grep-grounded):**
+
+1. **`req.Host` AuthFunc override** (consumer-local Host header set for
+   tool-specific API routing) — 1 instance (`zap/auth.go`
+   `zapQueryParamAuth`). Forward-pin: re-evaluate when 2nd tool surfaces
+   Host-header routing requirement.
+2. **Severity normalize + drop tuple** (`mapXRisk(risk) (severity, drop bool)`
+   parser-side normalization with drop-decision flag) — 1 instance
+   (`zap/parser.go` `mapZAPRisk`). Forward-pin: MobSF/SQLMap/Trivy
+   parsers may invoke similar shape if upstream-severity-enum diverges
+   from shieldscan-api Pydantic Literal.
+3. **Structured-tags-map filter** (`extractTags(map[string]string) []string`
+   filtering by structured key prefix; preserves raw via Metadata) —
+   1 instance (`zap/parser.go` `extractZAPTags`). semgrep's
+   `extractCategoryAsTags` is different shape (singleton-from-string,
+   not map-keys-filter). Forward-pin: re-evaluate when 2nd consumer
+   surfaces structured-tags-map upstream shape.
+4. **Tool-version-specific hardcoded allowlist** (consumer-side allowlist
+   matching tool-version-specific values; e.g., `zapPolicyAllowlist` 22
+   ZAP 2.17.0 names) — 1 instance (`zap/ascan.go`). Forward-pin:
+   ZAP version upgrade requires allowlist refresh; likely 2nd instance
+   when MobSF/Trivy surfaces similar tool-version-specific value-set.
+5. **Typed-fields-first + Metadata-for-remainder parser** (Title/
+   Severity/Description/CWEID/TargetURL typed; structured payload via
+   Metadata snake_case keys; omit-when-empty discipline) — **2 instances**
+   (`nmap/parser.go` + `zap/parser.go`; only 2 sites populate `Metadata:`
+   field — all M5/M6 native tools predate ADR-027 Metadata schema).
+   Closest to threshold; next consumer task (likely Task 7.4 MobSF or
+   Task 7.1 Trivy) creates 3rd instance + triggers promotion evaluation.
+
+**Threshold-gate honored.** Per Task 7.5b 5.D precedent (3a17274) +
+entry #5 precedent (5503476): 3-instance threshold is the gate;
+speculative promotion at 1-2 instances would inflate
+DEVELOPMENT-PATTERNS surface area. Re-evaluation triggers: Task 7.4
+(MobSF) lands 3rd Metadata-using parser → promote C5; Task 7.1 (Trivy)
+adds another Metadata-using parser → C5 reaches 4-instance super-
+majority confirming pattern. C1-C4 likely stay tool-specific
+indefinitely.
+
+**Cross-references:** shieldscan-engine commit 3a17274 (Task 7.5b 5.D
+no-promotions precedent); shieldscan-engine commit 5503476
+(DEVELOPMENT-PATTERNS entry #5; cleanup-uses-detached-context promotion
+at 3-instance threshold; canonical promotion-format precedent);
+shieldscan-engine commit e905afe (Task 7.3 engine close); shieldscan-engine
+commit 872b2b0 (Task 7.2 Nmap parser; precedent C5 1st instance);
+shieldscan-engine DEVELOPMENT-PATTERNS.md.
+
 ### ADR evaluation note (Phase 5.B verdict)
 
 Phase 5.B of Task 7.3 evaluated whether Task 7.3's architectural
