@@ -22,8 +22,16 @@ import (
 type AuthFunc func(*http.Request)
 
 // WithAPIKeyHeader returns an AuthFunc that adds a fixed-name header
-// (e.g., X-Mobsfapi-Key, X-ZAP-API-Key) carrying the API key value.
-// Empty value or empty header name returns a no-op AuthFunc.
+// (e.g., X-Mobsfapi-Key) carrying the API key value. Empty value or
+// empty header name returns a no-op AuthFunc.
+//
+// Note: ZAP's documented canonical authentication method is the
+// "?apikey=" URL query parameter, not a header (per zaproxy.org/docs/api/);
+// Task 7.3 ZAP consumer (commit e905afe) uses an AuthFunc escape-hatch
+// closure instead of this helper. Header backward-compat works empirically
+// (Phase 0 V3) but is not doc-backed. Future query-param-auth tools may
+// warrant a WithAPIKeyQueryParam framework helper at 2nd-instance
+// threshold per Phase 5.D Task 7.5b precedent (3a17274).
 func WithAPIKeyHeader(headerName, value string) AuthFunc {
 	if headerName == "" || value == "" {
 		return func(*http.Request) {}

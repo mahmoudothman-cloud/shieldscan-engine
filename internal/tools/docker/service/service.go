@@ -61,18 +61,22 @@ type ServiceConfig struct {
 // framework Client + scan config and returns RawFindings) and ServiceConfig
 // (which specifies image, port, readiness endpoint, auth, and cleanup behavior).
 //
-// Consumer integration pattern:
+// Consumer integration pattern (generic example; consumer-specific auth
+// shape varies — header-based tools use service.WithAPIKeyHeader; tools
+// requiring query-param-based auth construct an AuthFunc closure as
+// escape hatch per Q8 lock; see Task 7.3 ZAP consumer for query-param
+// example):
 //
 //	runner := &service.DockerServiceRunner{
-//	    ToolName:     "zap",
+//	    ToolName:     "example-tool",
 //	    ToolCategory: "dast",
 //	    ServiceConfig: service.ServiceConfig{
-//	        Image:              zapImageDigest,
+//	        Image:              toolImageDigest,
 //	        ContainerPort:      8080,
-//	        EphemeralContainer: true, // V4 ZAP cleanup-contract uncertainty
-//	        ReadinessEndpoint:  "/JSON/core/view/version/",
+//	        EphemeralContainer: true,
+//	        ReadinessEndpoint:  "/health",
 //	        ReadinessTimeout:   120 * time.Second,
-//	        AuthFunc:           service.WithAPIKeyHeader("X-ZAP-API-Key", apiKey),
+//	        AuthFunc:           service.WithAPIKeyHeader("X-API-Key", apiKey),
 //	    },
 //	    BuildScan: func(ctx context.Context, target tools.Target, cfg tools.ScanConfig, client *service.Client) ([]events.RawFinding, error) {
 //	        // Tool-specific scan logic using client.Get/Post/PollUntil
