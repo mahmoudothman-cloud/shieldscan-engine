@@ -45,7 +45,9 @@ func TestDockerCompose_ExpectedServicesPresent(t *testing.T) {
 	}
 	require.NoError(t, yaml.Unmarshal(data, &parsed))
 
-	for _, svc := range []string{"mobsf", "zap", "trivy", "sqlmap"} {
+	// "zap" removed per Task 7.3 Q3 lock + Task 7.5b V4 Option γ ephemeral
+	// default; ZAP is now per-scan ephemeral via DockerServiceRunner.
+	for _, svc := range []string{"mobsf", "trivy", "sqlmap"} {
 		assert.Contains(t, parsed.Services, svc,
 			"service %q must be defined per TOOL-ARCH §2.3", svc)
 	}
@@ -63,9 +65,10 @@ func TestDockerCompose_ImagesMatchVERSIONS(t *testing.T) {
 	raw := string(composeFile(t))
 
 	// Pinned image tags from VERSIONS.md §2.5 (see ../shieldscan-docs/).
+	// "zap" removed per Task 7.3 Q3 lock; ZAP digest pinned in
+	// internal/tools/docker/service/zap (consumer-side) instead.
 	expectedImages := map[string]string{
 		"mobsf":  "opensecurity/mobile-security-framework-mobsf:v4.4.6",
-		"zap":    "zaproxy/zap-stable:2.16.0",
 		"trivy":  "aquasec/trivy:0.58.0",
 		"sqlmap": "paoloo/sqlmap:1.9",
 	}

@@ -31,19 +31,13 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  zap:
-    image: zaproxy/zap-stable:2.16.0
-    container_name: shieldscan-zap
-    command: zap.sh -daemon -port 8080 -host 0.0.0.0 -config api.disablekey=true
-    ports:
-      - "8080:8080"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/JSON/core/view/version"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
-    restart: unless-stopped
+  # ZAP service entry removed per Task 7.3 Q3 lock + Task 7.5b V4 Option γ
+  # ephemeral-container default. ZAP is now spun up per-scan via
+  # internal/tools/docker/service/zap (Task 7.3 commit) using the
+  # DockerServiceRunner framework (Task 7.5b commit 1306ca8) with
+  # cfg.EphemeralContainer = true; no long-running compose service.
+  # Forward-pin: if Task 7.5c V4 verification recommends warm-pool flip,
+  # ZAP returns to compose OR continues lazy-spin via WarmPool framework.
 
   trivy:
     image: aquasec/trivy:0.58.0

@@ -8,6 +8,139 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-05-09 — Task 7.3 ZAP Consumer (DAST)
+
+**Authority:** `plans/2026-05-09-task-7.3-zap-consumer-design.md` (commit
+682cfcc in shieldscan-docs); `plans/2026-05-09-task-7.3-zap-consumer-implementation.md`
+(commit e98a8e4 in shieldscan-docs); brainstorming chain Q1–Q9 (in conversation
+memory); Phase 0 + Phase 1 + Phase 2 surface reports.
+
+**Scope.** ZAP consumer subpackage at `internal/tools/docker/service/zap/`
+(7 prod + 7 test files; ~1781 LoC); cross-package modifications to
+`deploy/docker-compose.services.yml` + `deploy/docker_compose_test.go` (Q3
+lock; ZAP service entry removed) + `internal/tools/runner.go` (Q6 D1 JSON tags
+on existing AuthConfig type). First DockerServiceRunner consumer (per Task
+7.5b framework commit 1306ca8).
+
+### Phase 0 Empirical Verification (V0–V18)
+
+Phase 0 caught 5 critical design adjustments + 1 NEW infrastructure finding:
+
+- **V0** Host header routing: ZAP daemon distinguishes API vs proxy by Host
+  header; consumer-local `zapQueryParamAuth` AuthFunc closure sets
+  `req.Host = "zap"` for all API requests.
+- **V5/V17** policy names DRIFT: ZAP 2.17.0 ships 22 policies (not 9
+  documented); `ascan.go` `zapPolicyAllowlist` hardcodes the 22 actual names.
+- **V6** `cweid` DRIFT: JSON STRING not int; `parser.go` pass-through directly
+  to `RawFinding.CWEID` without `strconv.Itoa`.
+- **V8** Severity normalization STOP_GATE_RESOLVED: shieldscan-api enum is
+  lowercase; `parser.go` `mapZAPRisk` normalizes `"High"→"high"` etc;
+  `"False Positive" → drop=true` (V9 intersection).
+- **V12** tags shape DRIFT: ZAP `tags` is `map[string]string` with structured
+  keys (`OWASP_*`, `CWE-*`, `POLICY_*`, `SYSTEMIC`); `parser.go` `extractZAPTags`
+  filters `OWASP_*`+`CWE-*` keys, drops `POLICY_*`+`SYSTEMIC` noise; raw tags
+  preserved in `Metadata["tags_raw_json"]`.
+- **V13** form-based auth STOP_GATE_PASS: `authMethodConfigParams` URL-encoded
+  format ~150–300 chars; well within ExtraArgs escape-hatch capacity; Q6 lock
+  holds.
+- **V3** header backward-compat WORKS but doesn't change Q7(B) lock.
+- **V1+V2+V4+V10+V11+V16+V18** RESOLVED with clean Phase 1 paths.
+- **V14** PARTIAL (`userId` silent-pass; Phase 1 forward-pin).
+- **V15** FORWARD-PINNED (session re-auth empirical out-of-scope).
+
+### Phase 1 Deviations (D1–D7)
+
+- **D1** — `AuthConfig` pre-exists on `tools.Target` struct (line 138; not
+  `ScanConfig` per design doc Q6); engine had partial Task 3.X-vintage work;
+  Phase 1 added JSON tags only.
+- **D1.b** — JSON tags on `tools.AuthConfig` are redundant (internal-only
+  struct; wire deserialization happens via `events.JobAuth` per Phase 2 V2.3
+  finding). Tags are harmless; no action needed.
+- **D2** — `runner_test.go` did not exist; created from scratch.
+- **D3** — `service.DockerClient` does not exist; `docker.DockerClient` is the
+  type alias (per Task 7.5b 1306ca8 D1 deviation precedent); switched import.
+- **D4** — `extraArgsAuthMap` unused warning resolved via forward-pin warn-log
+  call in `zap.NewBuildScan`.
+- **D5** — staticcheck QF1011 short var decl preference; resolved with
+  shorthand.
+- **D6** — staticcheck SA4017 no-op if-block in stub; replaced with
+  comment-only.
+- **D7** — gofmt thread-count column drift in `spider_test.go`; auto-corrected.
+
+### Phase 2 Verification + Disposition (V2.1–V2.6)
+
+Phase 2 surfaced shieldscan-api comprehensive credentials infrastructure
+already shipped (M3 Task 3.X vintage): Pydantic `CredentialRequest`
+discriminated union (5 types matching engine); SQLAlchemy `ProjectCredential`
+with Fernet encryption; migration `d4f6b1e9a527`; route tests. Engine
+wire-deserialization via `events.JobAuth` aligns with SPEC §7.1;
+`processor.jobDispatchToTarget` bridges wire→engine `target.AuthConfig` (lines
+421–440). ADR-015 forcing function intentionally blocks runtime activation:
+orchestrator emits `auth=None` per `test_dispatch_payload_auth_is_null_pending_adr_015`
+pin.
+
+**Phase 2 disposition: OUTCOME (b)** — forward-pin ADR-015 enablement to
+separate task; engine Phase 4 ships standalone. ZERO shieldscan-api files
+modified in this commit.
+
+### Forward-Pins
+
+1. **Task 7.3.x or M5+ ADR-015 enablement task:** orchestrator decrypts
+   `ProjectCredential`; serializes to wire `{type, data}` shape; lifts
+   `test_dispatch_payload_auth_is_null_pending_adr_015` pin.
+2. **v2 wire-schema Fields expansion:** `events.JobAuth` adds
+   `Fields map[string]string` when 2nd auth-supporting consumer lands OR
+   form-auth path activated.
+3. **CredentialRequest discriminator drift** (audit-only): API uses
+   `auth_type`; engine wire uses `type`; orchestrator dispatch must rename
+   when ADR-015 lands.
+4. **Task 7.3 Phase 5.A design doc revision:** Q6 placement (Target not
+   ScanConfig); V5/V17 22 actual policy names; V6 cweid string pass-through;
+   V12 tags map shape extraction; V0 Host header design adjustment.
+5. **Task 7.5b documentation cleanup:** design doc 3067c92 + ADR-026 addendum
+   066c81f reference ZAP using `WithAPIKeyHeader` (incorrect per Q7
+   verification).
+6. **Task 7.5c V4 verification execution:** ZAP `newSession` cleanup contract
+   empirical work.
+7. **v2 typed-enum AuthConfig.Type expansion:** form_based path empirical
+   config formats verified (V13 PASS); ready for v2 enablement when ADR-015
+   lifted.
+8. **Mode D AJAX spider v2:** when SPA customer demand surfaces.
+9. **Pagination upgrade** (Q8 Option ii): if execution surfaces alert count
+   >5000.
+10. **WithAPIKeyQueryParam framework helper promotion:** when 2nd
+    query-param-auth tool surfaces (Phase 5.D Task 7.5b 3-instance threshold
+    gate).
+
+### Quality Gate (Phase 3 final)
+
+- gofmt clean; go vet clean; golangci-lint zero issues
+- `go test -race -count=1` 23/23 packages green
+- `service/zap` coverage 87.3% (above 80% target)
+- 39 new tests landed (35 zap subpackage + 4 runner.go AuthConfig)
+
+### Cross-References
+
+- shieldscan-engine commit 1306ca8 (Task 7.5b DockerServiceRunner framework)
+- shieldscan-engine commit 872b2b0 (Task 7.2 Nmap consumer pattern precedent)
+- shieldscan-engine commit f5d77c8 (Task 7.5a foundation)
+- shieldscan-engine commit 5503476 (DEVELOPMENT-PATTERNS entry #5;
+  cleanup-uses-detached-context applies to v2 warm-pool)
+- shieldscan-engine commit 3a17274 (Task 7.5b Phase 5.D no-promotions)
+- shieldscan-docs commit 682cfcc (Task 7.3 design doc)
+- shieldscan-docs commit e98a8e4 (Task 7.3 implementation plan)
+- shieldscan-docs commit 5a253d2 (Task 7.5c V4 verification plan)
+- shieldscan-docs commit 066c81f (Task 7.5b ADR-026 addendum)
+- shieldscan-docs commit 3067c92 (Task 7.5b design doc)
+- SPECIFICATION.md §7.1 (auth block wire schema); §9.1 (pricing tiers; Quick +
+  Full); §13 ADR-008 (MobSF DockerServiceRunner consumer precedent); §13
+  ADR-015 (decrypted credentials in Redis transit; forcing function); §13
+  ADR-026 (canonical DockerRunner architecture + ContainerFactory addendum);
+  §13 ADR-027 (RawFinding.Metadata schema); §14.1 (asymmetric-cost
+  meta-principle).
+
+---
+
 ## 2026-05-09 — Task 7.5b (DockerServiceRunner framework)
 
 **Status:** Engine-side closed. Doc-side close-out (Phase 5) forthcoming.

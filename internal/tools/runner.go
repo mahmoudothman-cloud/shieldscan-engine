@@ -135,15 +135,19 @@ type Target struct {
 	// nil when no authentication is configured. ADR-015 (decrypted
 	// credentials in Redis transit) is reserved; this field is a
 	// placeholder so M6 runners don't refactor when ADR-015 lands.
-	AuthConfig *AuthConfig
+	// JSON tag added per Task 7.3 Q6 lock — wire-payload deserialization.
+	AuthConfig *AuthConfig `json:"auth_config,omitempty"`
 }
 
 // AuthConfig describes decrypted authentication material for tools
 // that support authenticated scans. Per SPECIFICATION §7.1 auth block.
+// JSON tags added per Task 7.3 Q6 lock — first consumer (ZAP) deserializes
+// from wire payload via these tags. Pre-existing field set preserved
+// (5 Type values + Fields map) per Task 7.3 Phase 1 D1 deviation.
 type AuthConfig struct {
 	// Type is one of: "cookie" | "bearer" | "basic" | "custom_header" |
 	// "form".
-	Type string
+	Type string `json:"type"`
 
 	// Data is the credential value, already decrypted by the processor.
 	// Format depends on Type:
@@ -151,11 +155,11 @@ type AuthConfig struct {
 	//   bearer       → token (bare; runner adds "Bearer " prefix)
 	//   basic        → "user:pass"
 	//   custom_header → "Header-Name: value"
-	Data string
+	Data string `json:"data"`
 
 	// Fields carries form-auth field names and values. Used only when
 	// Type == "form".
-	Fields map[string]string
+	Fields map[string]string `json:"fields,omitempty"`
 }
 
 // ScanConfig carries per-scan tunables that may override tool defaults.
