@@ -8,6 +8,111 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-05-09 — Task 7.5c V4 ZAP Cleanup Verification (Empirical Execution)
+
+**Authority:** `plans/2026-05-09-task-7.5c-zap-cleanup-verification-plan.md`
+(commit 5a253d2 original; commit 124f5aa Phase D.1 verification record) in
+shieldscan-docs.
+
+**Scope.** Empirical verification of ZAP `newSession` cleanup contract against
+pinned ZAP digest `sha256:8770b...` (ZAP 2.17.0). Executed against OWASP
+juice-shop testbed (`bkimminich/juice-shop:latest`). 9 surfaces tested + 3
+idempotency/failure-mode tests. NO engine code changes; verification confirms
+existing Task 7.5b V4 Option γ ephemeral lock is empirically correct.
+
+### Per-Surface Verdicts
+
+| Surface | Verdict | Note |
+|---|---|---|
+| S1 Spider History | ✅ RESET_COMPLETE | 1→0 scans; scan ID returns `does_not_exist` |
+| S2 Active Scan History | ✅ RESET_COMPLETE | 1→0 scan records |
+| S3 Alert List | ✅ RESET_COMPLETE | 32→0 alerts |
+| S4 Target Context | ✅ RESET_COMPLETE | `verify-test` context cleared |
+| S5 Scope Config | ✅ RESET_COMPLETE | cascade with S4 |
+| S6 Auth Method | ✅ RESET_COMPLETE | cascade with S4 |
+| S7 User Contexts | ⚠️ PARTIAL_RESET | Orphan user records persist (id=40 ctx=2 even though ctx 2 reset) |
+| S8 Attack Policies | ⚠️ NOT_RESET | Custom `verify-policy` survives `newSession` |
+| S9 Plugin Attack Strength | ⚠️ NOT_RESET | id=4 Injection `attackStrength=HIGH` persists |
+
+### Idempotency + Failure Mode Tests
+
+- **IF1** (idempotent `newSession` on clean state): ✅ Both calls return
+  `{"Result":"OK"}`
+- **IF2** (`newSession` during in-progress ascan): ✅ Returns OK; in-progress
+  scan cleanly terminated
+- **IF3** (insufficient privileges): N/A (single-key API)
+
+### Cumulative Verdict
+
+**RECOMMEND RETAIN `cfg.EphemeralContainer = true` for ZAP.** Per Task 7.5c
+plan §7 evaluation framework: *"Any surface NOT_RESET OR PARTIAL_RESET →
+RECOMMEND retain `cfg.EphemeralContainer = true` (cleanup contract
+incomplete)."* Three surfaces fail clean reset; ephemeral lock empirically
+validated as architecturally correct (NOT transitional).
+
+### Architectural Insight (Documentation Gap)
+
+ZAP's `newSession` is session-state-only; user definitions (`/JSON/users/...`)
++ custom scan policy registry (`/JSON/ascan/.../addScanPolicy`) + per-policy
+attack-strength + alert-threshold tuning (`setPolicy*` / `setScanner*`
+actions) are stored at ZAP-instance level (configuration-scoped), NOT
+session-scoped. This distinction is not surfaced in public REST API docs at
+zaproxy.org/docs/api/.
+
+### Security Implication
+
+Warm-pool path with `newSession`-as-cleanup-mechanism would have shipped
+multi-tenant data leakage vulnerability: prior-tenant user records + custom
+policies + plugin tuning would persist into next-tenant scans. Q6 ephemeral
+lock per Task 7.5b V4 Option γ averts this.
+
+### Phase D Artifacts Landed
+
+- Phase D.1 (shieldscan-docs commit 124f5aa): Task 7.5c plan §11 Verification
+  Execution Record
+- Phase D.2 (shieldscan-docs commit c6a79e0): Task 7.5b design doc + Task 7.3
+  design doc V4-verified annotations
+- Phase D.3 (this commit): shieldscan-engine DRIFT-LOG empirical findings
+  entry
+
+### Forward-Pins (Future-ADR-Territory)
+
+1. **M9 multi-tenant ZAP scope:** if multi-tenant scenarios with shared ZAP
+   instances surface in M9, only safe paths are (a) per-tenant ephemeral
+   container (current Task 7.5b V4 default) OR (b) full container restart
+   between tenants (vs `newSession`). Warm-pool with `newSession` cleanup is
+   empirically ruled out by S7/S8/S9 findings.
+2. **Upstream documentation MR opportunity:** zaproxy.org/docs/api/ has
+   documentation gap on `newSession` scope (session-state-only; not
+   user/policy/plugin-state). Community contribution opportunity; not
+   blocking.
+3. **Future ZAP version re-verification:** if ZAP version upgrades beyond
+   2.17.0 (current pinned digest `sha256:8770b...`), re-execute V4
+   verification at new digest before assuming behavior unchanged. ZAP cleanup
+   contract behavior may change across versions.
+4. **Configuration-scoped reset API surveillance:** if future ZAP API
+   endpoint surfaces that resets configuration-scoped state (users + custom
+   policies + plugin tuning) via single call, warm-pool path becomes viable.
+   Currently no such endpoint documented; surveillance forward-pin.
+
+### Cross-References
+
+- shieldscan-docs commit 5a253d2 (Task 7.5c plan original)
+- shieldscan-docs commit 124f5aa (Task 7.5c Phase D.1 verification record)
+- shieldscan-docs commit c6a79e0 (Task 7.5c Phase D.2 design doc annotations)
+- shieldscan-docs commit 3067c92 (Task 7.5b design doc; V4 Option γ
+  resolution lock annotated D.2)
+- shieldscan-docs commit 26e9afa (Task 7.3 Phase 5.A design doc; Q6
+  ephemeral path annotated D.2)
+- shieldscan-engine commit 1306ca8 (Task 7.5b framework; V4 Option γ
+  ephemeral lock)
+- shieldscan-engine commit e905afe (Task 7.3 engine close;
+  `cfg.EphemeralContainer = true` for ZAP)
+- SPECIFICATION.md §13 ADR-026 (DockerRunner family); §14.1
+  (asymmetric-cost meta-principle)
+
+---
+
 ## 2026-05-09 — Task 7.3 ZAP Consumer (DAST)
 
 **Authority:** `plans/2026-05-09-task-7.3-zap-consumer-design.md` (commit
