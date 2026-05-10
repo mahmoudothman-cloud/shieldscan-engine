@@ -139,6 +139,66 @@ modified in this commit.
   §13 ADR-027 (RawFinding.Metadata schema); §14.1 (asymmetric-cost
   meta-principle).
 
+### ADR evaluation note (Phase 5.B verdict)
+
+Phase 5.B of Task 7.3 evaluated whether Task 7.3's architectural
+commitments warrant ADR territory (addendum to existing ADR OR new ADR).
+
+**Verdict: OUTCOME iii** — no ADR action; Task 7.3 is consumer-task scope.
+DRIFT-LOG note added (mirrors Task 7.5b 5.D 3a17274 + 5.E 7c19eaa no-action
+patterns).
+
+**ADR registry references found:**
+- ADR-026 line 2104 (ContainerFactory addendum): "future ZAP (Task 7.3)"
+  — names Task 7.3 as forthcoming consumer of existing framework
+- ADR-027 line 2175: illustrative ZAP Metadata keys (explicitly marked
+  illustrative; canonical contracts land in consumer task design doc)
+- ADR-027 line 2211 Triggers to revisit #1: Metadata key contract conflict
+  check — Task 7.3 is 2nd consumer; no conflict (only `target` shared
+  with Nmap; aligned semantics)
+- ADR-027 line 2225 Open follow-up: "Future Trivy/SQLMap/ZAP/MobSF
+  consumer tasks: each lands per-tool Metadata key contract" — Task 7.3
+  fulfills this forward-pin
+
+**Evaluation against Task 7.5b 5.B precedent (066c81f) ADR-territory criteria:**
+
+- **(a) wire-schema:** D1.b confirmed `events.JobAuth` + `Target.AuthConfig`
+  pre-existed (Task 3.X M3 vintage); JSON tags addition was redundant. NO
+  new wire-schema primitive.
+- **(b) cross-repo:** Phase 2 OUTCOME b ZERO shieldscan-api files
+  modified; ADR-015 enablement forward-pinned to separate task. NO new
+  cross-repo commitment.
+- **(c) downstream-pipeline:** Q8 RawFinding mapping uses existing
+  ADR-027 Metadata schema; snake_case keys per Nmap precedent. NO new
+  downstream-pipeline commitment.
+
+Task 7.5b 5.B (066c81f) added a ContainerFactory Extension addendum to
+ADR-026 because Task 7.5b extended the ADR-026 framework with a NEW
+primitive (V2 ContainerFactoryFunc + Config.ContainerFactory field +
+DefaultContainerFactory). Task 7.3 by contrast is a CONSUMER task
+fulfilling forward-pins set by prior ADRs (ADR-026 + ADR-027); did not
+extend ANY ADR territory.
+
+**ADR-027 illustrative-key drift note** (documentation hygiene; NOT
+ADR-territory): ADR-027 line 2175's illustrative ZAP keys (`http_method,
+request_headers_hash, response_code, attack_vector`) differ from Task 7.3's
+actual canonical contract enumerated in Phase 1 implementation
+(`confidence, plugin_id, wasc_id, http_method, attack_vector, evidence,
+target, alert_ref, input_vector, other_info, solution, zap_message_id,
+zap_source_id, tags_raw_json`). ADR-027 explicitly framed these as
+"illustrative; canonical key contracts land in each consumer task's design
+doc + package docstring" — so drift is by-design. ADR-027 update could
+optionally cross-reference Task 7.3 design doc 26e9afa for canonical
+contract; not required.
+
+**Cross-references:** shieldscan-docs commit 066c81f (Task 7.5b 5.B
+precedent; OUTCOME (i) addendum to ADR-026 — different shape because Task
+7.5b extended framework primitive); shieldscan-engine commit 3a17274
+(Task 7.5b 5.D no-promotions precedent); shieldscan-engine commit
+7c19eaa (Task 7.3 5.E DRIFT-LOG note pattern); shieldscan-engine commit
+e905afe (Task 7.3 engine close); shieldscan-docs SPECIFICATION.md §13
+ADR-026/ADR-027/ADR-015/ADR-008.
+
 ### §14.1 invocation tracking note (Phase 5.E verdict)
 
 Phase 5.E of Task 7.3 evaluated whether Q5/Q6/Q7/Q8 brainstorming locks +
