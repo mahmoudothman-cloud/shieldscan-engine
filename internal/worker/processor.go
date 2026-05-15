@@ -474,6 +474,20 @@ func jobDispatchToScanConfig(job *events.JobDispatch) tools.ScanConfig {
 			}
 		}
 	}
+	// Mobile config mirror per Task 7.4 D-PLAN-2 Path Y lock. The
+	// MobSF consumer reads platform + analysis_type via ExtraArgs
+	// (escape-hatch pattern; symmetric with ZAP's zap.scan_policy)
+	// rather than via Target struct widening. Wire-side fields live
+	// on JobMobileConfig; engine-side they surface to the consumer
+	// through ScanConfig.ExtraArgs.
+	if job.MobileConfig != nil {
+		if job.MobileConfig.Platform != "" {
+			cfg.ExtraArgs["mobsf.platform"] = job.MobileConfig.Platform
+		}
+		if job.MobileConfig.AnalysisType != "" {
+			cfg.ExtraArgs["mobsf.analysis_type"] = job.MobileConfig.AnalysisType
+		}
+	}
 	return cfg
 }
 

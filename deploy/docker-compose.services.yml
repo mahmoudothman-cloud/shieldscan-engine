@@ -16,28 +16,18 @@
 version: '3.8'
 
 services:
-  mobsf:
-    image: opensecurity/mobile-security-framework-mobsf:v4.4.6
-    container_name: shieldscan-mobsf
-    ports:
-      - "8000:8000"
-    environment:
-      MOBSF_API_KEY: ${MOBSF_API_KEY:-}
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    restart: unless-stopped
-
-  # ZAP service entry removed per Task 7.3 Q3 lock + Task 7.5b V4 Option γ
-  # ephemeral-container default. ZAP is now spun up per-scan via
-  # internal/tools/docker/service/zap (Task 7.3 commit) using the
+  # MobSF service entry removed per Task 7.4 Q3 lock + Q5 Option β v1
+  # ephemeral-container default. MobSF is now spun up per-scan via
+  # internal/tools/docker/service/mobsf (Task 7.4 commit) using the
   # DockerServiceRunner framework (Task 7.5b commit 1306ca8) with
   # cfg.EphemeralContainer = true; no long-running compose service.
-  # Forward-pin: if Task 7.5c V4 verification recommends warm-pool flip,
-  # ZAP returns to compose OR continues lazy-spin via WarmPool framework.
+  # Forward-pin: if Task 7.5d V4-analogue verification recommends
+  # warm-pool flip (delete_scan idempotency confirmed across surfaces),
+  # MobSF returns to compose OR continues lazy-spin via WarmPool framework.
+  #
+  # ZAP service entry also removed per Task 7.3 Q3 lock + Task 7.5b V4
+  # Option γ ephemeral-container default; spun up per-scan via
+  # internal/tools/docker/service/zap.
 
   trivy:
     image: aquasec/trivy:0.58.0

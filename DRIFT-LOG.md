@@ -8,6 +8,128 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-05-10 — Task 7.4 MobSF Consumer (MAST) — Phase 1+Phase 4 Adjunct
+
+**Authority:** `plans/2026-05-09-task-7.4-mobsf-consumer-design.md` (commit
+02be8cf in shieldscan-docs); `plans/2026-05-09-task-7.4-mobsf-consumer-implementation.md`
+(commit 4a94c2e).
+
+**Scope:** Second DockerServiceRunner consumer (after Task 7.3 ZAP). MAST
+(Mobile Application Security Testing) via MobSF v4.4.6 at pinned digest
+`sha256:72311e3553ca2c21043923cace27ed99f800cd641e9368160406779516dd774e`.
+Static analysis only v1 per Q1 lock. Ephemeral container architecture per
+Q5 lock (mirroring Task 7.5b V4 Option γ for ZAP); Task 7.5d delete_scan
+cleanup verification forward-pinned.
+
+**Phase 0 Empirical Verification (6+ drifts surfaced + auto-corrected in Phase 1):**
+
+- D1 files-dict shape (`map[path]string` CSV, not list-of-structured-objects)
+- D2 metadata.ref key (3-letter; not "reference")
+- D3 owasp-mobile colon format ("M7: Client Code Quality"; not hyphen)
+- D4 masvs full canonical form ("MSTG-STORAGE-2"; not "code-8" short form)
+- V5 severity lowercase ("high"/"warning"/"info"; not uppercase)
+- V17 certificate_findings list-of-3-element-lists (`[[severity, title, description]]`; not objects)
+- V8 decision-lock: rule_id → Title directly (snake_case human-readable per DIVA sample)
+
+**Phase 1 Implementation:**
+
+- 8 prod files + 7 test files at `internal/tools/docker/service/mobsf/`
+  (1,323 LoC prod + 1,161 LoC tests = 2,484 LoC delta)
+- Q3 lock: MobSF removed from `deploy/docker-compose.services.yml` +
+  `deploy/docker_compose_test.go` assertions
+- AWS SDK Go v2 added to `go.mod` for R2 S3-compatible client
+  (consumer-local; Q6.1 lock)
+- Coverage 82.3% (target ≥80%); 24+1 = 25 packages green; lint clean
+
+**Phase 1 D-Deviations (6 total; all auto-corrected with disposition):**
+
+- D-PLAN-1 R2 env-var naming: auto-corrected to `SHIELDSCAN_R2_*`
+  config-injection pattern (matches engine config layering; aligns with
+  `internal/config/config.go` convention)
+- D-PLAN-2 ScanConfig mobile fields: ExtraArgs escape-hatch v1
+  (`mobsf.platform` / `mobsf.analysis_type`); processor wiring landed in
+  Phase 4 adjunct (this commit)
+- D-PLAN-3 AWS SDK `BaseEndpoint` over `EndpointResolverV2`
+  (idiomatic R2; simpler)
+- D-PLAN-4 parser/sections LoC over-estimate (V14 binary 8-sub-check fan-out
+  + V13/V16 forward-pin scaffolding)
+- D-PLAN-5 gosec `//nolint` annotations (3 places; all scoped + explained)
+- D-PLAN-6 AWS SDK transitive pin addendum: forward-pinned to Phase 5.A
+  docs followup
+
+**Phase 2 Cross-Repo Verification:**
+
+- shieldscan-api mobile infrastructure INTACT (V2.1-V2.3 + V2.5 + V2.6 all
+  clean per V6 finding)
+- V2.4 surfaced wire-deserialization gap: `processor.jobDispatchToTarget`
+  dropped Platform + AnalysisType on the floor; only UploadRef populated;
+  `ScanConfig.ExtraArgs` had no mobile mirror
+- D-PLAN-2 final disposition: Path Y (ExtraArgs preserved as v1 path);
+  processor wiring as Phase 4 adjunct (this commit) — 6-LoC mirror + 39-LoC
+  test in `internal/worker/processor.go`
+
+**Phase 2 New D-Deviation Surfaced + Resolved:**
+
+- D-PLAN-7 orchestrator default "both"→"static" mismatch: Path (c) flip
+  orchestrator default at shieldscan-api boundary (cleanest cross-repo
+  contract; breaks OUTCOME b purity intentionally to address real
+  mismatch); shieldscan-api companion commit lands this fix
+
+**Architectural Insight:**
+
+Phase 2 surfaced first cross-repo coordination need of session-tail.
+Task 7.4 ships as cross-repo coordinated commit pair (api FIRST → engine
+SECOND with cross-reference). Task 7.3 + 7.5c were single-repo. Pattern:
+cross-repo coordination warranted when verification surfaces real
+contract mismatches; single-repo discipline preserved when no contract
+mismatch exists.
+
+**Security Implication:**
+
+Q5 ephemeral lock per Task 7.5c V4 precedent: bounded ephemeral startup
+cost vs unbounded cleanup-contract-uncertainty risk. MobSF V5 forward-pin
+("Suppression/user/settings UNCLEAR") matches ZAP pattern that Task 7.5c
+empirically falsified. Task 7.5d empirical verification of delete_scan
+cleanup contract is forward-pinned; until then, ephemeral is
+architecturally correct (not transitional).
+
+**Forward-Pins (Future-Task Territory):**
+
+1. Task 7.5d — MobSF `delete_scan` cleanup contract empirical verification
+   (analogous to Task 7.5c V4 for ZAP; plan-then-execute pattern).
+2. Phase 5.A — design doc Phase 0 drift annotation (D1/D2/D3/D4 + V5 + V17
+   + V8) per Task 7.3 5.A pattern (26e9afa).
+3. Phase 5.B — ADR-008 addendum (MobSF persistent service → ephemeral
+   default; mirror Task 7.5b 5.B ADR-026 addendum 066c81f pattern).
+4. Phase 5.C — SPEC §3.2 MobSF subpackage path update (mirrors Task 7.3
+   5.C 294427b pattern).
+5. Phase 5.D — DEVELOPMENT-PATTERNS entry #6 evaluation (C5
+   typed-fields-first 3rd-instance: Nmap + ZAP + MobSF; promotion
+   threshold reached).
+6. Phase 5.E — SPEC §14.1 asymmetric-cost meta-principle invocation note
+   (Q5 lock invocation).
+7. VERSIONS.md addendum (D-PLAN-6) — transitive aws-sdk-go-v2 deps not
+   individually pinned.
+8. iOS section variance verification — empirical at Phase 0 v2 OR Phase 1
+   testing (V10 + V13/V16 forward-pins).
+9. Async-mode MobSF (`MOBSF_ASYNC_ANALYSIS=1`) — v1 sync; flip when scan
+   duration exceeds framework client timeout.
+10. ADR-015 enablement task — R2 pre-signed URL pattern bundle.
+
+**Cross-References:** shieldscan-docs commits 02be8cf (design doc) +
+4a94c2e (implementation plan); shieldscan-api commit 6403a3f
+(D-PLAN-7 Path (c) orchestrator default flip); shieldscan-engine commits
+1306ca8 (Task 7.5b DockerServiceRunner framework foundation) + e905afe
+(Task 7.3 ZAP consumer; pattern precedent) + 872b2b0 (Task 7.2 Nmap
+consumer; pattern precedent) + bfccef8 (Task 7.5c V4 verification; Q5
+architectural precedent) + 5503476 (DEVELOPMENT-PATTERNS entry #5;
+precedent for C5 promotion at Phase 5.D); SPECIFICATION.md §13 ADR-008
+(Phase 5.B addendum target) + ADR-026 + ADR-027 + ADR-015 + ADR-017;
+§14.1 (asymmetric-cost meta-principle); §7.1 (mobile_config wire schema)
++ §9.1 (Mobile scans pricing tier).
+
+---
+
 ## 2026-05-09 — Task 7.5c V4 ZAP Cleanup Verification (Empirical Execution)
 
 **Authority:** `plans/2026-05-09-task-7.5c-zap-cleanup-verification-plan.md`

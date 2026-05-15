@@ -494,5 +494,44 @@ func TestProcessor_JobDispatchToScanConfig(t *testing.T) {
 	assert.NotNil(t, cfg.ExtraArgs, "ExtraArgs initialized to non-nil empty map")
 }
 
+// TestProcessor_JobDispatchToScanConfig_MobileExtraArgs pins the
+// Task 7.4 D-PLAN-2 Path Y wiring: when JobMobileConfig is populated,
+// Platform + AnalysisType mirror to ScanConfig.ExtraArgs under
+// keys "mobsf.platform" + "mobsf.analysis_type" so the MobSF consumer
+// can read them via the escape-hatch pattern (symmetric with ZAP's
+// zap.scan_policy).
+func TestProcessor_JobDispatchToScanConfig_MobileExtraArgs(t *testing.T) {
+	t.Run("populated mobile config mirrors to ExtraArgs", func(t *testing.T) {
+		job := &events.JobDispatch{
+			MobileConfig: &events.JobMobileConfig{
+				UploadRef:    "r2://uploads/org/diva.apk",
+				Platform:     "android",
+				AnalysisType: "static",
+			},
+		}
+		cfg := jobDispatchToScanConfig(job)
+		assert.Equal(t, "android", cfg.ExtraArgs["mobsf.platform"])
+		assert.Equal(t, "static", cfg.ExtraArgs["mobsf.analysis_type"])
+	})
+	t.Run("nil mobile config leaves ExtraArgs free of mobsf keys", func(t *testing.T) {
+		job := &events.JobDispatch{}
+		cfg := jobDispatchToScanConfig(job)
+		_, hasPlatform := cfg.ExtraArgs["mobsf.platform"]
+		_, hasAnalysis := cfg.ExtraArgs["mobsf.analysis_type"]
+		assert.False(t, hasPlatform, "mobsf.platform must not appear when MobileConfig nil")
+		assert.False(t, hasAnalysis, "mobsf.analysis_type must not appear when MobileConfig nil")
+	})
+	t.Run("empty mobile fields skip the mirror", func(t *testing.T) {
+		job := &events.JobDispatch{
+			MobileConfig: &events.JobMobileConfig{UploadRef: "r2://x"},
+		}
+		cfg := jobDispatchToScanConfig(job)
+		_, hasPlatform := cfg.ExtraArgs["mobsf.platform"]
+		_, hasAnalysis := cfg.ExtraArgs["mobsf.analysis_type"]
+		assert.False(t, hasPlatform)
+		assert.False(t, hasAnalysis)
+	})
+}
+
 // _ = sync.RWMutex{} // unused-import guard for sync (used elsewhere)
 var _ = sync.RWMutex{}

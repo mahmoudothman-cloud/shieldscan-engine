@@ -47,7 +47,9 @@ func TestDockerCompose_ExpectedServicesPresent(t *testing.T) {
 
 	// "zap" removed per Task 7.3 Q3 lock + Task 7.5b V4 Option γ ephemeral
 	// default; ZAP is now per-scan ephemeral via DockerServiceRunner.
-	for _, svc := range []string{"mobsf", "trivy", "sqlmap"} {
+	// "mobsf" removed per Task 7.4 Q3 lock + Q5 Option β v1 ephemeral
+	// default; MobSF is now per-scan ephemeral via DockerServiceRunner.
+	for _, svc := range []string{"trivy", "sqlmap"} {
 		assert.Contains(t, parsed.Services, svc,
 			"service %q must be defined per TOOL-ARCH §2.3", svc)
 	}
@@ -67,8 +69,9 @@ func TestDockerCompose_ImagesMatchVERSIONS(t *testing.T) {
 	// Pinned image tags from VERSIONS.md §2.5 (see ../shieldscan-docs/).
 	// "zap" removed per Task 7.3 Q3 lock; ZAP digest pinned in
 	// internal/tools/docker/service/zap (consumer-side) instead.
+	// "mobsf" removed per Task 7.4 Q3 lock; MobSF digest pinned in
+	// internal/tools/docker/service/mobsf (consumer-side) instead.
 	expectedImages := map[string]string{
-		"mobsf":  "opensecurity/mobile-security-framework-mobsf:v4.4.6",
 		"trivy":  "aquasec/trivy:0.58.0",
 		"sqlmap": "paoloo/sqlmap:1.9",
 	}
@@ -108,8 +111,8 @@ func TestDockerCompose_HealthChecksDefined(t *testing.T) {
 }
 
 // TestDockerCompose_RawDoesNotContainSecrets is a defensive check.
-// The compose file accepts secrets via env interpolation (e.g.,
-// MOBSF_API_KEY). Verify no literal secret-looking strings shipped.
+// The compose file accepts secrets via env interpolation. Verify
+// no literal secret-looking strings shipped.
 func TestDockerCompose_RawDoesNotContainSecrets(t *testing.T) {
 	raw := string(composeFile(t))
 	// Heuristic patterns; not exhaustive.
