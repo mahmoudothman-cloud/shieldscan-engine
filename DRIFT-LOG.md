@@ -128,6 +128,82 @@ precedent for C5 promotion at Phase 5.D); SPECIFICATION.md §13 ADR-008
 §14.1 (asymmetric-cost meta-principle); §7.1 (mobile_config wire schema)
 + §9.1 (Mobile scans pricing tier).
 
+### §14.1 invocation tracking note (Phase 5.E verdict)
+
+Phase 5.E of Task 7.4 evaluated whether Q5 architectural decision
+(cfg.EphemeralContainer = true v1 default for MobSF consumer) warrants a
+new entry in SPECIFICATION.md §14.1 invocation enumeration table.
+
+**Verdict: OUTCOME β** — Task 7.4 Q5 is NOT a §14.1 invocation; DRIFT-LOG
+note added (mirrors Task 7.5b 5.E precedent c8840a1 OUTCOME γ + Task 7.3
+5.E precedent 7c19eaa OUTCOME β).
+
+**Reasoning.** §14.1 is ADR-scoped per its own text (SPECIFICATION.md
+lines 2266 + 2275 + 2284): *"invoked in 6 ADRs across the project
+corpus"*; *"ADR drafters should invoke §14.1 when..."*; *"§14.1 only when
+cost-asymmetry is genuinely load-bearing for the decision; otherwise,
+standard threshold-counting reasoning suffices."* Task 7.4 is a CONSUMER
+task (not an ADR); decisions live in design doc 02be8cf + implementation
+plan 4a94c2e + Phase 5.A drift annotation 3fbb08c + DRIFT-LOG (this
+file), NOT §13 ADR registry. Per Task 7.5b 5.E precedent (c8840a1) +
+Task 7.3 5.E precedent (7c19eaa), non-ADR resolution-lock decisions do
+not constitute §14.1 invocations regardless of whether asymmetric-cost
+framing was rhetorically applied.
+
+**Q5 architectural reasoning (rhetorical-frame use, not formal
+invocation).** Q5 invoked asymmetric-cost framing: (a) bounded ephemeral
+container startup cost — measured in seconds; pricing tier §9.1 caps
+mobile scans (Growth=2/mo; Business rate-limited); startup amortization
+win is smaller than ZAP's high-frequency web-scan pattern; (b) unbounded
+cleanup-contract-uncertainty cost — Task 7.5c V4 verification
+empirically demonstrated configuration-scoped state leak (S7
+PARTIAL_RESET orphan user records; S8 NOT_RESET custom scan policies;
+S9 NOT_RESET per-policy attack-strength tuning) under analogous ZAP
+newSession; MobSF V5 forward-pin from Task 7.5b ("Suppression/user/
+settings table persistence UNCLEAR") flags matching territory; same
+failure mode would ship multi-tenant data leakage. Asymmetric-cost
+calculus tilts hard toward ephemeral default until Task 7.5d empirically
+verifies MobSF delete_scan cleanup contract completeness. Per §14.1's
+own Tension acknowledgment, rhetorical-frame use ≠ formal invocation.
+
+**Verdict-correction lineage.** This subsection revises an earlier
+OUTCOME γ chat-verdict (skip-with-rationale) issued during Phase 5.E
+pre-implementation evaluation. PR.4 pre-remediation verification surface
+report (this session) surfaced that the OUTCOME γ chat-verdict was based
+on incomplete repo-scoped search — specifically, the chat claimed
+Task 7.3 Phase 5.E commit 7c19eaa was fabricated, when in fact the
+commit is a real shieldscan-engine DRIFT-LOG entry from 2026-05-10.
+Correcting search scope confirms OUTCOME β precedent across Task 7.5b
+(c8840a1; OUTCOME γ) + Task 7.3 (7c19eaa; OUTCOME β); Task 7.4 5.E
+mirrors per symmetric coverage discipline. Engine-side DRIFT-LOG note
+granularity preserves SPEC §14.1 Tension acknowledgment while
+maintaining audit-trail coverage.
+
+**Forward-pin for Phase 5.B.** ADR-008 addendum (Phase 5.B; deferred) is
+the architecturally-appropriate landing site for SPEC §14.1 invocation
+table row 7 enumeration IF a fresh ADR-scoped invocation lands. Per
+current OUTCOME β verdict, Task 7.4 Q5 is NOT an ADR-scoped invocation
+(consumer-task derivative; per existing precedent); §14.1 table
+extension at Phase 5.B is contingent on whether the ADR-008 addendum
+itself constitutes a fresh ADR-scoped invocation of the meta-principle.
+If future scope expansion makes §14.1 track non-ADR invocations
+(consumer-task design-doc decisions; Phase 0 resolution locks),
+Task 7.4 Q5 is an eligible candidate alongside Task 7.5b V4/V5 +
+Task 7.3 Q5/Q6/Q7/Q8.
+
+**Cross-references.** shieldscan-engine commit c8840a1 (Task 7.5b 5.E
+precedent; OUTCOME γ); shieldscan-engine commit 7c19eaa (Task 7.3 5.E
+precedent; OUTCOME β); shieldscan-engine commit c15a60d (Task 7.4
+engine close; Q5 ephemeral lock + processor wiring); shieldscan-engine
+commit bfccef8 (Task 7.5c V4 verification empirical findings; direct
+architectural precedent); shieldscan-engine commit 1306ca8 (Task 7.5b
+DockerServiceRunner framework foundation); shieldscan-docs commit
+02be8cf (Task 7.4 design doc); shieldscan-docs commit 3fbb08c (Task 7.4
+Phase 5.A drift annotation §3.6); shieldscan-docs commits 124f5aa +
+c6a79e0 (Task 7.5c Phase D); shieldscan-docs SPECIFICATION.md §14.1
+(asymmetric-cost meta-principle promotion 496cf6c); SPECIFICATION.md
+§13 ADR-008 (Phase 5.B addendum target).
+
 ---
 
 ## 2026-05-09 — Task 7.5c V4 ZAP Cleanup Verification (Empirical Execution)
