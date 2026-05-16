@@ -128,6 +128,129 @@ precedent for C5 promotion at Phase 5.D); SPECIFICATION.md §13 ADR-008
 §14.1 (asymmetric-cost meta-principle); §7.1 (mobile_config wire schema)
 + §9.1 (Mobile scans pricing tier).
 
+### §5.D DEVELOPMENT-PATTERNS C5 Typed-Fields-First + Metadata-for-Remainder Promotion Evaluation (Phase 5.D verdict: OUTCOME β — threshold met; promotion declined on "not-duplicative" preamble criterion)
+
+**Authority:** Task 7.4 Phase 5.D pre-verification surface report (this
+session; with 8th framing-drift correction caught at execution time
+before commit — see Verdict-Correction Lineage below); shieldscan-engine
+commit e004300 (Task 7.3 Phase 5.D DEVELOPMENT-PATTERNS evaluation;
+canonical C5 scope authority); shieldscan-engine commit 5503476
+(Task 7.2 Phase 5.C entry #5 cleanup-uses-detached-context; last
+DEVELOPMENT-PATTERNS promotion precedent).
+
+**Scope:** Evaluate whether C5 ("typed-fields-first + Metadata-for-remainder
+parser" — per canonical Task 7.3 Phase 5.D scoping in e004300) warrants
+promotion to DEVELOPMENT-PATTERNS.md entry #6 at the 3-instance threshold
+reached via Nmap + ZAP + MobSF parsers.
+
+**Threshold Status: MET.** Per canonical C5 scope from e004300: *"C5
+typed-fields-first + Metadata-for-remainder parser = 2 (nmap/parser.go +
+zap/parser.go; only 2 sites populate Metadata field). C5 is closest to
+threshold (2/3); next consumer task (Task 7.4 MobSF or Task 7.1 Trivy)
+likely creates 3rd Metadata-using parser instance and triggers promotion
+evaluation."* MobSF parser (engine commit c15a60d;
+`internal/tools/docker/service/mobsf/parser.go` + `sections.go`) populates
+Metadata via `buildCodeMetadata` + per-section Metadata maps — 3rd
+qualifying instance. Canonical promotion-evaluation trigger condition
+from e004300 is now satisfied.
+
+**OUTCOME β Verdict: Promotion declined.** Per DEVELOPMENT-PATTERNS.md
+preamble criteria (lines 1-26): patterns are added when they're (a)
+genuinely new discipline future engineers might miss AND (b) verified
+across 3+ instances AND (c) NOT adequately covered by existing
+documentation. C5 satisfies (a) marginally (typed-fields-first ordering
+discipline is real but implicit) AND (b) at 3 instances; BUT FAILS (c).
+The "typed-fields-first + Metadata-for-remainder" discipline is already
+canonically documented at appropriate authority levels:
+
+1. **ADR-027** (shieldscan-docs commit 9a81fe6) defines RawFinding.Metadata
+   schema convention: snake_case keys; omit-when-empty;
+   remainder-of-structured-payload semantics. ADR-027 IS the authority
+   for "Metadata captures the remainder" half of C5.
+2. **ToolRunner interface contract docstring** in `internal/tools/runner.go`
+   defines the typed-field-population responsibility split: consumer
+   populates Title/Severity/Description/CWEID/etc.; framework runner
+   enriches ScanID/ToolName/RuleID/DiscoveredAt/RawOutputRef/Fingerprint.
+   This contract IS the authority for "typed fields first" half of C5.
+3. The ordering itself (typed-fields-first ordering relative to Metadata)
+   is the implicit consequence of (1) + (2): if Metadata captures the
+   structured-payload remainder per ADR-027, then by definition typed
+   fields must be populated first to know what counts as "remainder."
+   Re-stating this in DEVELOPMENT-PATTERNS would duplicate ADR-027's
+   authoritative scope.
+
+A DEVELOPMENT-PATTERNS entry #6 would primarily restate what ADR-027 +
+ToolRunner contract already establish at canonical authority. Per
+preamble's "not-duplicative" criterion, promotion is declined.
+
+**Forward-pin for genuinely-novel sub-patterns.** Empirical inspection
+during Phase 5.D pre-verification surfaced genuinely-novel discipline
+elements present in MobSF parser that are NOT covered by ADR-027 or
+ToolRunner contract:
+
+- **Per-section adaptor pattern** for heterogeneous source data (1
+  instance — MobSF `sections.go`). Track 2nd instance opportunity at
+  Trivy (SBOM section heterogeneity?) or SQLMap (DBMS-fingerprint vs
+  injection-finding shape divergence?).
+- **Mobile-evidence typed-field cluster** CodeFile/CodeLine/MobileOS/
+  Permission/ComponentName (1 instance — MobSF). Track whether
+  container-evidence (Trivy) or sca-evidence (Trivy/SQLMap)
+  typed-field clusters appear; if 2nd cluster lands, evaluate
+  "evidence-field cluster" as composite-pattern candidate.
+- **Severity normalization helper** (2 instances — ZAP `mapZAPRisk` +
+  MobSF `mapMobSFSeverity`; Nmap hardcoded "Informational"). If Trivy
+  ships `mapTrivySeverity` (3rd instance), consider promotion at Trivy
+  Phase 5.D.
+
+**Verdict-Correction Lineage (8th framing-drift catch — pre-verification
+analysis itself drifted).** Phase 5.D pre-verification surface report
+(this session) initially fragmented C5 into ≥4 distinct sub-patterns
+(typed-fields-first; Metadata snake_case; identity-field delegation;
+target correlation key; severity normalization helper; per-section
+adaptor; mobile-evidence typed fields) at mismatched instance counts,
+recommending OUTCOME β on "fragmentation" grounds. Direct verification
+at P5D.1 surfaced the canonical Task 7.3 5.D C5 scope from engine commit
+e004300: C5 is a SINGLE specific sub-pattern ("typed-fields-first +
+Metadata-for-remainder parser") — NOT a fragmenting collection.
+Pre-verification analysis was framing overshoot relative to canonical
+scope. OUTCOME β verdict is preserved BUT the justification is
+corrected: threshold IS met at 3 instances per canonical C5 scope;
+promotion declined on "not-duplicative" preamble criterion (ADR-027 +
+ToolRunner contract already authoritative).
+
+This is the 8th framing-drift correction caught at execution time across
+Task 7.4 lifecycle (cumulative count): 7c19eaa fabricated-vs-real engine
+commit; VERSIONS.md repo cite; 066c81f repo + addendum-target; ADR-008
+forward-pin structure; §14.1 row-addition precedent; OUTCOME γ Phase 5.E
+verdict from incomplete repo-scoped search; Phase 5.B precedent-shape
+framings; THIS catch (Phase 5.D pre-verification fragmentation overshoot
+vs canonical C5 scope). All 8 caught before propagating into committed
+text that would matter long-term; verify-then-draft discipline holds.
+
+Historical c15a60d + 3fbb08c forward-pin texts (DRIFT-LOG line 107 +
+design doc §3.6) cited "C5 promotion threshold reached" — these become
+historical artifacts preserved per historical-authority discipline (no
+retroactive edits).
+
+**Cross-References:** shieldscan-engine commit e004300 (Task 7.3 Phase 5.D
+DEVELOPMENT-PATTERNS evaluation; canonical C5 scope authority);
+shieldscan-engine commit 5503476 (Task 7.2 Phase 5.C entry #5
+cleanup-uses-detached-context; last promotion precedent);
+shieldscan-engine commit f5d77c8 (Task 7.5a foundation; Nmap parser
+instance); shieldscan-engine commit e905afe (Task 7.3 ZAP consumer;
+ZAP parser instance); shieldscan-engine commit c15a60d (Task 7.4 MobSF
+consumer; MobSF parser + sections.go instance; 3rd qualifying
+Metadata-using parser); shieldscan-engine commit a8d82b7 (Task 7.4
+Phase 5.E §14.1 invocation tracking note; verdict-correction-lineage
+precedent); shieldscan-docs commit 02be8cf (Task 7.4 design doc; Q8
+brainstorming-internal C5 nomenclature); shieldscan-docs commit 3fbb08c
+(Task 7.4 Phase 5.A drift annotation §3.6); shieldscan-docs commit
+9a81fe6 (ADR-027 RawFinding.Metadata schema canonical authority);
+DEVELOPMENT-PATTERNS.md preamble (promotion discipline criteria; lines
+1-26); SPECIFICATION.md §13 ADR-027 (Metadata snake_case convention
+canonical authority); `internal/tools/runner.go` (ToolRunner interface
+contract; identity-field delegation authority).
+
 ### §14.1 invocation tracking note (Phase 5.E verdict)
 
 Phase 5.E of Task 7.4 evaluated whether Q5 architectural decision
