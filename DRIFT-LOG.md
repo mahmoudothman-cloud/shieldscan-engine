@@ -8,6 +8,183 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-05-16 — Task 7.5d MobSF Cleanup Contract Verification (Empirical Execution)
+
+**Status:** Executed; **PRIMARY VERDICT: RECOMMEND RETAIN `cfg.EphemeralContainer = true`**; **SECONDARY VERDICT: CLEAN** (no version drift).
+
+**Authority:** shieldscan-docs commit 575ed1f (Task 7.5d plan §11 verification
+execution record); shieldscan-docs commits 3579131 + 1455449 (plan landing +
+date correction); shieldscan-docs commit eab7572 (Task 7.4 Phase 5.B ADR-008
+ephemeral-default amendment; flip-condition canonical authority empirically
+strengthened by this verification); Task 7.5d plan at
+`plans/2026-05-16-task-7.5d-mobsf-cleanup-verification-plan.md` (Q1-Q9
+brainstorming chain + Phase A+B+C+D structure); Task 7.5c V4 Phase D.3
+precedent at shieldscan-engine commit bfccef8 (DRIFT-LOG entry shape +
+methodology precedent).
+
+**Scope.** Empirical verification of MobSF `delete_scan` cleanup contract
+against pinned MobSF digest
+`sha256:72311e3553ca2c21043923cace27ed99f800cd641e9368160406779516dd774e`
+(v4.4.6). Executed against DIVA APK testbed reused from Task 7.4 Phase 0
+(`/tmp/diva-beta.apk`; SHA256 `da829be1...`). 7 surfaces tested (S1-S3
+source-code-known revalidation + S4-S7 V5-UNCLEAR per ADR-008 flip
+conditions) + 4 IF tests. Hybrid Phase B per Option γ (S4 schema-locked
+NOT_RESET pre-determined at Phase A source-code reading; empirical cycle
+skipped as zero-information-add for S4). NO engine code changes;
+verification confirms Task 7.4 Q5 ephemeral lock is empirically correct.
+
+### Per-Surface Verdicts
+
+| Surface | Verdict | Note |
+|---|---|---|
+| S1 uploads dir | ✅ RESET_COMPLETE | hash dir + apktool extraction → 0 entries |
+| S2 StaticAnalyzer\* DB tables | ✅ RESET_COMPLETE | row → 0 rows (Android/iOS/Windows/EnqueuedTask) |
+| S3 RecentScansDB | ✅ RESET_COMPLETE | row → 0 rows |
+| S3 downloads artifacts | ✅ RESET_COMPLETE | hash-prefix files → 0 |
+| S4 Suppression registry | ⚠️ NOT_RESET | Schema-locked (source-code authority); `StaticAnalyzer_suppressfindings` PACKAGE_NAME-scoped; cannot intersect MD5-scoped `delete_scan` |
+| S5 User accounts | ⚠️ FAILED_TO_VERIFY | REST API absent; only Django web admin endpoints (`/users/`, `/create_user/`, `/delete_user/`) non-REST |
+| S6 Instance settings | ⚠️ FAILED_TO_VERIFY | `/api/v1/settings` + `/api/v1/config` both 404 |
+| S7 Plugin tuning | ⚠️ FAILED_TO_VERIFY | `/api/v1/scan_config` 404; surface may not exist as REST-managed state in v4.4.6 |
+
+### Idempotency + Failure Mode Tests
+
+- **IF1** (idempotent `delete_scan` on already-deleted + never-existed hashes): ✅ Both return `{"deleted": "Scan not found in Database"}` STATUS=200; caller cannot distinguish — non-fatal
+- **IF2** (mid-scan `delete_scan`): ⚠️ **BONUS FINDING F2** — HTTP 500 + `[Errno 39] Directory not empty` filesystem race; partial-cleanup orphan state (RecentScansDB wiped but StaticAnalyzerAndroid + uploads dir remain); orphan `delete_scan`-uncleanable through REST API
+- **IF3** (invalid + no auth): ✅ Both 401 `{"error": "You are unauthorized..."}` — uniform single-key auth
+- **IF4** (partial-upload): ✅ 400 `{"error": "File format not Supported!"}` on 10KB zero file; clean rejection with no orphan filesystem state from rejection
+
+### Cumulative Verdict
+
+**RECOMMEND RETAIN `cfg.EphemeralContainer = true` for MobSF.** Per ADR-008
+amendment strict conformance (shieldscan-docs commit eab7572 lines 1206-1208):
+*"RECOMMEND FLIP if and only if ALL 4 surfaces (S4 + S5 + S6 + S7) verify
+RESET_COMPLETE; RECOMMEND RETAIN if ANY S4-S7 verifies PARTIAL_RESET /
+NOT_RESET / FAILED_TO_VERIFY."* Empirical: 4-of-4 S4-S7 surfaces fail
+RESET_COMPLETE bar (S4 NOT_RESET schema-locked; S5/S6/S7 FAILED_TO_VERIFY
+REST API absent). ADR-008 amendment empirically strengthened; ephemeral
+default architecturally correct (NOT transitional).
+
+**Secondary verdict — CLEAN (no version drift):** S1-S3 all RESET_COMPLETE
+empirically confirmed at v4.4.6 pinned digest; source-code predictions from
+Task 7.5b V5 reading hold at runtime.
+
+### Finding F1 — Configuration-State Cleanup Architectural Boundary
+
+MobSF v4.4.6 `delete_scan` cleanup contract is fundamentally hash-scoped
+(per-scan); configuration-scoped state is structurally outside `delete_scan`'s
+authority.
+
+(a) **S4 suppression registry — schema-locked architectural boundary:**
+`StaticAnalyzer_suppressfindings` primary association is `PACKAGE_NAME`
+(varchar 260); `delete_scan` operates on MD5 hash; schema design prevents
+intersection even hypothetically. Source-code `home.py:537-587` verified —
+`delete_scan` never touches `suppressfindings` table.
+
+(b) **S5-S7 REST API completeness gap:** S5 users only Django web admin
+endpoints (`/users/`, `/create_user/`, `/delete_user/`) admin-cookie-gated;
+non-REST. S6 settings: no REST representation (`/api/v1/settings` +
+`/api/v1/config` both 404). S7 plugin tuning: no REST representation
+(`/api/v1/scan_config` 404; surface may not exist as REST-managed state
+in v4.4.6).
+
+**Finding shape stronger than Task 7.5c V4's ZAP `newSession`
+documentation-gap finding (engine commit bfccef8 §11.5):** MobSF's boundary
+is schema design choice + REST API completeness gap; not a documentation
+defect. The architectural boundary is empirically inherent to v4.4.6.
+
+### Finding F2 — Sync-Mode `delete_scan` Race Condition Producing Uncleanable Orphan State
+
+Mid-scan `delete_scan` in sync mode (v1 engine default per Task 7.4 Q4 lock;
+orchestrator default at shieldscan-api commit 6403a3f) produces partial-cleanup
+orphan state `delete_scan` itself cannot remediate through REST API.
+
+**Root cause:** Source-code `home.py:549-559` guards *"scan can only be deleted
+after it is completed"* rejection on `settings.ASYNC_ANALYSIS=true` AND
+`EnqueuedTask` row existence; in sync mode neither holds; `delete_scan`
+proceeds and races still-running scan's filesystem mutations.
+
+**Empirical observation (Phase B.3):** HTTP 500 + `[Errno 39] Directory not
+empty` error; RecentScansDB wiped (mid-scan delete partially succeeded);
+StaticAnalyzerAndroid row remains as orphan; uploads dir remains as orphan.
+
+**Recovery path infeasibility:** Follow-up `delete_scan` returns *"Scan not
+found in Database"* because `home.py:547` `RecentScansDB.objects.filter(MD5=md5_hash).exists()`
+short-circuits before touching orphan StaticAnalyzer row + uploads dir.
+Orphan is `delete_scan`-uncleanable through REST API.
+
+**Operational implication for engine consumer:** Same-tenant warm-pool
+retention path (if ever implemented) requires defensive code handling
+sync-mode race OR `MOBSF_ASYNC_ANALYSIS=1` mode adoption. Reinforces RETAIN
+verdict from second independent angle.
+
+**No engine code action this commit.** F2 establishes new forward-pin
+territory (engine defensive code OR ASYNC_ANALYSIS=1 evaluation); v1
+sync-mode operation continues as-is for current scope (ephemeral container
+default means orphan state is destroyed with container teardown; F2 only
+materializes operationally under warm-pool retention or persistent-service
+consumer topology).
+
+### Phase D Disposition
+
+**No SPEC revision required.** ADR-008 amendment text (eab7572) *"Until then,
+ephemeral is the architecturally-correct default (NOT transitional)"* is
+empirically strengthened by F1 + F2; addendum stays canonical. §14.1 row 7
+(ADR-008 invocation enumeration) stays unchanged.
+
+**No engine code flip.** `cfg.EphemeralContainer = true` (per Task 7.4
+c15a60d) preserved as architecturally-correct default; F1 + F2 reinforce
+this default's correctness.
+
+**No shieldscan-api commit.** RETAIN outcome doesn't affect orchestrator;
+default `analysis_type="static"` at 6403a3f stays canonical.
+
+**Phase D commit pair:** D.1 shieldscan-docs commit 575ed1f (plan §11
+verification execution record); D.2 this commit (engine DRIFT-LOG entry).
+Independent commits per repo (no cross-repo coordinated commit pair pattern
+needed; different artifact scopes).
+
+### Forward-Pins (Post-Execution)
+
+1. **MobSF v5+ API surface re-evaluation** — if future MobSF versions expose
+   REST API for S5/S6/S7 surfaces OR if v5+ redesigns schema-level
+   architectural boundary affecting S4, re-execute Task 7.5d verification at
+   new pinned digest.
+2. **F2 sync-mode race condition remediation** — engine defensive code
+   (best-effort `delete_scan` with orphan-recovery handling) OR
+   `MOBSF_ASYNC_ANALYSIS=1` mode adoption evaluation; forward-pinned as
+   future-task territory if warm-pool retention is ever reconsidered OR if
+   sync-mode race surfaces operationally.
+3. **F1 schema-level boundary upstream contribution** — community
+   contribution opportunity (analogous to Task 7.5c V4 ZAP documentation MR
+   forward-pin per bfccef8 §11.8); upstream MobSF API/schema redesign would
+   be required for any cleanup contract reaching V5-UNCLEAR surfaces.
+4. **iOS section variance + V13/V16 populated-state shape** — Task 7.4
+   V10/V13/V16 forward-pins preserved; separate Phase 0 v2 scope.
+
+### Cross-References
+
+- shieldscan-docs commits: 575ed1f (Phase D.1 plan §11 annotation); 3579131
+  (Task 7.5d plan date correction); 1455449 (Task 7.5d plan landing);
+  eab7572 (Task 7.4 Phase 5.B ADR-008 amendment; empirically strengthened by
+  this verification); 124f5aa (Task 7.5c V4 Phase D.1 plan §11 precedent);
+  3067c92 (Task 7.5b V5 forward-pin source)
+- shieldscan-engine commits: 1c6041d (Task 7.4 Phase 5.D close); c15a60d
+  (Task 7.4 MobSF consumer; Q5 ephemeral lock authority); bfccef8
+  (Task 7.5c V4 Phase D.3 engine DRIFT-LOG precedent + methodology)
+- shieldscan-api commit: 6403a3f (Task 7.4 D-PLAN-7 orchestrator default
+  `analysis_type="static"`; sync-mode default per Q4 lock)
+- Source-code authority: MobSF v4.4.6 `home.py:537-587` (`delete_scan`
+  implementation); `home.py:547` (RecentScansDB existence check; orphan
+  recovery short-circuit); `home.py:549-559` (ASYNC_ANALYSIS rejection
+  guard); `StaticAnalyzer_suppressfindings` schema (PACKAGE_NAME primary
+  association)
+- SPEC sections: §13 ADR-008 (amendment; eab7572 lines 1198-1210;
+  ephemeral-default canonical); §14.1 row 7 (ADR-008 invocation
+  enumeration); ADR-026 (DockerServiceRunner framework); ADR-027
+  (RawFinding.Metadata canonical)
+
+---
+
 ## 2026-05-10 — Task 7.4 MobSF Consumer (MAST) — Phase 1+Phase 4 Adjunct
 
 **Authority:** `plans/2026-05-09-task-7.4-mobsf-consumer-design.md` (commit
