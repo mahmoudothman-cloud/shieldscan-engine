@@ -102,16 +102,40 @@ func adaptPermissions(perms map[string]permissionEntry, platform string) []event
 	return out
 }
 
-// networkSecuritySection — V13 forward-pin: empty in DIVA Phase 0
-// sample; shape unknown for populated case. Decoded as a raw map so
-// we can log presence without panicking on schema drift.
+// networkSecuritySection — V13: schema verified at Phase 0 v2 against
+// MobSF v4.4.6 reality (shieldscan-docs cd933c5). Per-finding shape:
+// {scope: []string, description: string, severity: string}. Decoded
+// as raw map for forward-additive schema resilience.
 type networkSecuritySection struct {
 	NetworkFindings []map[string]any `json:"network_findings"`
 }
 
-// adaptNetworkSecurity — V13 forward-pin adaptor. Emits nothing if
-// empty; for populated case emits a generic finding per entry pending
-// future schema discovery.
+// coerceScope normalizes the V13 `scope` field which empirically
+// arrives as []any (typically []any{"*"}) but may also surface as a
+// bare string under schema drift. Returns the joined string form for
+// Title use; empty string when scope absent/unrecognized.
+func coerceScope(v any) string {
+	switch s := v.(type) {
+	case string:
+		return s
+	case []any:
+		parts := make([]string, 0, len(s))
+		for _, e := range s {
+			if str, ok := e.(string); ok && str != "" {
+				parts = append(parts, str)
+			}
+		}
+		return strings.Join(parts, ",")
+	}
+	return ""
+}
+
+// adaptNetworkSecurity — V13 adaptor. Per Phase 0 v2 empirical
+// verification (DDG /tmp/ddg-scan.json; 4 populated network_findings):
+// scope arrives as []string (silent type-fallback in pre-Phase-0-v2
+// parser produced default Title). Coerces list→string for Title;
+// preserves raw scope value via scope_list Metadata key (ADR-027
+// snake_case + omit-when-empty).
 func adaptNetworkSecurity(section networkSecuritySection, platform string) []events.RawFinding {
 	if len(section.NetworkFindings) == 0 {
 		return nil
@@ -124,21 +148,25 @@ func adaptNetworkSecurity(section networkSecuritySection, platform string) []eve
 		if drop {
 			continue
 		}
-		title, _ := nf["scope"].(string)
+		title := coerceScope(nf["scope"])
 		if title == "" {
 			title = "Network security finding"
 		}
 		desc, _ := nf["description"].(string)
+		meta := map[string]string{
+			"section":         "network_security",
+			"raw_finding":     string(raw),
+			"forward_pin_v13": "verified against v4.4.6 reality (Phase 0 v2; shieldscan-docs cd933c5)",
+		}
+		if scopeRaw, err := json.Marshal(nf["scope"]); err == nil && nf["scope"] != nil {
+			meta["scope_list"] = string(scopeRaw)
+		}
 		out = append(out, events.RawFinding{
 			Title:       title,
 			Severity:    severity,
 			Description: desc,
 			MobileOS:    platform,
-			Metadata: map[string]string{
-				"section":         "network_security",
-				"raw_finding":     string(raw),
-				"forward_pin_v13": "shape not yet stabilized; verify against MobSF v4.x release notes",
-			},
+			Metadata:    meta,
 		})
 	}
 	return out
@@ -264,14 +292,19 @@ func adaptCertificateFindings(section certAnalysisSection, platform string) []ev
 	return out
 }
 
-// trackersSection — V16 forward-pin. Trackers list empty in DIVA Phase
-// 0 sample; populated case decoded as raw entries pending stabilized
-// schema.
+// trackersSection — V16: schema verified at Phase 0 v2 against
+// MobSF v4.4.6 reality (shieldscan-docs cd933c5). Per-tracker shape:
+// {name: string, categories: string, url: string}. No per-tracker
+// severity; section-level hardcoded "info" preserved.
 type trackersSection struct {
 	Trackers []map[string]any `json:"trackers"`
 }
 
-// adaptTrackers — V16 forward-pin adaptor.
+// adaptTrackers — V16 adaptor. Per Phase 0 v2 empirical verification
+// (IBv2 /tmp/ibv2-scan.json; 3 populated trackers: Google AdMob +
+// Google Analytics + Google Tag Manager): categories ("Advertisement"
+// / "Analytics") + url (Exodus Privacy report link) promoted to
+// dedicated Metadata keys (ADR-027 snake_case + omit-when-empty).
 func adaptTrackers(section trackersSection, platform string) []events.RawFinding {
 	if len(section.Trackers) == 0 {
 		return nil
@@ -283,15 +316,22 @@ func adaptTrackers(section trackersSection, platform string) []events.RawFinding
 		if name == "" {
 			name = "Tracker"
 		}
+		meta := map[string]string{
+			"section":         "trackers",
+			"raw_entry":       string(raw),
+			"forward_pin_v16": "verified against v4.4.6 reality (Phase 0 v2; shieldscan-docs cd933c5)",
+		}
+		if cats, _ := t["categories"].(string); cats != "" {
+			meta["tracker_categories"] = cats
+		}
+		if url, _ := t["url"].(string); url != "" {
+			meta["tracker_url"] = url
+		}
 		out = append(out, events.RawFinding{
 			Title:    "Tracker detected: " + name,
 			Severity: "info",
 			MobileOS: platform,
-			Metadata: map[string]string{
-				"section":         "trackers",
-				"raw_entry":       string(raw),
-				"forward_pin_v16": "shape not yet stabilized in v4.x",
-			},
+			Metadata: meta,
 		})
 	}
 	return out

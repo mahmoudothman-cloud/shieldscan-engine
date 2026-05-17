@@ -8,6 +8,72 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-05-17 — Task 7.4 Phase 0 v2 — V13 + V16 Empirical Verification (RESOLVED)
+
+**Status:** Executed; **PRIMARY OUTCOME α: V13 + V16 RESOLVED via empirical verification**; 16 of 17 design-doc V-items now RESOLVED; 1 (V10 iOS section-name variance) FORWARD_PINNED for separate task.
+
+**Authority:** shieldscan-docs commit cd933c5 (Task 7.4 Phase 0 v2 D.1 design-doc annotation; V13/V16 RESOLVED + summary line update + V10 forward-pin preserved; cross-repo pair D.1 partner); Task 7.4 design doc shieldscan-docs commit 02be8cf (V10/V13/V16 forward-pin canonical authority; lines 236–246); Task 7.5d D.2 cross-repo pair DRIFT-LOG entry precedent at engine commit 18e120f (Placement α newest-first; subsection format); Phase 0 v2 surface reports this session capture full empirical evidence chain (Phase A setup + Phase B per-V-item scans + Phase C verdict-lock + Phase D.1 docs annotation + this D.2 engine commit).
+
+**Verification scope:** V13 (`network_security` populated-state shape verification) + V16 (`trackers` populated-state shape verification); Path α per Q1 lock (Android-only; V10 iOS excluded as separate testbed-axis; forward-pinned with refined testbed candidate iGoat-Swift).
+
+**Testbeds:** DuckDuckGo Android 5.279.1 (SHA256 `a5ffbd14c9d9f123d2609455749900eea46079ad0328e11ca944c69f9bf38502`; 126.5 MB) → V13 populated-state source (4 `network_findings`); InsecureBankv2 (SHA256 `b18af2a0e44d7634bbcdf93664d9c78a2695e050393fcfbb5e8b91f902d194a4`; 3.46 MB) → V16 populated-state source (3 trackers). MobSF v4.4.6 pinned digest reused per Task 7.4 V1 (`sha256:72311e3553ca2c21043923cace27ed99f800cd641e9368160406779516dd774e`).
+
+### Per-V-Item Verdicts
+
+| V-Item | Verdict | Source | Refinement |
+|---|---|---|---|
+| V13 `network_security` | FIELD_NAMES_ACCURATE + TYPE_DRIFT_MINOR | DDG `/tmp/ddg-scan.json` | `scope` `[]string` vs parser `string` assertion → `coerceScope` list→string helper in `adaptNetworkSecurity`; `scope_list` Metadata key preserves raw shape per ADR-027 |
+| V16 `trackers` | FIELD_NAMES_ACCURATE + ENRICHMENT_OPPORTUNITY | IBv2 `/tmp/ibv2-scan.json` | `categories` + `url` high-value fields not previously captured → `tracker_categories` + `tracker_url` Metadata keys added (omit-when-empty per ADR-027) |
+
+**Cumulative Outcome — V13 + V16 forward-pin CLOSURE via Phase D bounded refinement.** ADR-008 amendment territory N/A (no architectural commitment shift; bounded parser field-handling refinement).
+
+### Architectural Insight — Testbed-Inversion Methodology Learning
+
+Pre-Phase-A hypothesis: InsecureBankv2 → V13 populated (custom NSC XML); DuckDuckGo → V16 populated (privacy-focused with some tracker telemetry).
+
+Empirical reality inverted: DDG → V13 (4 populated `network_findings`); IBv2 → V16 (3 populated trackers: Google AdMob + Google Analytics + Google Tag Manager); DDG V16 was 0 trackers (privacy-design-intent match); IBv2 V13 was 0 `network_findings` (NSC absent or incompatible schema). Both V-items still populated; testbeds cross-covered each other.
+
+**Methodology lesson:** Single-testbed strategy would have produced false-empty V13 conclusion (if only IBv2 chosen, V13 still appears unpopulated; would have closed V13 as ENDPOINT_ABSENT / SHAPE_UNDETERMINED instead of FIELD_NAMES_ACCURATE + TYPE_DRIFT). **Dual-testbed cross-validation caught the false-empty risk that pre-hypothesis-driven single selection would have missed.**
+
+**Pattern analogy:** Mirrors Task 7.5d F1 (schema-level architectural boundary; surfaced via direct empirical inspection rather than predicted) + Task 7.5c V4 §11.5 architectural-insight precedent (empirical methodology reveals what hypothesis-driven analysis cannot).
+
+**Methodology learning forward-pin for future Phase 0 v2 work:** Dual-testbed cross-validation is canonical methodology against false-empty pre-hypothesis-driven conclusions; single-testbed approaches risk false-negative findings driven by APK selection assumptions. Pattern candidate for DEVELOPMENT-PATTERNS evaluation if 2nd cross-validation instance surfaces in future task.
+
+### Refinement Summary
+
+**`internal/tools/docker/service/mobsf/sections.go` changes:**
+
+- `adaptNetworkSecurity` (V13): `coerceScope` helper added (string + `[]any` + nil cases); list→string coercion for Title population; `scope_list` Metadata key preserves raw `scope` JSON shape per ADR-027 snake_case + omit-when-empty conventions
+- `adaptTrackers` (V16): `tracker_categories` + `tracker_url` Metadata keys added (omit-when-empty per ADR-027) per Phase B B.6 ENRICHMENT_OPPORTUNITY
+- `forward_pin_v13` + `forward_pin_v16` breadcrumb language: `"shape not yet stabilized in v4.x"` → `"verified against v4.4.6 reality (Phase 0 v2; shieldscan-docs cd933c5)"`
+
+**`internal/tools/docker/service/mobsf/sections_test.go` additions:**
+
+- `TestAdaptNetworkSecurity_V4_4_6_ScopeList` — covers `[]any` scope coercion + multi-element join + `scope_list` Metadata + breadcrumb update assertion
+- `TestAdaptTrackers_V4_4_6_Enrichment` — covers `tracker_categories` + `tracker_url` Metadata population + omit-when-empty discipline + breadcrumb update assertion
+- Pre-existing `*_PopulatedForwardPin` tests preserved (string-scope back-compat coverage)
+
+**No SPEC revision; no ADR amendment; no other consumer changes; no shieldscan-api commit.**
+
+### Forward-Pins
+
+1. **V10 iOS section-name variance** — PRESERVED with refined testbed candidate iGoat-Swift; trigger phrase: ***"Begin MobSF V10 iOS verification + section-dispatch task"***
+2. **V13 `network_summary` capture** — FORWARD_PINNED to v1.x informational summary work (processor-level severity rollup capability)
+3. **V16 `detected_trackers` + `total_trackers` counters** — FORWARD_PINNED (same v1.x scope as #2)
+4. **Per-section adaptor pattern 2nd-instance evaluation** — Phase 5.D 1c6041d V5.E.1 forward-pin maintained; trackers section heterogeneity NOT surfaced (uniform per-tracker shape); pattern continues to SQLMap Task 7.6 as 2nd-instance trigger
+5. **Testbed-inversion methodology learning** — FORWARD_PIN: future Phase 0 v2 sessions reference dual-testbed-cross-validation as canonical methodology; DEVELOPMENT-PATTERNS evaluation candidate if 2nd instance surfaces
+
+### Cross-References
+
+- shieldscan-docs commits: `cd933c5` (Phase D.1 design-doc annotation; this commit's cross-repo pair partner); `02be8cf` (Task 7.4 design doc canonical authority); `8a72467` (Task 7.1 filename correction; latest state pre-D.1); `575ed1f` (Task 7.5d D.1 docs annotation precedent for D.1+D.2 cross-repo pattern)
+- shieldscan-engine commits: `18e120f` (Task 7.5d Phase D.2 DRIFT-LOG entry shape precedent + Placement α convention); `c15a60d` (Task 7.4 MobSF consumer; V10/V13/V16 forward-pin origin in original DRIFT-LOG entry); `1c6041d` (Task 7.4 Phase 5.D C-pattern forward-pin canonical authority; per-section adaptor V5.E.1 reference)
+- shieldscan-api commit: `6403a3f` (Task 7.4 D-PLAN-7 orchestrator default; unaffected by Phase 0 v2 refinement)
+- SPEC §13 ADR-027 (RawFinding.Metadata schema; snake_case + omit-when-empty conventions; canonical authority for `scope_list` + `tracker_categories` + `tracker_url` keys)
+- MobSF source: `home.py` (delete_scan implementation); StaticAnalyzer schema (suppressfindings + scan tables); v4.4.6 pinned at `sha256:72311e3553ca2c21043923cace27ed99f800cd641e9368160406779516dd774e`
+- Phase 0 v2 testbeds: `/tmp/diva-beta.apk` (control baseline; preserved); `/tmp/InsecureBankv2.apk` (V16 source); `/tmp/exodus-testbed.apk` (V13 source; DDG 5.279.1)
+
+---
+
 ## 2026-05-16 — Task 7.5d MobSF Cleanup Contract Verification (Empirical Execution)
 
 **Status:** Executed; **PRIMARY VERDICT: RECOMMEND RETAIN `cfg.EphemeralContainer = true`**; **SECONDARY VERDICT: CLEAN** (no version drift).

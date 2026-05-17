@@ -122,6 +122,45 @@ func TestAdaptNetworkSecurity_PopulatedForwardPin(t *testing.T) {
 	}
 }
 
+// TestAdaptNetworkSecurity_V4_4_6_ScopeList exercises the Phase 0 v2
+// empirically-verified shape: scope arrives as []any (e.g. ["*"]) from
+// MobSF v4.4.6. Pre-Phase-0-v2 parser silently type-fell-back to the
+// default Title; post-refinement coerces list→string for Title and
+// preserves the raw list via scope_list Metadata key. Fixture mirrors
+// DDG /tmp/ddg-scan.json populated network_findings.
+func TestAdaptNetworkSecurity_V4_4_6_ScopeList(t *testing.T) {
+	section := networkSecuritySection{
+		NetworkFindings: []map[string]any{
+			{
+				"scope":       []any{"*"},
+				"severity":    "high",
+				"description": "Base config is insecurely configured to permit clear text traffic to all domains.",
+			},
+			{
+				"scope":       []any{"api.example.com", "cdn.example.com"},
+				"severity":    "warning",
+				"description": "Domain config trusts user-added CAs",
+			},
+		},
+	}
+	out := adaptNetworkSecurity(section, "android")
+	if len(out) != 2 {
+		t.Fatalf("expected 2 findings; got %d", len(out))
+	}
+	if out[0].Title != "*" {
+		t.Fatalf("V13 scope-coercion: title=%q; want %q", out[0].Title, "*")
+	}
+	if out[0].Metadata["scope_list"] != `["*"]` {
+		t.Fatalf("V13 scope_list metadata: got %q", out[0].Metadata["scope_list"])
+	}
+	if out[1].Title != "api.example.com,cdn.example.com" {
+		t.Fatalf("V13 multi-scope join: title=%q", out[1].Title)
+	}
+	if out[0].Metadata["forward_pin_v13"] == "" || out[0].Metadata["forward_pin_v13"] == "shape not yet stabilized; verify against MobSF v4.x release notes" {
+		t.Fatalf("V13 breadcrumb should reflect Phase 0 v2 verification; got %q", out[0].Metadata["forward_pin_v13"])
+	}
+}
+
 func TestAdaptTrackers_EmptyForwardPin(t *testing.T) {
 	if out := adaptTrackers(trackersSection{}, "android"); out != nil {
 		t.Fatal("V16 empty must return nil")
@@ -141,5 +180,55 @@ func TestAdaptTrackers_PopulatedForwardPin(t *testing.T) {
 	}
 	if out[0].Title != "Tracker detected: Google Ads" {
 		t.Fatalf("title=%q", out[0].Title)
+	}
+}
+
+// TestAdaptTrackers_V4_4_6_Enrichment exercises the Phase 0 v2
+// empirically-verified shape: per-tracker {name, categories, url} from
+// MobSF v4.4.6. Fixture mirrors IBv2 /tmp/ibv2-scan.json populated
+// trackers (Google AdMob + Google Analytics + Google Tag Manager).
+// Asserts tracker_categories + tracker_url Metadata keys land
+// per ADR-027 omit-when-empty convention.
+func TestAdaptTrackers_V4_4_6_Enrichment(t *testing.T) {
+	section := trackersSection{
+		Trackers: []map[string]any{
+			{
+				"name":       "Google AdMob",
+				"categories": "Advertisement",
+				"url":        "https://reports.exodus-privacy.eu.org/trackers/312",
+			},
+			{
+				"name":       "Google Analytics",
+				"categories": "Analytics",
+				"url":        "https://reports.exodus-privacy.eu.org/trackers/48",
+			},
+			{
+				// Omit-when-empty: no categories/url → keys absent
+				"name": "Unknown Tracker",
+			},
+		},
+	}
+	out := adaptTrackers(section, "android")
+	if len(out) != 3 {
+		t.Fatalf("expected 3 trackers; got %d", len(out))
+	}
+	if out[0].Metadata["tracker_categories"] != "Advertisement" {
+		t.Fatalf("V16 tracker_categories[0]=%q", out[0].Metadata["tracker_categories"])
+	}
+	if out[0].Metadata["tracker_url"] != "https://reports.exodus-privacy.eu.org/trackers/312" {
+		t.Fatalf("V16 tracker_url[0]=%q", out[0].Metadata["tracker_url"])
+	}
+	if out[1].Metadata["tracker_categories"] != "Analytics" {
+		t.Fatalf("V16 tracker_categories[1]=%q", out[1].Metadata["tracker_categories"])
+	}
+	// Omit-when-empty: tracker_categories + tracker_url absent on entry [2]
+	if _, has := out[2].Metadata["tracker_categories"]; has {
+		t.Fatal("V16 omit-when-empty violated: tracker_categories present on empty entry")
+	}
+	if _, has := out[2].Metadata["tracker_url"]; has {
+		t.Fatal("V16 omit-when-empty violated: tracker_url present on empty entry")
+	}
+	if out[0].Metadata["forward_pin_v16"] == "" || out[0].Metadata["forward_pin_v16"] == "shape not yet stabilized in v4.x" {
+		t.Fatalf("V16 breadcrumb should reflect Phase 0 v2 verification; got %q", out[0].Metadata["forward_pin_v16"])
 	}
 }
