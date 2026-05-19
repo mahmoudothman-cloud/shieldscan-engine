@@ -8,6 +8,60 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-05-19 — Task 7.1 Phase 5.D — C-Pattern Severity-Normalization Evaluation (OUTCOME γ-honest)
+
+**Status:** Evaluated; **OUTCOME γ-honest — promotion DECLINED on dominant scope-mismatch rationale**; 1c6041d's not-duplicative criterion supplemented (not replaced) by scope-mismatch finding.
+
+**Authority:** Task 7.4 Phase 5.D `1c6041d` canonical scope (3-instance threshold criteria + forward-pin language for Trivy as 3rd M7 instance); Task 7.1 Phase 5 pre-verification surface report this session (V-K canonical scope verification + V-L 3-helper signature comparison + V-M DEVELOPMENT-PATTERNS.md scope-mismatch finding); shieldscan-engine commit `d4028d0` (Task 7.1 Phase 1 close; `mapTrivySeverity` 3rd M7 instance live); shieldscan-docs commit `ce7d48b` (Task 7.1 Phase 5.A design doc drift annotations); shieldscan-docs commit `c2445b9` (Task 7.1 Phase 5.C SPEC §3.2 directory layout annotation).
+
+**Evaluation scope:** `1c6041d` canonical threshold language: *"severity normalization helper at 2 instances — ZAP + MobSF — ARE candidates for future DEVELOPMENT-PATTERNS entries IF they reach 3-instance threshold via Trivy (Task 7.1) and/or SQLMap (Task 7.6) consumer tasks."* Task 7.1 `mapTrivySeverity` ships in Phase 1 at `internal/tools/docker/trivy/parser.go` line 193 — 3rd M7 instance live. Pre-Phase-5.D framing: threshold MET; promotion question opens.
+
+### Per-Finding Analysis
+
+**Finding 1 — Threshold formally MET.** `mapZAPRisk` (`service/zap/parser.go:85`) + `mapMobSFSeverity` (`service/mobsf/parser.go:77`) + `mapTrivySeverity` (`docker/trivy/parser.go:193`) = 3 M7 DockerServiceRunner/DockerRunner consumer instances. `1c6041d` canonical 3-instance threshold criterion satisfied per its own framing.
+
+**Finding 2 — Signature divergence (domain-driven; weakens unified-form promotion).** Helper shapes:
+
+| Helper | Signature | Drop semantics |
+|---|---|---|
+| `mapZAPRisk` | `(risk string) (severity, drop bool)` | YES — drops `"False Positive"` + `""` |
+| `mapMobSFSeverity` | `(sev string) (severity, drop bool)` | YES — drops `""`, `"secure"`, `"good"` |
+| `mapTrivySeverity` | `(severity string) string` | NO — `UNKNOWN`/empty → `"info"` defensive |
+
+Trivy genuinely lacks sentinel-filter use cases (Trivy emits real CVE findings; no `"secure"`/`"False Positive"`/`"good"` markers to filter). This is domain-driven divergence, not implementation drift. If pattern promoted, would require explicit "drop-bool optional per consumer-domain" caveat. Argues against single-canonical-form promotion.
+
+**Finding 3 — DOMINANT: DEVELOPMENT-PATTERNS.md scope mismatch.** Pre-verification V-M finding: DEVELOPMENT-PATTERNS.md preamble line 5 explicitly states *"Scope: Application-side patterns (Python / FastAPI / SQLAlchemy / Pydantic / Redis)."* All 3 existing entries (SQLAlchemy Identity-Map Staleness; Long-lived Background Tasks; API-key Audit Attribution) are application-side Python/SQLAlchemy patterns. Engine-side Go patterns are EXPLICITLY OUT OF SCOPE per preamble. Severity-normalization helpers (`mapZAPRisk` + `mapMobSFSeverity` + `mapTrivySeverity`) are engine-side Go patterns. **Document scope mismatch is the dominant rationale against promotion regardless of instance count.**
+
+### Methodology Advancement on `1c6041d`
+
+Task 7.4 Phase 5.D `1c6041d` cited "not-duplicative" criterion as rationale for declining promotion. Task 7.4 evaluation sidestepped the document-scope question; promotion was correctly declined but the scope-mismatch finding was implicit (not surfaced). Task 7.1 Phase 5.D surfaces the scope-mismatch finding explicitly.
+
+**Methodology evolution:** Future Phase 5.D evaluations should check document-scope first, then threshold + duplicative-ness criteria. *"Does this pattern belong in this document at all?"* is structurally upstream of *"Has the pattern reached threshold?"* Engine-side patterns surfaced during M7+ consumer implementations don't pass the threshold-then-scope test; they fail the scope test before threshold becomes relevant.
+
+`1c6041d` framing remains preserved as authoritative for its decision context. This entry doesn't invalidate `1c6041d`; it supplements with the additional rationale that `1c6041d` sidestepped. Both findings hold: not-duplicative AND scope-mismatch both decline promotion.
+
+### Verdict
+
+**OUTCOME γ-honest — promotion DECLINED on dominant scope-mismatch rationale.** `mapTrivySeverity` stays at `internal/tools/docker/trivy/parser.go`; no DEVELOPMENT-PATTERNS.md entry created; canonical lowercase output set preserved per ZAP/MobSF/Trivy convergent convention (no document promotion needed for convention persistence).
+
+### Forward-Pins
+
+1. **Engine-side patterns document evaluation** — IF engine-side Go patterns warrant their own canonical document (e.g., `DEVELOPMENT-PATTERNS-ENGINE.md` OR scope-expansion of existing `DEVELOPMENT-PATTERNS.md`), re-evaluate severity-normalization promotion at that scope decision. Trigger phrase: ***"Begin engine-side DEVELOPMENT-PATTERNS document scope evaluation task"***.
+2. **Signature divergence resolution** — IF future M7 consumer (e.g., SQLMap Task 7.6) surfaces 4th severity-normalization helper, evaluate whether drop-bool semantics converge OR remain domain-driven. Signature unification may become possible (or remain genuinely divergent) at 4-instance threshold.
+3. **Per-section adaptor 2nd-instance evaluation** — preserved per `1c6041d` canonical scope language; pattern stays 1-instance (MobSF only) per Task 7.4 Phase 0 v2 V13/V16 verification (uniform-shape tracker section per MobSF + uniform Results[] per Trivy Q7 lock). Continues to SQLMap Task 7.6 as 2nd-instance trigger if applicable.
+4. **Mobile-evidence typed-field cluster 2nd-instance evaluation** — preserved per `1c6041d` canonical scope; stays 1-instance (MobSF only) per Task 7.1 Phase 1 (Trivy is SCA + container; not mobile-evidence territory). Continues to future mobile-consumer tasks as 2nd-instance trigger.
+
+### Cross-References
+
+- shieldscan-engine commits: `1c6041d` (Task 7.4 Phase 5.D canonical 3-instance threshold framing authority); `d4028d0` (Task 7.1 Phase 1 close; `mapTrivySeverity` 3rd M7 instance live); `d31b831` (Task 7.4 Phase 0 v2 D.2; latest engine state pre-P5.D)
+- shieldscan-docs commits: `ce7d48b` (Task 7.1 Phase 5.A design doc drift annotations); `c2445b9` (Task 7.1 Phase 5.C SPEC §3.2 directory layout annotation; latest docs state pre-P5.D)
+- DEVELOPMENT-PATTERNS.md preamble line 5 (Application-side scope explicit; engine-side out of scope)
+- `internal/tools/docker/service/zap/parser.go:85` (`mapZAPRisk` 1st M7 instance)
+- `internal/tools/docker/service/mobsf/parser.go:77` (`mapMobSFSeverity` 2nd M7 instance)
+- `internal/tools/docker/trivy/parser.go:193` (`mapTrivySeverity` 3rd M7 instance)
+
+---
+
 ## 2026-05-17 — Task 7.4 Phase 0 v2 — V13 + V16 Empirical Verification (RESOLVED)
 
 **Status:** Executed; **PRIMARY OUTCOME α: V13 + V16 RESOLVED via empirical verification**; 16 of 17 design-doc V-items now RESOLVED; 1 (V10 iOS section-name variance) FORWARD_PINNED for separate task.
