@@ -9,6 +9,7 @@ import (
 	"github.com/odyssey/shieldscan-engine/internal/tools"
 	"github.com/odyssey/shieldscan-engine/internal/tools/docker"
 	"github.com/odyssey/shieldscan-engine/internal/tools/docker/nmap"
+	"github.com/odyssey/shieldscan-engine/internal/tools/docker/trivy"
 )
 
 // buildDockerRegistry constructs DockerRunner consumers + their warm
@@ -43,10 +44,21 @@ func buildDockerRegistry(log zerolog.Logger) (map[string]tools.ToolRunner, []*do
 		return nil, nil, fmt.Errorf("worker: nmap pool init: %w", err)
 	}
 
-	runners := map[string]tools.ToolRunner{
-		"nmap": nmap.NewRunner(nmapPool, log),
+	// Task 7.1 Trivy: single shared pool drives both ToolRunner
+	// registrations per Q2 dual-registration lock (implementation plan
+	// §3.5). NewContainerRunner + NewFsRunner exec different argv per
+	// scan but share image + warm pool lifecycle.
+	trivyPool, err := trivy.NewPool(cli, log)
+	if err != nil {
+		return nil, nil, fmt.Errorf("worker: trivy pool init: %w", err)
 	}
-	pools := []*docker.WarmPool{nmapPool}
+
+	runners := map[string]tools.ToolRunner{
+		"nmap":            nmap.NewRunner(nmapPool, log),
+		"trivy-container": trivy.NewContainerRunner(trivyPool, log),
+		"trivy-fs":        trivy.NewFsRunner(trivyPool, log),
+	}
+	pools := []*docker.WarmPool{nmapPool, trivyPool}
 
 	return runners, pools, nil
 }
