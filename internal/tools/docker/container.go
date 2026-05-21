@@ -33,6 +33,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/pkg/stdcopy"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -158,7 +159,14 @@ func NewServiceContainer(id, imageRef, baseURL string, cli DockerClient, log zer
 // The function is lower-case (package-private) by design — only
 // WarmPool constructs Containers; direct construction at the tool-
 // runner layer would bypass pool accounting.
-func newContainer(ctx context.Context, cli dockerClient, image string, log zerolog.Logger) (*Container, error) {
+//
+// Per Task 7.5e Mounts extension: mounts is the optional slice of
+// host bind-mounts / volume mounts threaded into HostConfig.Mounts.
+// Nil/empty mounts preserves pre-7.5e behavior (no host filesystem
+// access; matches Task 7.2 Nmap consumer expectation). DefaultContainerFactory
+// passes nil for backward-compat; WarmPool internal closure (when
+// cfg.Mounts non-empty + cfg.ContainerFactory nil) passes cfg.Mounts.
+func newContainer(ctx context.Context, cli dockerClient, image string, mounts []mount.Mount, log zerolog.Logger) (*Container, error) {
 	scopedLog := log.With().Str("image", image).Logger()
 
 	// 1. Pull image. SDK returns an io.ReadCloser carrying pull
@@ -178,11 +186,22 @@ func newContainer(ctx context.Context, cli dockerClient, image string, log zerol
 	//    SPEC §11.4. AutoRemove deliberately false — pool manages
 	//    lifecycle; AutoRemove would race with Stop's explicit
 	//    ContainerRemove.
+	// Override ENTRYPOINT to empty so Cmd: [sleep, infinity] runs as
+	// the container's command directly. Per Task 7.5e Phase 2
+	// empirical finding (D-PLAN-7.5e-Phase2-Entrypoint): tool images
+	// like aquasec/trivy + instrumentisto/nmap declare ENTRYPOINT
+	// (e.g., ["trivy"], ["/usr/bin/nmap"]) which would otherwise be
+	// prepended to Cmd, producing "trivy sleep infinity" → failure.
+	// Empty []string entrypoint is the canonical Docker SDK pattern
+	// for overriding image entrypoint to no-op. Warm-pool semantics
+	// require sleep-infinity persistence; actual tool invocation
+	// happens via subsequent Container.Exec calls per warm-pool design.
 	createResp, err := cli.ContainerCreate(ctx,
 		&container.Config{
-			Image: image,
-			Cmd:   []string{"sleep", "infinity"},
-			Tty:   false,
+			Image:      image,
+			Entrypoint: []string{},
+			Cmd:        []string{"sleep", "infinity"},
+			Tty:        false,
 		},
 		&container.HostConfig{
 			Resources: container.Resources{
@@ -191,6 +210,7 @@ func newContainer(ctx context.Context, cli dockerClient, image string, log zerol
 			},
 			AutoRemove:     false,
 			ReadonlyRootfs: false, // some tools write to /tmp at runtime
+			Mounts:         mounts,
 		},
 		nil, nil, "",
 	)

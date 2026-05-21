@@ -3,11 +3,15 @@ package docker
 import (
 	"context"
 	"errors"
+	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -455,4 +459,116 @@ func TestDefaultContainerFactory_DelegatesToNewContainer(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, c)
 	assert.Equal(t, "test-img:1", c.Image)
+}
+
+// ─── Task 7.5e Mounts Extension (4) ───────────────────────────────────
+
+// newFakeClientForMountsTest constructs a fakeClient with happy-path
+// responses suitable for WarmPool spin-up testing. Captures HostConfig
+// (incl. Mounts) via fakeClient.lastHostConfig per container_test.go
+// fakeClient extension (Task 7.5e). Used by Mounts extension tests below.
+func newFakeClientForMountsTest() *fakeClient {
+	return &fakeClient{
+		pullResp:   io.NopCloser(strings.NewReader("")),
+		createResp: container.CreateResponse{ID: "fc-stub-001"},
+	}
+}
+
+// TestConfigMounts_PlumbingToHostConfig verifies Config.Mounts flows
+// through to HostConfig.Mounts via WarmPool internal closure when
+// cfg.ContainerFactory is nil per Task 7.5e Q1 α.ii lock branch (2).
+func TestConfigMounts_PlumbingToHostConfig(t *testing.T) {
+	fc := newFakeClientForMountsTest()
+	mounts := []mount.Mount{
+		{Type: mount.TypeBind, Source: "/tmp/test-mount", Target: "/scan", ReadOnly: true},
+	}
+	pool, err := New(Config{
+		Image:   "test-img:1",
+		MaxSize: 1,
+		Cleanup: NoCleanup,
+		Mounts:  mounts,
+	}, fc, noopLog())
+	require.NoError(t, err)
+	_, err = pool.Checkout(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, fc.lastHostConfig, "fakeClient must have captured HostConfig from ContainerCreate")
+	assert.Equal(t, mounts, fc.lastHostConfig.Mounts,
+		"Config.Mounts must reach HostConfig.Mounts via WarmPool internal closure (Task 7.5e Q1 α.ii branch 2)")
+}
+
+// TestDefaultContainerFactory_MountsPassThrough verifies that
+// constructing a WarmPool with cfg.Mounts non-empty + cfg.ContainerFactory
+// nil uses the internal closure path (NOT DefaultContainerFactory directly)
+// and that Mounts plumb through to HostConfig. Complement to
+// TestConfigMounts_PlumbingToHostConfig — asserts per-field detail of
+// the routed mount entry.
+func TestDefaultContainerFactory_MountsPassThrough(t *testing.T) {
+	fc := newFakeClientForMountsTest()
+	mounts := []mount.Mount{
+		{Type: mount.TypeBind, Source: "/var/test", Target: "/data"},
+	}
+	pool, err := New(Config{
+		Image:   "test-img:2",
+		MaxSize: 1,
+		Cleanup: NoCleanup,
+		Mounts:  mounts,
+	}, fc, noopLog())
+	require.NoError(t, err)
+	_, err = pool.Checkout(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, fc.lastHostConfig)
+	require.Len(t, fc.lastHostConfig.Mounts, 1)
+	assert.Equal(t, mount.TypeBind, fc.lastHostConfig.Mounts[0].Type)
+	assert.Equal(t, "/var/test", fc.lastHostConfig.Mounts[0].Source)
+	assert.Equal(t, "/data", fc.lastHostConfig.Mounts[0].Target)
+}
+
+// TestConfigMounts_EmptyDefaultsBackwardCompat verifies pre-Task-7.5e
+// behavior preserved when cfg.Mounts is nil + cfg.ContainerFactory is
+// nil: DefaultContainerFactory path taken; HostConfig.Mounts empty/nil.
+// Matches Q1 α.ii lock branch (3) — Nmap consumer + any current
+// DockerRunner consumer without Mounts requirement stays unchanged.
+func TestConfigMounts_EmptyDefaultsBackwardCompat(t *testing.T) {
+	fc := newFakeClientForMountsTest()
+	pool, err := New(Config{
+		Image:   "test-img:3",
+		MaxSize: 1,
+		Cleanup: NoCleanup,
+		// Mounts deliberately omitted (nil)
+	}, fc, noopLog())
+	require.NoError(t, err)
+	_, err = pool.Checkout(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, fc.lastHostConfig)
+	assert.Empty(t, fc.lastHostConfig.Mounts,
+		"nil cfg.Mounts must leave HostConfig.Mounts empty (Task 7.5e Q1 α.ii branch 3 pre-7.5e backward-compat)")
+}
+
+// TestConfigMounts_CustomFactoryUnchanged verifies Q1 α.ii branch (1):
+// when cfg.ContainerFactory is non-nil, the custom factory wins and
+// Config.Mounts is NOT consumed by the framework (consumer-side
+// responsibility — e.g., service-shape ServiceContainerFactory).
+// Asserts no signature/behavior change for the service-shape path.
+func TestConfigMounts_CustomFactoryUnchanged(t *testing.T) {
+	var customInvoked bool
+	customFactory := func(_ context.Context, _ dockerClient, image string, _ zerolog.Logger) (*Container, error) {
+		customInvoked = true
+		return &Container{ID: "custom-id", Image: image}, nil
+	}
+	mounts := []mount.Mount{
+		{Type: mount.TypeBind, Source: "/ignored-by-framework", Target: "/x"},
+	}
+	pool := newTestPool(t, Config{
+		Image:            "test-img:4",
+		MaxSize:          1,
+		Cleanup:          NoCleanup,
+		ContainerFactory: customFactory,
+		Mounts:           mounts, // present but framework does NOT thread to factory per branch (1)
+	})
+	_, err := pool.Checkout(context.Background())
+	require.NoError(t, err)
+	assert.True(t, customInvoked, "custom factory must be invoked (branch 1)")
+	// Note: Custom factories receive only (ctx, cli, image, log) per
+	// ContainerFactoryFunc signature stability per Q1 α.ii lock; mounts
+	// pass-through is consumer-side responsibility.
 }

@@ -76,13 +76,11 @@ func newIntegrationPool(t *testing.T) (*tools.Target, func()) {
 // Expected against alpine:3.10 (Phase 0 v2 baseline): 1 finding
 // (CVE-2021-36159 CRITICAL apk-tools).
 //
-// SKIPPED until framework gap resolution (see file docstring).
+// Task 7.5e Phase 0 v2 V1.s-ii: image-mode scan requires NO framework
+// mounts (OCI registry pull works without Docker socket). t.Skip
+// lifted in Task 7.5e Phase 2 — no framework dependency beyond network
+// reachability inside the warm-pool container.
 func TestIntegration_TrivyContainer_Alpine(t *testing.T) {
-	t.Skip("Framework gap: DefaultContainerFactory lacks Docker socket mount; " +
-		"Trivy inside warm-pool container cannot pull alpine:3.10 from host daemon. " +
-		"Resolution: per-consumer ContainerFactory override OR DockerRunner.Mounts " +
-		"extension. ADR-026 line 2093 anticipated path. Tracked as D-PLAN for Phase 4.")
-
 	_, cleanup := newIntegrationPool(t)
 	defer cleanup()
 
@@ -120,14 +118,14 @@ func TestIntegration_TrivyContainer_Alpine(t *testing.T) {
 // through TrivyFsScanner against the Phase 0 v2 multi-manifest fixture
 // directory (/tmp/trivy-fs-test/; 3 lockfiles; 57-finding baseline).
 //
-// SKIPPED until framework gap resolution (see file docstring).
+// Task 7.5e Phase 0 v2 V2 + Phase 2 P2.1: framework Mounts capability
+// + Trivy NewPool bind-mount land enable this test. Host bind-mount
+// source = TRIVY_SCAN_BASE_PATH env (defaults to /tmp); container
+// target = /scan; ReadOnly:true per V4 empirical lock. Fixture at
+// /tmp/trivy-fs-test/ becomes /scan/trivy-fs-test/ inside the
+// container per (α) lean (explicit container path; no framework
+// path-translation).
 func TestIntegration_TrivyFs_TestData(t *testing.T) {
-	t.Skip("Framework gap: DefaultContainerFactory lacks host bind-mount support; " +
-		"Trivy inside warm-pool container cannot reach /tmp/trivy-fs-test/ on host. " +
-		"Resolution: DockerRunner.Mounts extension OR per-consumer ContainerFactory " +
-		"override accepting bind-mount config. ADR-026 line 2093 anticipated path. " +
-		"Tracked as D-PLAN for Phase 4.")
-
 	cli, err := dockerclient.NewClientWithOpts(
 		dockerclient.FromEnv,
 		dockerclient.WithAPIVersionNegotiation(),
@@ -141,7 +139,7 @@ func TestIntegration_TrivyFs_TestData(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	findings, err := runner.Run(ctx, tools.Target{SourcePath: "/tmp/trivy-fs-test", TargetType: "source"}, tools.ScanConfig{})
+	findings, err := runner.Run(ctx, tools.Target{SourcePath: "/scan/trivy-fs-test", TargetType: "source"}, tools.ScanConfig{})
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(findings), 50, "fs-mode baseline expects at least 50 findings (Phase 0 v2: 57)")
 

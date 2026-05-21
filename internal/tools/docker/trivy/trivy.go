@@ -3,12 +3,31 @@ package trivy
 import (
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
+	"github.com/docker/docker/api/types/mount"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/odyssey/shieldscan-engine/internal/tools/docker"
 	"github.com/rs/zerolog"
 )
+
+// ScanBasePathEnv is the environment variable name controlling the
+// host-side base path bind-mounted into Trivy warm-pool containers.
+// Per Task 7.5e V2 lock: default "/tmp"; override via env var for
+// alternate scan-target staging directories.
+const ScanBasePathEnv = "TRIVY_SCAN_BASE_PATH"
+
+// ScanContainerPath is the canonical container-side mount target for
+// the host scan-base-path bind-mount. Trivy fs-mode scans address
+// targets via this path (e.g. /scan/<fs-test-dir>).
+const ScanContainerPath = "/scan"
+
+// DefaultScanBasePath is the default host-side base path bind-mounted
+// into Trivy warm-pool containers when TRIVY_SCAN_BASE_PATH is unset.
+// Per Task 7.5e V2 + Phase 0 v2 verification (/tmp/trivy-fs-test/
+// canonical testbed location).
+const DefaultScanBasePath = "/tmp"
 
 // Image is the canonical Trivy container image with digest pin.
 // Per ADR-026 risk #14 image-pinning pattern + Task 7.1 Phase 0 v2 V1
@@ -39,16 +58,41 @@ const RunnerTimeout = 30 * time.Minute
 // container image; warm-pool fan-out by mode is unnecessary
 // (containers exec different argv per checkout).
 //
+// Per Task 7.5e V1 + V2 + V4 locks (Phase 0 v2 empirical grounding):
+// pool containers receive a single bind-mount from $TRIVY_SCAN_BASE_PATH
+// on the host (defaults to /tmp via DefaultScanBasePath) to /scan inside
+// the container, ReadOnly. fs-mode scan targets (lockfiles, dependency
+// manifests) are addressed via /scan/<subpath>. ReadOnly:true sufficient
+// per V4 empirical verification (Trivy fs-scan is purely read-only).
+// Image-mode scans need no mount per V1.s-ii OCI-sufficient finding;
+// the mount is harmless when unused.
+//
 // Accepts a *client.Client (the real Docker SDK client) and internally
 // adapts via docker.NewProductionClient. Mirrors Task 7.2 Nmap
-// precedent shape (internal/tools/docker/nmap/nmap.go).
+// precedent shape (internal/tools/docker/nmap/nmap.go) extended with
+// Task 7.5e Mounts capability.
 func NewPool(cli *dockerclient.Client, log zerolog.Logger) (*docker.WarmPool, error) {
 	if cli == nil {
 		return nil, errors.New("trivy: docker client required")
 	}
+
+	scanBasePath := os.Getenv(ScanBasePathEnv)
+	if scanBasePath == "" {
+		scanBasePath = DefaultScanBasePath
+	}
+	mounts := []mount.Mount{
+		{
+			Type:     mount.TypeBind,
+			Source:   scanBasePath,
+			Target:   ScanContainerPath,
+			ReadOnly: true,
+		},
+	}
+
 	pool, err := docker.New(docker.Config{
 		Image:       Image,
 		MaxSize:     PoolMaxSize,
+		Mounts:      mounts,
 		Cleanup:     docker.NoCleanup,
 		HealthCheck: nil,
 	}, docker.NewProductionClient(cli), log)

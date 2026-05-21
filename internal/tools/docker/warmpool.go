@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/docker/docker/api/types/mount"
 	"github.com/rs/zerolog"
 )
 
@@ -94,20 +95,30 @@ type ContainerFactoryFunc func(ctx context.Context, cli dockerClient, image stri
 // + MobSF) provide their own factory via service.ServiceContainerFactory
 // or equivalent.
 func DefaultContainerFactory(ctx context.Context, cli dockerClient, image string, log zerolog.Logger) (*Container, error) {
-	return newContainer(ctx, cli, image, log)
+	// Signature-stable per Q1 α.ii lock: passes nil mounts (no host
+	// filesystem access). Consumers needing host bind-mounts populate
+	// Config.Mounts instead; WarmPool.New() constructs an internal
+	// closure that threads cfg.Mounts → newContainer.
+	return newContainer(ctx, cli, image, nil, log)
 }
 
 // Config configures a WarmPool. Image is required; MaxSize defaults
 // to 4 if zero; Cleanup is required (use NoCleanup for stateless
 // tools); HealthCheck is optional; ContainerFactory is optional
 // (nil routes through DefaultContainerFactory; preserves existing
-// exec-shape behavior).
+// exec-shape behavior); Mounts is optional (non-nil + ContainerFactory
+// nil enables WarmPool to construct an internal closure threading
+// mounts to HostConfig via newContainer per Task 7.5e Q1 α.ii lock —
+// preserves ContainerFactoryFunc + DefaultContainerFactory signature
+// stability; service-shape consumers via custom ContainerFactory
+// unaffected).
 type Config struct {
 	Image            string
 	MaxSize          int
 	Cleanup          CleanupFunc
 	HealthCheck      HealthCheckFunc
 	ContainerFactory ContainerFactoryFunc
+	Mounts           []mount.Mount
 }
 
 // New creates a WarmPool. Pool is empty; lazy spin-up on first
@@ -132,9 +143,26 @@ func New(cfg Config, cli dockerClient, log zerolog.Logger) (*WarmPool, error) {
 	if maxSize < 0 {
 		return nil, errors.New("warmpool: MaxSize must be non-negative")
 	}
+	// Per Task 7.5e Q1 α.ii lock — three-branch decision tree
+	// preserves ContainerFactoryFunc + DefaultContainerFactory signature
+	// stability while threading cfg.Mounts to HostConfig via internal
+	// closure:
+	//   (1) ContainerFactory != nil          → custom factory used as-is
+	//       (service-shape ServiceContainerFactory unaffected)
+	//   (2) ContainerFactory nil + Mounts != nil → internal closure
+	//       wrapping newContainer with cfg.Mounts
+	//   (3) ContainerFactory nil + Mounts nil  → DefaultContainerFactory
+	//       (pre-7.5e behavior; nil mounts → no HostConfig.Mounts)
 	factory := cfg.ContainerFactory
 	if factory == nil {
-		factory = DefaultContainerFactory
+		if len(cfg.Mounts) > 0 {
+			mounts := cfg.Mounts // closure capture — slice header by value
+			factory = func(ctx context.Context, cli dockerClient, image string, log zerolog.Logger) (*Container, error) {
+				return newContainer(ctx, cli, image, mounts, log)
+			}
+		} else {
+			factory = DefaultContainerFactory
+		}
 	}
 	return &WarmPool{
 		image:     cfg.Image,
