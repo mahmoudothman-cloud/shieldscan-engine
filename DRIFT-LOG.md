@@ -8,6 +8,35 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-05-23 — Task 7.6 Phase 5.D — Per-Section Adaptor Pattern 2nd-Instance Empirical State
+
+**Status:** Pattern at 2 instances; 3rd-instance threshold not yet reached; scope-mismatch methodology preserved.
+
+**Authority:** Task 7.4 Phase 5.D `1c6041d` (2nd-instance evaluation criteria authority + forward-pin language); Task 7.1 Phase 5.D `aa3fb5f` (scope-mismatch methodology canonical; engine-side patterns stay out of application-side DEVELOPMENT-PATTERNS.md); shieldscan-engine commit `723426d` (Task 7.6 cross-repo pair Commit 2; SQLMap consumer Phase 1); shieldscan-api commit `2cd4065` (cross-repo pair Commit 1); shieldscan-docs commits `40606c5` (Task 7.6 plan §3.2 + §5 Phase 5.D scope) + `d8e25b5` (Task 7.6 design).
+
+**Empirical state:** Per-section adaptor pattern reaches 2-instance state via Task 7.6 SQLMap consumer landing.
+
+| Instance | Consumer | Location | Adaptor count |
+|---|---|---|---|
+| 1st | MobSF | `internal/tools/docker/service/mobsf/sections.go` | 7 adaptors (manifest + secrets + permissions + activities + receivers + services + providers section dispatchers) |
+| 2nd | SQLMap | `internal/tools/docker/sqlmap/parser.go` | 2 adaptors (`adaptInjectionFindings` per-Parameter/per-technique flatten + `adaptDBMSFingerprint` discrete info finding) |
+
+`1c6041d` forward-pin language *"per-section adaptor pattern at 1st instance via MobSF; 2nd-instance evaluation pinned to next consumer surfacing similar heterogeneous-section handling"* operationally satisfied. SQLMap parser empirically required per-section dispatch (Parameter-block injection findings + DBMS-fingerprint trailing block are structurally distinct sections of stdout; single monolithic parser would conflate semantics).
+
+### Scope-Mismatch Methodology Preserved
+
+Per `aa3fb5f` (Task 7.1 Phase 5.D): engine-side Go patterns (per-section adaptor heterogeneity-handling at parser layer) are out of scope for application-side `DEVELOPMENT-PATTERNS.md` (which preamble-scopes to "Python / FastAPI / SQLAlchemy / Pydantic / Redis" patterns). Document-scope test runs structurally upstream of threshold-then-duplicative test. Engine-side DRIFT-LOG tracks empirical 2-instance state without DEVELOPMENT-PATTERNS.md promotion.
+
+### Threshold Disposition
+
+Pattern stays at **2 instances pending 3rd-instance evaluation**. Future Phase 5.D evaluations check (a) document-scope first, (b) then threshold + duplicative-ness — per advancement of methodology in `aa3fb5f`. 3rd-instance threshold not yet reached; no canonical-document promotion territory opens at this time.
+
+**Forward-pin trigger phrase preserved:** *"Begin Task 7.X consumer brainstorming with per-section adaptor 3rd-instance evaluation"* — triggers re-evaluation when a future DockerRunner/DockerServiceRunner consumer surfaces similar per-section heterogeneity (likely ZAP-active Phase 1 or future API-fuzzing tool). At 3rd-instance reach, supplementary findings (signature divergence between 1st + 2nd + 3rd; unified-form viability assessment) get catalogued before final promotion/decline disposition.
+
+**Verdict:** No engine package code change; no canonical-document promotion; SQLMap `adaptInjectionFindings` + `adaptDBMSFingerprint` stay at `sqlmap/parser.go` per Task 7.6 design d8e25b5 §4 Q2 (a) lock; MobSF `sections.go` 7 adaptors stay at canonical 1st-instance location; pattern documentation lives in this DRIFT-LOG entry pending 3rd-instance threshold reach.
+
+---
+
 ## 2026-05-19 — Task 7.1 Phase 5.D — C-Pattern Severity-Normalization Evaluation (OUTCOME γ-honest)
 
 **Status:** Evaluated; **OUTCOME γ-honest — promotion DECLINED on dominant scope-mismatch rationale**; 1c6041d's not-duplicative criterion supplemented (not replaced) by scope-mismatch finding.
