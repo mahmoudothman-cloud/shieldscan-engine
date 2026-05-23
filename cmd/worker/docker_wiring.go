@@ -9,6 +9,7 @@ import (
 	"github.com/odyssey/shieldscan-engine/internal/tools"
 	"github.com/odyssey/shieldscan-engine/internal/tools/docker"
 	"github.com/odyssey/shieldscan-engine/internal/tools/docker/nmap"
+	"github.com/odyssey/shieldscan-engine/internal/tools/docker/sqlmap"
 	"github.com/odyssey/shieldscan-engine/internal/tools/docker/trivy"
 )
 
@@ -53,12 +54,22 @@ func buildDockerRegistry(log zerolog.Logger) (map[string]tools.ToolRunner, []*do
 		return nil, nil, fmt.Errorf("worker: trivy pool init: %w", err)
 	}
 
+	// Task 7.6 SQLMap: single-runner pattern (mirrors Nmap precedent;
+	// NOT Trivy dual-Name). DockerRunner exec-shape; Q1 (a) stdout-
+	// parsing — NO Mounts capability used (NewPool sets Config.Mounts
+	// nil; framework routes to DefaultContainerFactory).
+	sqlmapPool, err := sqlmap.NewPool(cli, log)
+	if err != nil {
+		return nil, nil, fmt.Errorf("worker: sqlmap pool init: %w", err)
+	}
+
 	runners := map[string]tools.ToolRunner{
 		"nmap":            nmap.NewRunner(nmapPool, log),
 		"trivy-container": trivy.NewContainerRunner(trivyPool, log),
 		"trivy-fs":        trivy.NewFsRunner(trivyPool, log),
+		"sqlmap":          sqlmap.NewRunner(sqlmapPool, log),
 	}
-	pools := []*docker.WarmPool{nmapPool, trivyPool}
+	pools := []*docker.WarmPool{nmapPool, trivyPool, sqlmapPool}
 
 	return runners, pools, nil
 }

@@ -1,0 +1,3 @@
+not the expected sqlmap output
+no header line; no block delimiters
+random text that should produce zero findings without crashing
