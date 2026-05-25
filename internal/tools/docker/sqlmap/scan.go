@@ -41,6 +41,20 @@ func buildArgs(target tools.Target, cfg tools.ScanConfig) []string {
 		"--batch",
 		"--disable-coloring",
 	}
+	// Per ADR-015 enablement (shieldscan-docs commit 9a57865; design
+	// doc b344d0c §3.2): cookie-auth pass-through when AuthConfig is
+	// present with Type=="cookie" + non-empty Data. Cookie format
+	// "name=value; name2=value2" per engine AuthConfig.Data docstring
+	// contract (internal/tools/runner.go). Defensive: skip silently
+	// for nil AuthConfig, non-cookie Type, or empty Data — preserves
+	// credential-less scan behavior. Non-cookie AuthType values
+	// (bearer/basic/custom_header/form) forward-pinned to v1.1+ per
+	// consumer need (ADR-015 §13 AuthType coverage).
+	if target.AuthConfig != nil &&
+		target.AuthConfig.Type == "cookie" &&
+		target.AuthConfig.Data != "" {
+		args = append(args, "--cookie="+target.AuthConfig.Data)
+	}
 	level, risk := depthToLevelRisk(cfg.Depth)
 	args = append(args, "--level="+level, "--risk="+risk)
 	return args

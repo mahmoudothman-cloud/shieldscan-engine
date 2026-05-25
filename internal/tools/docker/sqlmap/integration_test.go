@@ -74,7 +74,7 @@ func TestIntegration_SQLMap_DVWA_EndToEnd(t *testing.T) {
 	// 1. DVWA bootstrap
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	cookies, cleanup := bootstrapDVWA(t, ctx, cli)
+	cookies, dvwaIP, cleanup := bootstrapDVWA(t, ctx, cli)
 	t.Cleanup(cleanup)
 
 	// 2. SQLMap pool + runner
@@ -88,47 +88,42 @@ func TestIntegration_SQLMap_DVWA_EndToEnd(t *testing.T) {
 	scanCtx, scanCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer scanCancel()
 
-	// SQLMap consumes Target.URL per Q9 (a) lock. Cookie injection is
-	// Q7 (b) forward-pin to ADR-015; for this integration test we need
-	// to inject cookies via Target.URL query-string is NOT viable (DVWA
-	// requires Cookie header). For Q7 forward-pin compliance, this
-	// test passes the URL alone; DVWA security=low cookie semantics
-	// allow probing without strict session enforcement on the SQLi
-	// endpoint when security is set globally.
+	// ADR-015 enablement (shieldscan-docs commit 9a57865 + shieldscan-api
+	// commit 742faed + this commit): cookies captured by bootstrapDVWA
+	// are now threaded through target.AuthConfig per the production
+	// orchestrator → JobDispatch.Auth → jobDispatchToTarget path. This
+	// closes Task 7.6 Drift #35 architectural-reconciliation operationally:
+	// SQLMap reaches the auth-gated DVWA SQLi endpoint and emerges V4
+	// baseline findings (≥1 sql_injection technique + 1 dbms_fingerprint).
 	//
-	// EMPIRICAL NOTE: This deviates from manual Phase 0 v2 which
-	// passed --cookie via argv. Q7 (b) forward-pin defers cookie
-	// integration. Test verifies SQLMap-engine-wiring path; full
-	// authenticated scanning is ADR-015 territory.
-	_ = cookies // forward-pin: cookies captured but not yet threaded to runner per Q7 (b)
-
-	target := tools.Target{URL: dvwaSQLiTarget, TargetType: "web"}
+	// Drift #44 (Stage 3 Commit 3 execution catch): SQLMap pool containers
+	// run on the default Docker bridge network; "http://localhost:18080"
+	// from inside the SQLMap container resolves to its own loopback, NOT
+	// the DVWA host-port binding. URL must use DVWA's bridge-network
+	// container IP so SQLMap can reach DVWA via cross-container bridge
+	// routing on port 80. Host-port 18080 stays for the test's host-side
+	// bootstrap httpClient only.
+	sqlmapTargetURL := fmt.Sprintf(
+		"http://%s:80/vulnerabilities/sqli/?id=1&Submit=Submit", dvwaIP,
+	)
+	target := tools.Target{
+		URL:        sqlmapTargetURL,
+		TargetType: "web",
+		AuthConfig: &tools.AuthConfig{
+			Type: "cookie",
+			Data: cookies,
+		},
+	}
 	findings, err := runner.Run(scanCtx, target, tools.ScanConfig{Depth: "quick"})
-	// Wiring assertion: Run executes the full DockerRunner path —
-	// Pool.Checkout → Container.Exec → parseSQLMapOutput → enrichment —
-	// without error. This validates the engine integration even when
-	// the target is not actually exploitable from the runner's vantage
-	// point (see Drift #35 + Q7 (b) cookie forward-pin below).
-	require.NoError(t, err, "Runner.Run wiring failure")
+	require.NoError(t, err, "Runner.Run end-to-end failure")
 
-	// 4. Findings assertions — DRIFT #35 / Q7 (b) cookie forward-pin
+	// 4. V4 baseline assertions (Drift #35 closure target met) —
 	//
-	// Phase 0 v2 manual scan succeeded with --cookie threaded via argv
-	// (security=low + PHPSESSID captured from DVWA bootstrap). Q9 (a)
-	// + Q7 (b) lock buildArgs at Target.URL only; Cookie auth is
-	// forward-pinned to ADR-015 enablement task per design doc §3.7.
-	//
-	// Without cookies, SQLMap can't reach the auth-gated DVWA SQLi
-	// endpoint and reports no injectable parameters → parseSQLMapOutput
-	// returns nil/[] (no findings header in stdout).
-	//
-	// This integration test thus validates the WIRING path empirically
-	// (DVWA bootstrap + container.Exec + ParseOutput + enrichment all
-	// execute end-to-end without error) and EXPECTS zero findings as
-	// the v1-Q7-(b)-scoped behavior. Richer assertions require ADR-015.
-	//
-	// When ADR-015 enablement task lands, this test gets upgraded to
-	// assert ≥1 sql_injection + 1 dbms_fingerprint per V4 baseline.
+	// Phase 0 v2 manual scan with --cookie surfaced ≥4 sql_injection
+	// techniques (boolean-blind + error-based + time-based + UNION-based)
+	// + 1 dbms_fingerprint (MySQL). With ADR-015 cookie wiring in place,
+	// authenticated DVWA SQLi endpoint is reachable and findings emerge
+	// empirically per V4 Phase 0 v2 baseline.
 	var injections, dbmsCount int
 	for _, f := range findings {
 		switch f.FindingType {
@@ -138,49 +133,56 @@ func TestIntegration_SQLMap_DVWA_EndToEnd(t *testing.T) {
 			dbmsCount++
 		}
 	}
-
-	// v1 scope (Q7 b forward-pin): wiring validates end-to-end; zero
-	// findings expected for auth-gated DVWA without cookies.
-	t.Logf("Wiring validation PASSED: %d findings total (%d sql_injection + %d dbms_fingerprint). "+
-		"Cookie-auth forward-pinned to ADR-015 enablement task; richer assertions deferred.",
+	t.Logf("V4 baseline scan PASSED: %d findings total (%d sql_injection + %d dbms_fingerprint). "+
+		"ADR-015 cookie wiring operational; Task 7.6 Drift #35 closure verified end-to-end.",
 		len(findings), injections, dbmsCount)
+	require.GreaterOrEqual(t, injections, 1,
+		"V4 baseline: expected ≥1 sql_injection finding (cookie-auth reaches SQLi endpoint)")
+	require.GreaterOrEqual(t, dbmsCount, 1,
+		"V4 baseline: expected ≥1 dbms_fingerprint finding (MySQL back-end)")
 
-	// Bonus: per-finding shape assertion ONLY if findings were emitted
-	// (defensive; will activate when Q7 (b) ADR-015 lands).
-	if injections > 0 {
-		for _, f := range findings {
-			if f.FindingType != "sql_injection" {
-				continue
-			}
-			assert.Equal(t, "id", f.Parameter, "Q6 typed-field reuse: Parameter")
-			assert.NotEmpty(t, f.Payload, "Q6 typed-field reuse: Payload non-empty")
-			assert.Equal(t, "CWE-89", f.CWEID, "Q6 typed-field reuse: CWEID")
-			assert.Equal(t, "A03:2021 Injection", f.OWASP, "Q6 typed-field reuse: OWASP")
-			assert.Equal(t, "GET", f.Metadata["place"], "Metadata.place per Q6 lock")
-			assert.NotEmpty(t, f.Metadata["technique"], "Metadata.technique per Q6 lock")
-			assert.Contains(t, []string{"high", "medium"}, f.Severity,
-				"Severity per Q5 rubric")
-			break
+	// Per-finding spot-checks per V4 baseline.
+	var checkedInjection bool
+	for _, f := range findings {
+		if f.FindingType != "sql_injection" {
+			continue
 		}
+		assert.Equal(t, "id", f.Parameter, "Q6 typed-field reuse: Parameter")
+		assert.NotEmpty(t, f.Payload, "Q6 typed-field reuse: Payload non-empty")
+		assert.Equal(t, "CWE-89", f.CWEID, "Q6 typed-field reuse: CWEID")
+		assert.Equal(t, "A03:2021 Injection", f.OWASP, "Q6 typed-field reuse: OWASP")
+		assert.Equal(t, "GET", f.Metadata["place"], "Metadata.place per Q6 lock")
+		assert.NotEmpty(t, f.Metadata["technique"], "Metadata.technique per Q6 lock")
+		assert.Contains(t, []string{"high", "medium"}, f.Severity,
+			"Severity per Q5 rubric")
+		checkedInjection = true
+		break
 	}
-	if dbmsCount > 0 {
-		for _, f := range findings {
-			if f.FindingType != "dbms_fingerprint" {
-				continue
-			}
-			assert.Equal(t, "info", f.Severity, "Q4 DBMS-fingerprint severity=info")
-			assert.Contains(t, f.Metadata["dbms_type"], "MySQL", "DVWA back-end MySQL fingerprint")
-			assert.Contains(t, f.Title, "DBMS detected", "Title format per buildDBMSFinding")
-			break
+	require.True(t, checkedInjection, "at least one sql_injection finding must be spot-checked")
+
+	var checkedDBMS bool
+	for _, f := range findings {
+		if f.FindingType != "dbms_fingerprint" {
+			continue
 		}
+		assert.Equal(t, "info", f.Severity, "Q4 DBMS-fingerprint severity=info")
+		assert.Contains(t, f.Metadata["dbms_type"], "MySQL", "DVWA back-end MySQL fingerprint")
+		assert.Contains(t, f.Title, "DBMS detected", "Title format per buildDBMSFinding")
+		checkedDBMS = true
+		break
 	}
+	require.True(t, checkedDBMS, "dbms_fingerprint finding must be spot-checked")
 }
 
 // bootstrapDVWA pulls + spins up DVWA, completes the create-DB +
 // login + set-security-low flow, and returns the session cookies
-// string ("security=low; PHPSESSID=<sess>") plus a cleanup function.
-// Mirrors Phase 0 v2 manual bootstrap pattern.
-func bootstrapDVWA(t *testing.T, ctx context.Context, cli *dockerclient.Client) (cookies string, cleanup func()) {
+// string ("security=low; PHPSESSID=<sess>") plus DVWA's bridge-network
+// container IP plus a cleanup function. Mirrors Phase 0 v2 manual
+// bootstrap pattern. The bridge IP is required for SQLMap-pool
+// containers to reach DVWA via cross-container routing (Drift #44;
+// host-port binding 18080 is host-loopback-only and unreachable
+// from inside SQLMap's bridge-networked container).
+func bootstrapDVWA(t *testing.T, ctx context.Context, cli *dockerclient.Client) (cookies string, dvwaIP string, cleanup func()) {
 	t.Helper()
 
 	// 1. Pull image (no-op if cached)
@@ -220,7 +222,24 @@ func bootstrapDVWA(t *testing.T, ctx context.Context, cli *dockerclient.Client) 
 	err = cli.ContainerStart(ctx, createResp.ID, container.StartOptions{})
 	require.NoError(t, err, "DVWA container start")
 
-	// 4. Wait for HTTP readiness (200|302|301)
+	// 3b. Inspect container to capture bridge-network IP (Drift #44).
+	inspect, err := cli.ContainerInspect(ctx, createResp.ID)
+	require.NoError(t, err, "DVWA container inspect")
+	if inspect.NetworkSettings != nil {
+		dvwaIP = inspect.NetworkSettings.IPAddress
+		// Fallback: iterate networks map if default bridge IP is empty.
+		if dvwaIP == "" {
+			for _, net := range inspect.NetworkSettings.Networks {
+				if net != nil && net.IPAddress != "" {
+					dvwaIP = net.IPAddress
+					break
+				}
+			}
+		}
+	}
+	require.NotEmpty(t, dvwaIP, "DVWA bridge IP discovery")
+
+	// 4. Wait for HTTP readiness (200|302|301) via host-port binding.
 	require.True(t, waitForHTTP(dvwaHostURL+"/", 60*time.Second), "DVWA HTTP not ready")
 
 	// 5. DVWA bootstrap flow via HTTP client with cookie jar
@@ -277,7 +296,7 @@ func bootstrapDVWA(t *testing.T, ctx context.Context, cli *dockerclient.Client) 
 	}
 	cookies = strings.Join(parts, "; ")
 
-	return cookies, cleanup
+	return cookies, dvwaIP, cleanup
 }
 
 // waitForHTTP polls a URL until a 2xx/3xx response is received OR

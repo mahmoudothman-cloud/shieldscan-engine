@@ -119,6 +119,102 @@ func TestDepthToLevelRisk(t *testing.T) {
 	}
 }
 
+// ─── ADR-015 enablement: cookie-injection test cases ─────────────────
+
+// TestBuildArgs_CookieAuthInjection verifies cookie pass-through when
+// target.AuthConfig is present with Type=="cookie" + non-empty Data
+// per ADR-015 enablement (shieldscan-docs commit 9a57865; engine
+// design §3.2). Closes Task 7.6 Drift #35 architectural-reconciliation.
+func TestBuildArgs_CookieAuthInjection(t *testing.T) {
+	got := buildArgs(
+		tools.Target{
+			URL: "http://example.test/?id=1",
+			AuthConfig: &tools.AuthConfig{
+				Type: "cookie",
+				Data: "PHPSESSID=abc; security=low",
+			},
+		},
+		tools.ScanConfig{},
+	)
+	if !contains(got, "--cookie=PHPSESSID=abc; security=low") {
+		t.Errorf("cookie injection missing in argv: %v", got)
+	}
+}
+
+// TestBuildArgs_NoAuthConfigSkipped verifies defensive skip for
+// nil AuthConfig — credential-less scan behavior preserved.
+func TestBuildArgs_NoAuthConfigSkipped(t *testing.T) {
+	got := buildArgs(tools.Target{URL: "http://example.test/?id=1"}, tools.ScanConfig{})
+	for _, a := range got {
+		if strings.HasPrefix(a, "--cookie") {
+			t.Errorf("nil AuthConfig must not emit --cookie; got %v", got)
+		}
+	}
+}
+
+// TestBuildArgs_NonCookieAuthTypeSkipped verifies forward-compat skip
+// for non-cookie AuthType values (bearer/basic/custom_header/form
+// forward-pinned to v1.1+ per ADR-015 §13 AuthType coverage).
+func TestBuildArgs_NonCookieAuthTypeSkipped(t *testing.T) {
+	got := buildArgs(
+		tools.Target{
+			URL: "http://example.test/?id=1",
+			AuthConfig: &tools.AuthConfig{
+				Type: "bearer",
+				Data: "tok-123",
+			},
+		},
+		tools.ScanConfig{},
+	)
+	for _, a := range got {
+		if strings.HasPrefix(a, "--cookie") {
+			t.Errorf("bearer AuthType must not emit --cookie; got %v", got)
+		}
+	}
+}
+
+// TestBuildArgs_EmptyCookieDataSkipped verifies defensive skip when
+// AuthConfig.Data is empty (well-typed-but-no-value case).
+func TestBuildArgs_EmptyCookieDataSkipped(t *testing.T) {
+	got := buildArgs(
+		tools.Target{
+			URL: "http://example.test/?id=1",
+			AuthConfig: &tools.AuthConfig{
+				Type: "cookie",
+				Data: "",
+			},
+		},
+		tools.ScanConfig{},
+	)
+	for _, a := range got {
+		if strings.HasPrefix(a, "--cookie") {
+			t.Errorf("empty cookie Data must not emit --cookie; got %v", got)
+		}
+	}
+}
+
+// TestBuildArgs_CookieInjectionWithDepth verifies cookie injection
+// coexists with depth-mapped --level/--risk flags. Cookie inserted
+// between --disable-coloring and --level per argv ordering convention.
+func TestBuildArgs_CookieInjectionWithDepth(t *testing.T) {
+	got := buildArgs(
+		tools.Target{
+			URL: "http://example.test/?id=1",
+			AuthConfig: &tools.AuthConfig{
+				Type: "cookie",
+				Data: "PHPSESSID=xyz",
+			},
+		},
+		tools.ScanConfig{Depth: "standard"},
+	)
+	if !contains(got, "--cookie=PHPSESSID=xyz") {
+		t.Errorf("cookie missing: %v", got)
+	}
+	if !contains(got, "--level=3") || !contains(got, "--risk=2") {
+		t.Errorf("standard depth flags missing: %v", got)
+	}
+}
+
 // ─── helpers ──────────────────────────────────────────────────────────
 
 func contains(slice []string, value string) bool {

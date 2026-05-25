@@ -8,6 +8,55 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-05-24 — ADR-015 Enablement — Decrypted Credentials in Redis Transit LANDED (Stage 3 cross-repo trio complete)
+
+**Status:** ADR-015 LANDED per shieldscan-docs commit `9a57865` (SPEC §13 ADR-015 + ADR-013/ADR-014 addendums); cross-repo enablement complete per shieldscan-api commit `742faed` (orchestrator decrypt+emit + `SCAN_CREDENTIAL_DECRYPTED` audit + positive-path tests) + this commit (SQLMap consumer cookie wiring + integration test V4 baseline upgrade). Task 4.2 deferral (`cf3b30a`) LIFTED; Task 7.6 Drift #35 architectural-reconciliation operationally CLOSED.
+
+**Authority:** ADR-015 design doc shieldscan-docs commit `b344d0c` (Y1+Y2+Q1-Q7 brainstorming chain + V-BA through V-BI pre-verification); ADR-015 implementation plan shieldscan-docs commit `00dd2d1` (Stage 3 sub-step canonical); Stage 3 Commit 1 shieldscan-docs `9a57865`; Stage 3 Commit 2 shieldscan-api `742faed`; Task 7.6 Drift #35 forward-pin closure (shieldscan-engine commit `723426d` Phase 1 wiring-validation reframing → V4 baseline assertions at this commit); Y-DRIFTLOG-PLACEMENT (b) lock from Stage 3 Commit 1 (DRIFT-LOG entry deferred to engine commit per per-repo atomic-commit discipline).
+
+**Empirical end-to-end validation (this commit):**
+
+| Layer | Component | State |
+|---|---|---|
+| api orchestrator | `ProjectCredential` lookup via `project_id` (per-project unique) + `decrypt_credential(encrypted_data)` + emit `payload["auth"] = {type, data, fields?}` | shipped `742faed` |
+| api audit | `ScanAction.SCAN_CREDENTIAL_DECRYPTED` row per credential-bearing dispatch (scan-level, not per-job per ScanAction policy) | shipped `742faed` |
+| Redis transit | `JobDispatch.Auth` field carries decrypted credential for queue-residence duration; mitigations per ADR-015 §13 (TLS + authenticated access + short TTL + no-persistence config) | wire contract unchanged; populated path activated |
+| worker | `jobDispatchToTarget` (line 421+) routes `JobAuth` → `target.AuthConfig` | pre-existing; consumed |
+| SQLMap consumer | `buildArgs` appends `--cookie=<data>` when `target.AuthConfig.Type=="cookie"` + `Data != ""`; defensive skip for nil/non-cookie/empty | shipped this commit |
+| integration test | DVWA bootstrap cookies (`PHPSESSID` + `security=low`) threaded through `Target.AuthConfig`; assertions upgraded from "0 findings (wiring-validation)" to "≥1 sql_injection + ≥1 dbms_fingerprint per V4 baseline" with per-finding CWE-89 + OWASP A03:2021 + Parameter=id + MySQL DBMS spot-checks | shipped this commit |
+
+### Drifts Caught at Stage 3 Execution
+
+- **#40 Y-AUDIT (b)**: api-side execution lock — extend existing `AuditLog` + `ScanAction` enum + `audit()` helper rather than create new `credential_access_audit` table per plan default (a). Reserved-enum-slot extension precedent; saved entire migration step; single audit truth source preserved.
+- **#41 (CRITICAL)**: Design doc + plan pseudocode used `scan.credential_id` but `Scan` model has only `project_id`; `ProjectCredential` is per-project (unique=True per M1 invariant + Task 3.X `d4f6b1e9a527`). Linkage refined to `SELECT WHERE project_id = scan.project_id`. Pre-verification caught architectural assumption mismatch before any code written — validates verify-then-draft discipline at strongest level this multi-session arc.
+- **#42 emission-site refactor**: Credential-decrypt + audit emission moved INTO `dispatch()` (after `SCAN_DISPATCHED` audit, before per-job loop) rather than inside `_build_job_payload`. `_build_job_payload(scan, job, auth_payload)` consumes pre-built dict. Single-decrypt + single-audit per dispatch; multi-job dispatches reuse same `auth_payload`. ScanAction policy "scan-level only, never per-job" cleanly satisfied.
+- **#43 (latent pre-existing)**: `tests/routes/test_scans.py` `test_create_api_scan_creates_3_jobs` asserted 3 jobs but `SCAN_TYPE_TOOLS[ScanType.API]` now 4 entries (sqlmap appended in Task 7.6 `2cd4065` which missed updating this test). 2-line defensive inline fix during Stage 3 Commit 2 pytest-gate.
+- **#44 (Stage 3 Commit 3 execution catch; CRITICAL operational)**: Integration test network topology mismatch. SQLMap pool containers run on default Docker bridge; `http://localhost:18080` inside SQLMap container resolves to its own loopback (NOT DVWA host-port binding). Phase 1 wiring-validation test (commit `723426d`) masked the issue by accepting "0 findings" as v1 behavior. Drift #35 closure assertions surfaced it empirically (V4 baseline assertions failed at first run with 0 findings despite operational cookie wiring). Manual debug verified argv format correct via `--network=host` SQLMap docker run reproducing V4 baseline (4 sql_injection + DBMS fingerprint). Fix: `bootstrapDVWA` extended to inspect DVWA container post-start + return bridge IP; SQLMap target URL uses `http://<dvwa-bridge-ip>:80/...` rather than `http://localhost:18080/...`. Host-port 18080 retained for test's host-side bootstrap httpClient only. Re-run with fix yielded 5 findings (4 sql_injection + 1 dbms_fingerprint) in 33.81s — V4 baseline cleanly met. Foundational architectural drift previously masked by wiring-validation assertion permissiveness.
+
+### Y-DRIFTLOG-PLACEMENT (b) execution
+
+Plan Stage 3 Commit 1 C1.4 originally framed DRIFT-LOG.md update as a docs-repo edit colocated with SPEC §13 landing. At Stage 3 Commit 1 execution, Y-DRIFTLOG-PLACEMENT (b) locked: defer DRIFT-LOG update to engine Commit 3 per per-repo atomic-commit discipline (avoid cross-repo single-commit-scope). This entry fulfills the deferred work.
+
+### Architectural Decisions Locked
+
+Q1 (a) decrypted-in-Redis-transit (orchestrator decrypts at dispatch-time; worker consumes pre-decrypted); Q2 (b) all 5 AuthType values v1 (cookie/bearer/basic/custom_header/form; SQLMap v1 cookie-only handling per consumer concern); Q3 (a) orchestrator-boundary discriminator translation (DB `auth_type` → wire `type`); Q4 (a) full ADR-013 + ADR-014 addendums + ADR-015 §13 section; Q5 (a) MobSF R2 pre-signed URL deferred to MobSF V10 task; Q6 (a) v1 audit-only (revocation forward-pinned per separate task); Q7 (a) 3-commit cross-repo (docs → api → engine; landed concretely at 9a57865 → 742faed → this commit). Y1 (b) phased scope (axes 1-4; ZAP + MobSF R2 + revocation deferred) + Y2 (β) direct Q-chain (no Phase 0 v2). Y-AUDIT (b) + Y-DRIFTLOG-PLACEMENT (b) execution-time locks per pre-verification.
+
+### Forward-Pins Preserved
+
+- ***"Begin credential revocation flow task"*** — Q6 (a) multi-axis territory deserving own task
+- ZAP consumer cookie pass-through enablement (axis 5; consumer task; not ADR-015 scope)
+- MobSF V10 task — R2 pre-signed URL pattern (Task 7.4 Q6.4 + Q5 a deferral)
+- v1.1+ Redis ACL per-queue — per-tenant Redis security enhancement
+- SQLMap consumer non-cookie AuthType support — bearer/basic/custom_header/form per scan-target need
+- ***"Resume ADR-015 — Phase 5 sub-phases"*** — Stage 4 post-implementation cleanup
+- 3rd-instance per-section-adaptor pattern evaluation (Task 7.6 P5.D forward-pin; unrelated; preserved separately)
+
+### Cumulative Session-Tail Framing-Drift Count
+
+44 catches at execution time across Task 7.5d + 7.1 + 7.4 + 7.5e + 7.6 + ADR-015 lifecycle arc. ADR-015 Stage 3 surfaced drifts #40-#44 (Y-AUDIT favorable infrastructure-discovery + #41 critical architectural-correctness + #42 implementation-pattern refinement + #43 latent pre-existing regression + #44 integration-test network-topology mismatch operationally masked by prior wiring-validation reframing).
+
+---
+
 ## 2026-05-23 — Task 7.6 Phase 5.D — Per-Section Adaptor Pattern 2nd-Instance Empirical State
 
 **Status:** Pattern at 2 instances; 3rd-instance threshold not yet reached; scope-mismatch methodology preserved.
