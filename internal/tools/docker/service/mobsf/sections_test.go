@@ -232,3 +232,168 @@ func TestAdaptTrackers_V4_4_6_Enrichment(t *testing.T) {
 		t.Fatalf("V16 breadcrumb should reflect Phase 0 v2 verification; got %q", out[0].Metadata["forward_pin_v16"])
 	}
 }
+
+// ─── Task 7.4 V10 iOS adaptor tests (Phase 0 v2 v2 grounded) ───────────
+
+func TestAdaptInfoPlist_NSAllowsArbitraryLoads_EmitsHighSeverity(t *testing.T) {
+	plistXML := `<?xml version="1.0"?>
+<plist><dict>
+<key>NSAppTransportSecurity</key>
+<dict>
+<key>NSAllowsArbitraryLoads</key>
+<true/>
+</dict>
+</dict></plist>`
+	out := adaptInfoPlist(plistXML, "ios")
+	if len(out) == 0 {
+		t.Fatal("expected ≥1 finding")
+	}
+	found := false
+	for _, f := range out {
+		if f.Metadata["plist_key"] == "NSAllowsArbitraryLoads" {
+			if f.Severity != "high" {
+				t.Fatalf("NSAllowsArbitraryLoads severity=%q; want high", f.Severity)
+			}
+			if f.MobileOS != "ios" {
+				t.Fatalf("MobileOS=%q; want ios", f.MobileOS)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("NSAllowsArbitraryLoads finding missing")
+	}
+}
+
+func TestAdaptInfoPlist_EmptyPlist_NoFindings(t *testing.T) {
+	if out := adaptInfoPlist("", "ios"); out != nil {
+		t.Fatalf("empty plist → expected nil; got %d", len(out))
+	}
+}
+
+func TestAdaptATSFindings_PopulatedFindings_MapsSeverityCorrectly(t *testing.T) {
+	section := atsAnalysisSection{
+		ATSFindings: []atsFinding{
+			{Issue: "ATS disabled", Severity: "high", Description: "All HTTP allowed"},
+			{Issue: "Exception domain", Severity: "warning", Description: "Per-domain bypass"},
+		},
+	}
+	out := adaptATSFindings(section, "ios")
+	if len(out) != 2 {
+		t.Fatalf("expected 2 findings; got %d", len(out))
+	}
+	if out[0].Severity != "high" {
+		t.Fatalf("first severity=%q; want high", out[0].Severity)
+	}
+	if out[1].Severity != "medium" { // warning → medium per mapMobSFSeverity
+		t.Fatalf("second severity=%q; want medium", out[1].Severity)
+	}
+	if out[0].FindingType != "ats_violation" {
+		t.Fatalf("FindingType=%q; want ats_violation", out[0].FindingType)
+	}
+}
+
+func TestAdaptATSFindings_EmptySection_NoFindings(t *testing.T) {
+	if out := adaptATSFindings(atsAnalysisSection{}, "ios"); out != nil {
+		t.Fatalf("empty section → expected nil; got %d", len(out))
+	}
+}
+
+func TestAdaptDylibAnalysis_PerDylibPerSubcheck_EmitsFindings(t *testing.T) {
+	jsonBlob := []byte(`[{
+		"name": "Payload/App.app/libtest.dylib",
+		"nx": {"severity": "info", "description": "NX bit set"},
+		"pie": {"severity": "warning", "description": "PIE not set"},
+		"arc": {"severity": "info", "description": "ARC enabled"}
+	}]`)
+	var entries []dylibEntry
+	if err := json.Unmarshal(jsonBlob, &entries); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	out := adaptDylibAnalysis(entries, "ios")
+	if len(out) != 3 {
+		t.Fatalf("expected 3 findings (nx+pie+arc); got %d", len(out))
+	}
+	for _, f := range out {
+		if f.MobileOS != "ios" {
+			t.Fatalf("MobileOS=%q; want ios", f.MobileOS)
+		}
+		if f.FindingType != "dylib_protection_missing" {
+			t.Fatalf("FindingType=%q; want dylib_protection_missing", f.FindingType)
+		}
+		if f.Metadata["dylib_name"] != "Payload/App.app/libtest.dylib" {
+			t.Fatalf("dylib_name=%q", f.Metadata["dylib_name"])
+		}
+	}
+}
+
+func TestAdaptDylibAnalysis_EmptyList_NoFindings(t *testing.T) {
+	if out := adaptDylibAnalysis(nil, "ios"); out != nil {
+		t.Fatalf("nil list → expected nil; got %d", len(out))
+	}
+}
+
+func TestAdaptIOSBinary_FindingsDict_EmitsRawFindings(t *testing.T) {
+	raw := json.RawMessage(`{
+		"findings": {
+			"Binary uses WebView Component.": {
+				"detailed_desc": "May use UIWebView",
+				"severity": "info",
+				"cvss": 0,
+				"cwe": "",
+				"owasp-mobile": "",
+				"masvs": "MSTG-CODE-9"
+			}
+		},
+		"summary": {"high": 0, "warning": 0, "info": 1, "secure": 0, "suppressed": 0}
+	}`)
+	out := adaptIOSBinary(raw, "ios")
+	if len(out) != 1 {
+		t.Fatalf("expected 1 finding; got %d", len(out))
+	}
+	if out[0].FindingType != "ios_binary_finding" {
+		t.Fatalf("FindingType=%q", out[0].FindingType)
+	}
+	if out[0].Metadata["masvs"] != "MSTG-CODE-9" {
+		t.Fatalf("masvs=%q", out[0].Metadata["masvs"])
+	}
+}
+
+func TestAdaptIOSBinary_EmptyFindings_NoFindings(t *testing.T) {
+	raw := json.RawMessage(`{"findings": {}, "summary": {}}`)
+	if out := adaptIOSBinary(raw, "ios"); out != nil {
+		t.Fatalf("empty findings → expected nil; got %d", len(out))
+	}
+}
+
+func TestAdaptBundleURLTypes_CustomScheme_MediumSeverity(t *testing.T) {
+	entries := []bundleURLTypeEntry{
+		{CFBundleURLName: "com.example.app", CFBundleURLSchemes: []string{"myapp"}},
+	}
+	out := adaptBundleURLTypes(entries, "ios")
+	if len(out) != 1 {
+		t.Fatalf("expected 1 finding; got %d", len(out))
+	}
+	if out[0].Severity != "medium" {
+		t.Fatalf("custom scheme severity=%q; want medium", out[0].Severity)
+	}
+	if out[0].Metadata["url_scheme"] != "myapp" {
+		t.Fatalf("url_scheme=%q", out[0].Metadata["url_scheme"])
+	}
+}
+
+func TestAdaptBundleURLTypes_WellKnownScheme_InfoSeverity(t *testing.T) {
+	entries := []bundleURLTypeEntry{
+		{CFBundleURLName: "com.example.app", CFBundleURLSchemes: []string{"https"}},
+	}
+	out := adaptBundleURLTypes(entries, "ios")
+	if out[0].Severity != "info" {
+		t.Fatalf("well-known scheme severity=%q; want info", out[0].Severity)
+	}
+}
+
+func TestAdaptBundleURLTypes_EmptyList_NoFindings(t *testing.T) {
+	if out := adaptBundleURLTypes(nil, "ios"); out != nil {
+		t.Fatalf("nil list → expected nil; got %d", len(out))
+	}
+}

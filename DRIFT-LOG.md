@@ -8,6 +8,46 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-05-25 — Task 7.4 V10 — iOS Section-Dispatch + 5 iOS Adaptors LANDED (Stage 3 Commit 2 of 3)
+
+**Status:** Task 7.4 V10 iOS section-dispatch + 5 iOS adaptors landed at this commit (Stage 3 Commit 2 of 3 cross-repo sequencing). Partner Commit 1 (shieldscan-docs `d4f6ca7`) landed Task 7.4 design doc V10 status FORWARD_PINNED → RESOLVED; Partner Commit 3 (shieldscan-docs; forthcoming) lands Phase 5 sub-phases. V10 closes Task 7.4 final outstanding V-item (16/17 → 17/17 V-items RESOLVED).
+
+**Authority:** V10 design doc shieldscan-docs commit `0347a79` (Y1+Y2+U1+Q1-Q7 + V-CA-V-CI + V1-V6 + Drift #45); V10 implementation plan `7c4fe75`; Task 7.4 design doc V10 status update `d4f6ca7`; Phase 0 v2 v2 empirical authorities (DVIA-v2-swift v2.0 IPA SHA256 `a0efb217f3dd018a4fbea7b2d63db7da4e21d5d7cdc20bd4a72a8a5b57e98817` + `opensecurity/mobile-security-framework-mobsf:v4.4.6` + `/tmp/v10-ios-report.json` 5.6 MB).
+
+### Empirical Validation (Integration Test)
+
+DVIA-v2-swift v2.0 end-to-end iOS scan via real-Docker MobSF v4.4.6: PASS in 57.88s; **169 findings** emerged with categorical distribution: ats_violation=1 (NSAllowsArbitraryLoads=true high-severity ATS bypass); dylib_protection_missing=160 (20 dylibs × ~8 sub-checks per `dylibSubChecks`); info_plist_finding=3 (NSAllowsArbitraryLoads + NSAppTransportSecurity-present + ITSAppUsesNonExemptEncryption-absent); ios_binary_finding=1 (WebView Component MSTG-CODE-9); ios_url_scheme=2 (dvia + dviaswift custom schemes flagged medium per OWASP MASVS-PLATFORM-3). All V4 baseline assertions (≥1 per finding-type) satisfied.
+
+### Stage 3 Drift Cluster (Drifts #45-#48)
+
+- **Drift #45** (CRITICAL pre-execution; carried-forward from Phase 0 v2 V1): iGoat-Swift refuted empirically (`assets:[]` source-only v1.0 release 2018; build requires macOS+Xcode unavailable). Pivot to DVIA-v2-swift v2.0 (OWASP-derived canonical alternative; SHA256 `a0efb217...8817`; 20.31 MB). Catch-mode: canonical-authority-of-external-resources empirical-asset-inventory.
+- **Drift #46** (pre-execution static; S3C2 pre-verification V-CL): Plan §3.3 "`adaptDylibAnalysis` reuses `binarySubChecks` constant" empirically wrong. iOS dylib sub-checks `{arc, code_signature, encrypted, nx, pie, rpath, stack_canary, symbol}` vs Android `binarySubChecks` `{nx, pie, stack_canary, relocation_readonly, rpath, runpath, fortify, symbol}`: 5 overlap + 3 iOS-only + 3 Android-only. New `dylibSubChecks` constant introduced.
+- **Drift #47** (pre-execution static; S3C2 pre-verification V-CO): Plan §4 C2.11 assumed mirror of existing MobSF `integration_test.go`; empirically no such file (V13+V16 was unit-test-only + manual `/tmp/` scans). Reframed as CREATION mirroring SQLMap `integration_test.go` `b48fef8` cross-package precedent.
+- **Drift #48** (pre-execution static; S3C2 pre-verification V-CQ): Plan §4 C2.12 assumed `testdata/` directory existence; empirically absent. Reframed as directory creation + fixture creation; mirror approach from `sqlmap/testdata/` `b48fef8` pattern.
+- **FREE drift** (favorable; V-CJ): Plan §3.2 `binary_analysis` `json.RawMessage` refactor anticipated ~5-10 LoC; empirically `adaptBinaryAnalysis` already takes `json.RawMessage`. ~0 LoC struct delta; only platform-branching at parser.go level.
+
+### Architectural Decisions Locked
+
+Q1 (γ) section-dispatch via platform-gated invocation in current `parseReport` (preserved single-parser-entry pattern); Q2 (a) mandatory-only 5 iOS adaptors v1 (3 empty-section forward-pinned: `macho_analysis` + `framework_analysis` + `ios_api`); Q3 (a) `binary_analysis` `json.RawMessage` + platform-conditional re-unmarshal (FREE drift; already in place); Q4 (a) V10 is 1st-instance expansion of MobSF per-section-adaptor pattern (NOT 3rd instance per Task 7.6 P5.D forward-pin; pattern stays at 2 instances MobSF+SQLMap); Q5 (a) R2 pre-signed URL pattern deferred to dedicated task; Q6 (a) ADR-017 surveillance status unchanged; Q7 (c) 3-commit cross-repo (docs status + engine implementation + docs Phase 5). Y-PLIST-PARSE (a) Go stdlib pattern-scan executed (default b pivoted at execution per dependency-add overhead vs known-key extraction simplicity); Y-INTEGRATION-TEST-SHAPE (a) single-platform iOS extension confirmed (reframed per Drift #47 as creation); Y-DRIFT-LOG-PLACEMENT (a) engine DRIFT-LOG inline at this commit.
+
+### Per-Section Adaptor Pattern Instance State
+
+V10 is **1st-instance expansion** of MobSF (Android+iOS internal heterogeneity within one consumer). SQLMap remains 2nd instance (2 adaptors). Pattern count stays at **2 instances**; 3rd-instance threshold per Task 7.6 P5.D + `1c6041d` canonical scope NOT triggered (V10 is internal expansion of 1st-instance MobSF; 3rd-instance would be a 3rd structurally-distinct consumer).
+
+### Forward-Pins Preserved
+
+- ***"Begin MobSF R2 pre-signed URL pattern task"*** — Q5 (a) re-deferral; Task 7.4 Q6.4 + ADR-015 Q5 (a) forward-pin chain settled at this V10 task body
+- ***"Begin MobSF V10 iOS empty-section adaptor expansion task"*** — `adaptMachoAnalysis` + `adaptFrameworkAnalysis` + `adaptIOSAPI` when populated-state iOS testbed surfaces those sections
+- ***"Resume MobSF V10 — Phase 5 sub-phases"*** — Stage 3 Commit 3 docs Phase 5 (forthcoming)
+- 3rd-instance per-section-adaptor pattern evaluation (Task 7.6 P5.D forward-pin preserved; V10 doesn't trigger per Q4 (a))
+- iOS adaptor v1.1+ enhancements (`info_plist` deep-parse expansion via plist library; `ats_analysis` per-policy granularity; URL scheme severity-rubric refinement)
+
+### Cumulative Session-Tail Framing-Drift Count
+
+48 catches at execution time across Task 7.5d + 7.1 + 7.4 + 7.5e + 7.6 + ADR-015 + Task 7.4 V10 lifecycle arc. V10 Stage 3 surfaced drifts #45-#48 (canonical-authority-of-external-resources + constant-set divergence + missing-precedent + missing-directory) + 1 FREE favorable finding (`json.RawMessage` already in place).
+
+---
+
 ## 2026-05-24 — ADR-015 Enablement — Decrypted Credentials in Redis Transit LANDED (Stage 3 cross-repo trio complete)
 
 **Status:** ADR-015 LANDED per shieldscan-docs commit `9a57865` (SPEC §13 ADR-015 + ADR-013/ADR-014 addendums); cross-repo enablement complete per shieldscan-api commit `742faed` (orchestrator decrypt+emit + `SCAN_CREDENTIAL_DECRYPTED` audit + positive-path tests) + this commit (SQLMap consumer cookie wiring + integration test V4 baseline upgrade). Task 4.2 deferral (`cf3b30a`) LIFTED; Task 7.6 Drift #35 architectural-reconciliation operationally CLOSED.

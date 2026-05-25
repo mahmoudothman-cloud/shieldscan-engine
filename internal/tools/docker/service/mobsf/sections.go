@@ -346,3 +346,368 @@ func stringsSortInPlace(s []string) {
 		}
 	}
 }
+
+// ─── iOS adaptors (Task 7.4 V10; Phase 0 v2 v2 empirically grounded) ──
+//
+// Per V10 design doc shieldscan-docs commit 0347a79 §4 + implementation
+// plan 7c4fe75 §3.3. 5 mandatory iOS adaptors per Q2 (a) lock; 3
+// empty-section adaptors (macho_analysis + framework_analysis +
+// ios_api) forward-pinned per Q2 (a) to populated-state testbed task.
+
+// ── adaptInfoPlist (Y-PLIST-PARSE a lock; Go stdlib pattern-scan) ──
+
+// iOS info_plist arrives as raw XML string (~4856 chars empirical in
+// DVIA-v2-swift v2.0). Per Y-PLIST-PARSE (a) execution-time lock:
+// use pattern-scan over the XML text to extract known-risky keys per
+// OWASP MASVS-PLATFORM-3 + MASVS-NETWORK-1; avoids dependency-add
+// (github.com/howett/plist; Y-PLIST-PARSE b alternative rejected at
+// execution per dependency-add overhead vs known-key extraction
+// simplicity).
+//
+// Known-risky keys checked v1:
+//   - NSAllowsArbitraryLoads (boolean; true → high severity ATS bypass)
+//   - UIFileSharingEnabled (boolean; true → medium severity)
+//   - ITSAppUsesNonExemptEncryption (boolean/absent; informational)
+//   - NSAppTransportSecurity (parent dict presence; informational)
+//
+// Forward-pinned: NSExceptionDomains per-domain ATS exceptions;
+// UIBackgroundModes per-mode security implications; CFBundleURLTypes
+// (covered separately by adaptBundleURLTypes).
+func adaptInfoPlist(plistXML string, platform string) []events.RawFinding {
+	if plistXML == "" {
+		return nil
+	}
+	var out []events.RawFinding
+	emitBool := func(key, title, sev, desc string) {
+		out = append(out, events.RawFinding{
+			Title:       title,
+			Severity:    sev,
+			Description: desc,
+			FindingType: "info_plist_finding",
+			MobileOS:    platform,
+			Metadata: map[string]string{
+				"section":   "info_plist",
+				"plist_key": key,
+			},
+		})
+	}
+	// Pattern-scan: <key>KEY</key>\s*<true/>  → boolean true.
+	hasTrueFor := func(key string) bool {
+		i := strings.Index(plistXML, "<key>"+key+"</key>")
+		if i < 0 {
+			return false
+		}
+		rest := plistXML[i+len("<key>"+key+"</key>"):]
+		// Skip whitespace + newlines + a possible <dict><key>...
+		trimmed := strings.TrimSpace(rest)
+		return strings.HasPrefix(trimmed, "<true/>")
+	}
+	hasKey := func(key string) bool {
+		return strings.Contains(plistXML, "<key>"+key+"</key>")
+	}
+	if hasTrueFor("NSAllowsArbitraryLoads") {
+		emitBool("NSAllowsArbitraryLoads",
+			"ATS arbitrary loads enabled: NSAllowsArbitraryLoads=true",
+			"high",
+			"App Transport Security restrictions disabled for all network connections. "+
+				"HTTP traffic is permitted; TLS minimum-version checks are bypassed. "+
+				"Violates OWASP MASVS-NETWORK-1.")
+	}
+	if hasTrueFor("UIFileSharingEnabled") {
+		emitBool("UIFileSharingEnabled",
+			"iTunes file sharing enabled: UIFileSharingEnabled=true",
+			"medium",
+			"App documents directory is exposed via iTunes file sharing. "+
+				"Sensitive data in the Documents folder is accessible to users "+
+				"with physical device access. Violates OWASP MASVS-STORAGE-1.")
+	}
+	if hasKey("NSAppTransportSecurity") {
+		emitBool("NSAppTransportSecurity",
+			"App Transport Security configuration present",
+			"info",
+			"NSAppTransportSecurity dictionary declared in Info.plist; "+
+				"review per-domain exceptions for least-privilege adherence.")
+	}
+	if !hasKey("ITSAppUsesNonExemptEncryption") {
+		out = append(out, events.RawFinding{
+			Title:       "ITSAppUsesNonExemptEncryption key absent",
+			Severity:    "info",
+			Description: "ITSAppUsesNonExemptEncryption key not declared; App Store submission may require export-compliance attestation.",
+			FindingType: "info_plist_finding",
+			MobileOS:    platform,
+			Metadata: map[string]string{
+				"section":   "info_plist",
+				"plist_key": "ITSAppUsesNonExemptEncryption",
+				"state":     "absent",
+			},
+		})
+	}
+	return out
+}
+
+// ── adaptATSFindings (mirrors adaptNetworkSecurity Android pattern) ──
+
+type atsAnalysisSection struct {
+	ATSFindings []atsFinding `json:"ats_findings"`
+	ATSSummary  atsSummary   `json:"ats_summary"`
+}
+
+type atsFinding struct {
+	Issue       string `json:"issue"`
+	Severity    string `json:"severity"`
+	Description string `json:"description"`
+}
+
+type atsSummary struct {
+	High    int `json:"high"`
+	Warning int `json:"warning"`
+	Info    int `json:"info"`
+	Secure  int `json:"secure"`
+}
+
+// adaptATSFindings — iOS App Transport Security findings adaptor.
+// Per V4 empirical schema: {ats_findings: [{issue, severity,
+// description}], ats_summary: {high, warning, info, secure}}.
+// mapMobSFSeverity reusable (iOS severity values lowercase canonical
+// match Android per V-CM).
+func adaptATSFindings(section atsAnalysisSection, platform string) []events.RawFinding {
+	if len(section.ATSFindings) == 0 {
+		return nil
+	}
+	out := make([]events.RawFinding, 0, len(section.ATSFindings))
+	for _, af := range section.ATSFindings {
+		sev, drop := mapMobSFSeverity(af.Severity)
+		if drop {
+			continue
+		}
+		out = append(out, events.RawFinding{
+			Title:       af.Issue,
+			Severity:    sev,
+			Description: af.Description,
+			FindingType: "ats_violation",
+			MobileOS:    platform,
+			Metadata: map[string]string{
+				"section": "ats_analysis",
+			},
+		})
+	}
+	return out
+}
+
+// ── adaptDylibAnalysis (Drift #46 — separate dylibSubChecks constant) ──
+
+// dylibSubChecks enumerates the 8 iOS .dylib protection sub-checks
+// per Task 7.4 V10 Phase 0 v2 V-CL empirical capture from
+// /tmp/v10-ios-report.json. DIFFERS from Android binarySubChecks
+// (overlap: nx, pie, stack_canary, rpath, symbol; iOS-only: arc,
+// code_signature, encrypted; Android-only: relocation_readonly,
+// runpath, fortify). Drift #46 catch — plan §3.3 originally
+// suggested binarySubChecks reuse; empirically incorrect.
+var dylibSubChecks = []string{
+	"arc", "code_signature", "encrypted", "nx",
+	"pie", "rpath", "stack_canary", "symbol",
+}
+
+type dylibEntry struct {
+	Name string                    `json:"name"`
+	Raw  map[string]json.RawMessage `json:"-"`
+}
+
+// UnmarshalJSON preserves all sub-check fields as raw payload so
+// adaptDylibAnalysis can probe dylibSubChecks dynamically.
+func (e *dylibEntry) UnmarshalJSON(data []byte) error {
+	raw := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	e.Raw = raw
+	if n, ok := raw["name"]; ok {
+		_ = json.Unmarshal(n, &e.Name)
+	}
+	return nil
+}
+
+type dylibSubCheck struct {
+	Severity    string `json:"severity"`
+	Description string `json:"description"`
+}
+
+// adaptDylibAnalysis — iOS .dylib protection adaptor. Mirrors
+// adaptBinaryAnalysis Android pattern shape per V4 empirical: list ×
+// 8 sub-checks per .dylib entry. Per-sub-check severity rubric:
+// MobSF emits "info" by default; non-info severities surface as
+// findings; positive states ("has_nx"/"has_pie" booleans inside the
+// sub-check) inform Title disambiguation.
+func adaptDylibAnalysis(entries []dylibEntry, platform string) []events.RawFinding {
+	if len(entries) == 0 {
+		return nil
+	}
+	var out []events.RawFinding
+	for _, e := range entries {
+		for _, key := range dylibSubChecks {
+			rawSub, ok := e.Raw[key]
+			if !ok {
+				continue
+			}
+			var sub dylibSubCheck
+			if err := json.Unmarshal(rawSub, &sub); err != nil {
+				continue
+			}
+			sev, drop := mapMobSFSeverity(sub.Severity)
+			if drop {
+				continue
+			}
+			out = append(out, events.RawFinding{
+				Title:       "dylib " + key + " check: " + e.Name,
+				Severity:    sev,
+				Description: sub.Description,
+				FindingType: "dylib_protection_missing",
+				MobileOS:    platform,
+				CodeFile:    e.Name,
+				Metadata: map[string]string{
+					"section":    "dylib_analysis",
+					"dylib_name": e.Name,
+					"sub_check":  key,
+				},
+			})
+		}
+	}
+	return out
+}
+
+// ── adaptIOSBinary (Q3 (a) shape-collision resolution; iOS dict) ──
+
+type iosBinarySummary struct {
+	Findings map[string]iosBinaryFinding `json:"findings"`
+	Summary  iosBinaryCounts             `json:"summary"`
+}
+
+type iosBinaryFinding struct {
+	DetailedDesc string  `json:"detailed_desc"`
+	Severity     string  `json:"severity"`
+	CVSS         float64 `json:"cvss"`
+	CWE          string  `json:"cwe"`
+	OWASPMobile  string  `json:"owasp-mobile"`
+	MASVS        string  `json:"masvs"`
+}
+
+type iosBinaryCounts struct {
+	High       int `json:"high"`
+	Warning    int `json:"warning"`
+	Info       int `json:"info"`
+	Secure     int `json:"secure"`
+	Suppressed int `json:"suppressed"`
+}
+
+// adaptIOSBinary — iOS binary_analysis dict-shape adaptor; resolves
+// Q3 (a) same-key-different-shape collision with Android. Android's
+// binary_analysis is list × 8 sub-checks per binary; iOS's is dict
+// {findings: {<title>: {detailed_desc, severity, cvss, cwe,
+// owasp-mobile, masvs}}, summary: {...}}. parseReport gates
+// invocation to platform=="ios" per Q1 (γ); this adaptor unmarshals
+// raw JSON into iosBinarySummary shape.
+func adaptIOSBinary(raw json.RawMessage, platform string) []events.RawFinding {
+	if len(raw) == 0 {
+		return nil
+	}
+	var summary iosBinarySummary
+	if err := json.Unmarshal(raw, &summary); err != nil {
+		return nil // schema drift defensive — surface as empty
+	}
+	if len(summary.Findings) == 0 {
+		return nil
+	}
+	out := make([]events.RawFinding, 0, len(summary.Findings))
+	for title, f := range summary.Findings {
+		sev, drop := mapMobSFSeverity(f.Severity)
+		if drop {
+			continue
+		}
+		cweNumber, cweDesc := extractCWENumber(f.CWE)
+		md := map[string]string{
+			"section": "binary_analysis",
+		}
+		if f.MASVS != "" {
+			md["masvs"] = f.MASVS
+		}
+		if cweDesc != "" {
+			md["cwe_description"] = cweDesc
+		}
+		owasp := ""
+		if f.OWASPMobile != "" {
+			// Mirror extractMobSFTags D3 convention: "M7: Client Code Quality" → "OWASP-M7"
+			parts := strings.SplitN(f.OWASPMobile, ":", 2)
+			if len(parts) > 0 {
+				owasp = "OWASP-" + strings.TrimSpace(parts[0])
+			}
+		}
+		out = append(out, events.RawFinding{
+			Title:       title,
+			Severity:    sev,
+			Description: f.DetailedDesc,
+			FindingType: "ios_binary_finding",
+			CVSSScore:   f.CVSS,
+			CWEID:       cweNumber,
+			OWASP:       owasp,
+			MobileOS:    platform,
+			Metadata:    md,
+		})
+	}
+	return out
+}
+
+// ── adaptBundleURLTypes (URL scheme hijack detection) ──
+
+type bundleURLTypeEntry struct {
+	CFBundleURLName    string   `json:"CFBundleURLName"`
+	CFBundleURLSchemes []string `json:"CFBundleURLSchemes"`
+}
+
+// wellKnownURLSchemes are the standard schemes that are typically
+// safe to register (informational findings). Custom schemes raise
+// medium severity per OWASP MASVS-PLATFORM-3 URL scheme hijack risk.
+var wellKnownURLSchemes = map[string]bool{
+	"http":   true,
+	"https":  true,
+	"mailto": true,
+	"tel":    true,
+	"sms":    true,
+	"ftp":    true,
+}
+
+// adaptBundleURLTypes — iOS URL scheme registration adaptor. Per
+// V4 empirical schema: list of {CFBundleURLName, CFBundleURLSchemes:
+// [...]}. Each registered scheme emits a RawFinding; severity rubric
+// distinguishes well-known schemes (info) from custom schemes
+// (medium; URL scheme hijack risk per OWASP MASVS-PLATFORM-3).
+func adaptBundleURLTypes(entries []bundleURLTypeEntry, platform string) []events.RawFinding {
+	if len(entries) == 0 {
+		return nil
+	}
+	var out []events.RawFinding
+	for _, e := range entries {
+		for _, scheme := range e.CFBundleURLSchemes {
+			sev := "medium"
+			desc := "Custom URL scheme registered; potentially vulnerable to URL scheme hijack " +
+				"if another app registers the same scheme. Per OWASP MASVS-PLATFORM-3 review " +
+				"caller-validation + scheme-handler logic."
+			if wellKnownURLSchemes[strings.ToLower(scheme)] {
+				sev = "info"
+				desc = "Well-known URL scheme registered; standard platform handling."
+			}
+			out = append(out, events.RawFinding{
+				Title:       "iOS URL scheme registered: " + scheme,
+				Severity:    sev,
+				Description: desc,
+				FindingType: "ios_url_scheme",
+				MobileOS:    platform,
+				Metadata: map[string]string{
+					"section":         "bundle_url_types",
+					"url_scheme":      scheme,
+					"bundle_url_name": e.CFBundleURLName,
+				},
+			})
+		}
+	}
+	return out
+}

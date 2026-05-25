@@ -1,0 +1,187 @@
+{
+  "app_name": "DVIA-v2",
+  "app_type": "Objective C",
+  "bundle_id": "com.highaltitudehacks.DVIAswiftv2",
+  "platform": "11.2",
+  "info_plist": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>BuildMachineOSBuild</key>\n\t<string>17D47</string>\n\t<key>CFBundleDevelopmentRegion</key>\n\t<string>en</string>\n\t<key>CFBundleExecutable</key>\n\t<string>DVIA-v2</string>\n\t<key>CFBundleIcons</key>\n\t<dict>\n\t\t<key>CFBundlePrimaryIcon</key>\n\t\t<dict>\n\t\t\t<key>CFBundleIconFiles</key>\n\t\t\t<array>\n\t\t\t\t<string>AppIcon20x20</string>\n\t\t\t\t<string>AppIcon29x29</string>\n\t\t\t\t<string>AppIcon40x40</string>\n\t\t\t\t<string>AppIcon60x60</string>\n\t\t\t</array>\n\t\t\t<key>CFBundleIconName</key>\n\t\t\t<string>AppIcon</string>\n\t\t</dict>\n\t</dict>\n\t<key>CFBundleIcons~ipad</key>\n\t<dict>\n\t\t<key>CFBundlePrimaryIcon</key>\n\t\t<dict>\n\t\t\t<key>CFBundleIconFiles</key>\n\t\t\t<array>\n\t\t\t\t<string>AppIcon20x20</string>\n\t\t\t\t<string>AppIcon29x29</string>\n\t\t\t\t<string>AppIcon40x40</string>\n\t\t\t\t<string>AppIcon60x60</string>\n\t\t\t\t<string>AppIcon76x76</string>\n\t\t\t\t<string>AppIcon83.5x83.5</string>\n\t\t\t</array>\n\t\t\t<key>CFBundleIconName</key>\n\t\t\t<string>AppIcon</string>\n\t\t</dict>\n\t</dict>\n\t<key>CFBundleIdentifier</key>\n\t<string>com.highaltitudehacks.DVIAswiftv2</string>\n\t<key>CFBundleInfoDictionaryVersion</key>\n\t<string>6.0</string>\n\t<key>CFBundleName</key>\n\t<string>DVIA-v2</string>\n\t<key>CFBundlePackageType</key>\n\t<string>APPL</string>\n\t<key>CFBundleShortVersionString</key>\n\t<string>2.0</string>\n\t<key>CFBundleSupportedPlatforms</key>\n\t<array>\n\t\t<string>iPhoneOS</string>\n",
+  "ats_analysis": {
+    "ats_findings": [
+      {
+        "issue": "App Transport Security AllowsArbitraryLoads is allowed",
+        "severity": "high",
+        "description": "App Transport Security restrictions are disabled for all network connections. Disabling ATS means that unsecured HTTP connections are allowed. HTTPS connections are also allowed, and are still subject to default server trust evaluation. However, extended security checks like requiring a minimum Transport Layer Security (TLS) protocol version\u2014are disabled. This setting is not applicable to domains listed in NSExceptionDomains."
+      }
+    ],
+    "ats_summary": {
+      "high": 1,
+      "warning": 0,
+      "info": 0,
+      "secure": 0
+    }
+  },
+  "binary_analysis": {
+    "findings": {
+      "Binary uses WebView Component.": {
+        "detailed_desc": "The binary may use UIWebView Component.",
+        "severity": "info",
+        "cvss": 0,
+        "cwe": "",
+        "owasp-mobile": "",
+        "masvs": "MSTG-CODE-9"
+      }
+    },
+    "summary": {
+      "high": 0,
+      "warning": 0,
+      "info": 1,
+      "secure": 0,
+      "suppressed": 0
+    }
+  },
+  "bundle_url_types": [
+    {
+      "CFBundleURLName": "com.highaltitudehacks.DVIAswiftv2",
+      "CFBundleURLSchemes": [
+        "dvia",
+        "dviaswift"
+      ]
+    }
+  ],
+  "dylib_analysis": [
+    {
+      "name": "Payload/DVIA-v2.app/libswiftRemoteMirror.dylib",
+      "nx": {
+        "has_nx": true,
+        "severity": "info",
+        "description": "The binary has NX bit set. This marks a memory page non-executable making attacker injected shellcode non-executable."
+      },
+      "pie": {
+        "has_pie": false,
+        "severity": "info",
+        "description": "The binary is built without Position Independent Code flag. In order to prevent an attacker from reliably jumping to, for example, a particular exploited function in memory, Address space layout randomization (ASLR) randomly arranges the address space positions of key data areas of a process, including the base of the executable and the positions of the stack,heap and libraries. Use compiler option -fPIC to enable Position Independent Code. Not applicable for dylibs and static libraries."
+      },
+      "stack_canary": {
+        "has_canary": false,
+        "severity": "warning",
+        "description": "This binary does not have a stack canary value added to the stack. Stack canaries are used to detect and prevent exploits from overwriting return address. Use the option -fstack-protector-all to enable stack canaries. This might be okey for pure Swift dylibs."
+      },
+      "arc": {
+        "has_arc": false,
+        "severity": "high",
+        "description": "The binary is not compiled with Automatic Reference Counting (ARC) flag. ARC is a compiler feature that provides automatic memory management of Objective-C objects and protects from memory corruption vulnerabilities. Use compiler option -fobjc-arc to enable ARC or set Objective-C Automatic Reference Counting to YES in project configuration."
+      },
+      "rpath": {
+        "has_rpath": false,
+        "severity": "info",
+        "description": "The binary does not have Runpath Search Path (@rpath) set."
+      },
+      "code_signature": {
+        "has_code_signature": true,
+        "severity": "info",
+        "description": "This binary has a code signature."
+      },
+      "encrypted": {
+        "is_encrypted": false,
+        "severity": "warning",
+        "description": "This binary is not encrypted."
+      },
+      "symbol": {
+        "is_stripped": false,
+        "severity": "warning",
+        "description": "Debug Symbols are available. To strip debugging symbols, set Strip Debug Symbols During Copy to YES, Deployment Postprocessing to YES, and Strip Linked Product to YES in project's build settings."
+      }
+    },
+    {
+      "name": "Payload/DVIA-v2.app/Frameworks/libswiftCoreImage.dylib",
+      "nx": {
+        "has_nx": true,
+        "severity": "info",
+        "description": "The binary has NX bit set. This marks a memory page non-executable making attacker injected shellcode non-executable."
+      },
+      "pie": {
+        "has_pie": false,
+        "severity": "info",
+        "description": "The binary is built without Position Independent Code flag. In order to prevent an attacker from reliably jumping to, for example, a particular exploited function in memory, Address space layout randomization (ASLR) randomly arranges the address space positions of key data areas of a process, including the base of the executable and the positions of the stack,heap and libraries. Use compiler option -fPIC to enable Position Independent Code. Not applicable for dylibs and static libraries."
+      },
+      "stack_canary": {
+        "has_canary": false,
+        "severity": "warning",
+        "description": "This binary does not have a stack canary value added to the stack. Stack canaries are used to detect and prevent exploits from overwriting return address. Use the option -fstack-protector-all to enable stack canaries. This might be okey for pure Swift dylibs."
+      },
+      "arc": {
+        "has_arc": false,
+        "severity": "high",
+        "description": "The binary is not compiled with Automatic Reference Counting (ARC) flag. ARC is a compiler feature that provides automatic memory management of Objective-C objects and protects from memory corruption vulnerabilities. Use compiler option -fobjc-arc to enable ARC or set Objective-C Automatic Reference Counting to YES in project configuration."
+      },
+      "rpath": {
+        "has_rpath": false,
+        "severity": "info",
+        "description": "The binary does not have Runpath Search Path (@rpath) set."
+      },
+      "code_signature": {
+        "has_code_signature": true,
+        "severity": "info",
+        "description": "This binary has a code signature."
+      },
+      "encrypted": {
+        "is_encrypted": false,
+        "severity": "warning",
+        "description": "This binary is not encrypted."
+      },
+      "symbol": {
+        "is_stripped": false,
+        "severity": "warning",
+        "description": "Debug Symbols are available. To strip debugging symbols, set Strip Debug Symbols During Copy to YES, Deployment Postprocessing to YES, and Strip Linked Product to YES in project's build settings."
+      }
+    },
+    {
+      "name": "Payload/DVIA-v2.app/Frameworks/libswiftAVFoundation.dylib",
+      "nx": {
+        "has_nx": true,
+        "severity": "info",
+        "description": "The binary has NX bit set. This marks a memory page non-executable making attacker injected shellcode non-executable."
+      },
+      "pie": {
+        "has_pie": false,
+        "severity": "info",
+        "description": "The binary is built without Position Independent Code flag. In order to prevent an attacker from reliably jumping to, for example, a particular exploited function in memory, Address space layout randomization (ASLR) randomly arranges the address space positions of key data areas of a process, including the base of the executable and the positions of the stack,heap and libraries. Use compiler option -fPIC to enable Position Independent Code. Not applicable for dylibs and static libraries."
+      },
+      "stack_canary": {
+        "has_canary": false,
+        "severity": "warning",
+        "description": "This binary does not have a stack canary value added to the stack. Stack canaries are used to detect and prevent exploits from overwriting return address. Use the option -fstack-protector-all to enable stack canaries. This might be okey for pure Swift dylibs."
+      },
+      "arc": {
+        "has_arc": true,
+        "severity": "info",
+        "description": "The binary is compiled with Automatic Reference Counting (ARC) flag. ARC is a compiler feature that provides automatic memory management of Objective-C objects and is an exploit mitigation mechanism against memory corruption vulnerabilities."
+      },
+      "rpath": {
+        "has_rpath": false,
+        "severity": "info",
+        "description": "The binary does not have Runpath Search Path (@rpath) set."
+      },
+      "code_signature": {
+        "has_code_signature": true,
+        "severity": "info",
+        "description": "This binary has a code signature."
+      },
+      "encrypted": {
+        "is_encrypted": false,
+        "severity": "warning",
+        "description": "This binary is not encrypted."
+      },
+      "symbol": {
+        "is_stripped": false,
+        "severity": "warning",
+        "description": "Debug Symbols are available. To strip debugging symbols, set Strip Debug Symbols During Copy to YES, Deployment Postprocessing to YES, and Strip Linked Product to YES in project's build settings."
+      }
+    }
+  ],
+  "permissions": {},
+  "secrets": [],
+  "trackers": {
+    "trackers": [],
+    "total_trackers": 0
+  }
+}

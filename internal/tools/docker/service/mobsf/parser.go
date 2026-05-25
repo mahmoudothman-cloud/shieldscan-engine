@@ -61,6 +61,14 @@ type reportV4 struct {
 	Secrets          []string                   `json:"secrets"`
 	CertAnalysis     certAnalysisSection        `json:"certificate_analysis"`
 	Trackers         trackersSection            `json:"trackers"`
+
+	// iOS-specific sections per Task 7.4 V10 Phase 0 v2 empirical
+	// findings (DVIA-v2-swift v2.0 scan). Routed at parseReport
+	// platform-gated invocation block per Q1 (γ) lock.
+	InfoPlist      string                `json:"info_plist"`
+	ATSAnalysis    atsAnalysisSection    `json:"ats_analysis"`
+	DylibAnalysis  []dylibEntry          `json:"dylib_analysis"`
+	BundleURLTypes []bundleURLTypeEntry  `json:"bundle_url_types"`
 }
 
 type codeAnalysisSection struct {
@@ -193,20 +201,42 @@ func parseFilesDict(files map[string]string) []fileMatch {
 // Task 7.5b service.go pattern.
 //
 // platform is propagated into RawFinding.MobileOS (android|ios).
+// Per Task 7.4 V10 (shieldscan-docs commits 0347a79 design + 7c4fe75
+// plan + d4f6ca7 V10 status RESOLVED): parseReport routes 4
+// platform-agnostic adaptors unconditionally + 4 Android-specific
+// adaptors gated to platform=="android" + 5 iOS-specific adaptors
+// gated to platform=="ios". Q1 (γ) section-dispatch architecture
+// lock. Q3 (a) binary_analysis json.RawMessage shape-collision
+// resolution: parser passes raw bytes to platform-conditional adaptor
+// (adaptBinaryAnalysis Android list-shape OR adaptIOSBinary iOS dict
+// shape).
 func parseReport(body []byte, platform string) ([]events.RawFinding, error) {
 	var r reportV4
 	if err := json.Unmarshal(body, &r); err != nil {
 		return nil, fmt.Errorf("mobsf parser: unmarshal report: %w", err)
 	}
 	var out []events.RawFinding
+
+	// Platform-agnostic adaptors (V3 empirical: present in both
+	// Android + iOS reports with same shape per V-CK).
 	out = append(out, parseCodeAnalysis(r.CodeAnalysis, platform)...)
-	out = append(out, adaptManifestFindings(r.ManifestAnalysis, platform)...)
 	out = append(out, adaptPermissions(r.Permissions, platform)...)
-	out = append(out, adaptNetworkSecurity(r.NetworkSecurity, platform)...)
-	out = append(out, adaptBinaryAnalysis(r.BinaryAnalysis, platform)...)
 	out = append(out, adaptSecrets(r.Secrets, platform)...)
-	out = append(out, adaptCertificateFindings(r.CertAnalysis, platform)...)
 	out = append(out, adaptTrackers(r.Trackers, platform)...)
+
+	switch platform {
+	case "android":
+		out = append(out, adaptManifestFindings(r.ManifestAnalysis, platform)...)
+		out = append(out, adaptNetworkSecurity(r.NetworkSecurity, platform)...)
+		out = append(out, adaptCertificateFindings(r.CertAnalysis, platform)...)
+		out = append(out, adaptBinaryAnalysis(r.BinaryAnalysis, platform)...)
+	case "ios":
+		out = append(out, adaptInfoPlist(r.InfoPlist, platform)...)
+		out = append(out, adaptATSFindings(r.ATSAnalysis, platform)...)
+		out = append(out, adaptDylibAnalysis(r.DylibAnalysis, platform)...)
+		out = append(out, adaptIOSBinary(r.BinaryAnalysis, platform)...)
+		out = append(out, adaptBundleURLTypes(r.BundleURLTypes, platform)...)
+	}
 	return out, nil
 }
 

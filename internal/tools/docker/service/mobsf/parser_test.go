@@ -236,6 +236,98 @@ func TestParseReport_InvalidJSON(t *testing.T) {
 	}
 }
 
+// ─── Task 7.4 V10 parseReport platform-dispatch tests ─────────────────
+
+// TestParseReport_IOSPlatform_RoutesIOSAdaptors verifies platform=="ios"
+// gating per Q1 (γ) lock — iOS-specific sections produce findings;
+// Android-specific sections (manifest/network_security/cert) skipped.
+func TestParseReport_IOSPlatform_RoutesIOSAdaptors(t *testing.T) {
+	body := []byte(`{
+		"info_plist": "<?xml version=\"1.0\"?><plist><dict><key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/></dict></dict></plist>",
+		"ats_analysis": {"ats_findings": [{"issue": "ATS disabled", "severity": "high", "description": "d"}], "ats_summary": {"high": 1}},
+		"bundle_url_types": [{"CFBundleURLName": "n", "CFBundleURLSchemes": ["myapp"]}],
+		"manifest_analysis": {"manifest_findings": [{"rule": "r", "title": "android-only", "severity": "high", "description": "d", "name": "N"}]}
+	}`)
+	out, err := parseReport(body, "ios")
+	if err != nil {
+		t.Fatalf("parseReport: %v", err)
+	}
+	// iOS adaptors emit findings
+	hasIOS := false
+	for _, f := range out {
+		if f.MobileOS == "ios" {
+			hasIOS = true
+			break
+		}
+	}
+	if !hasIOS {
+		t.Fatal("expected ≥1 finding with MobileOS=ios")
+	}
+	// Android-only adaptor (manifest_findings) MUST NOT route under iOS
+	for _, f := range out {
+		if f.Title == "android-only" {
+			t.Fatal("Android-specific adaptor leaked into iOS platform dispatch")
+		}
+	}
+}
+
+// TestParseReport_AndroidPlatform_RoutesAndroidAdaptors verifies
+// platform=="android" gating preserves Android-only adaptor routing.
+func TestParseReport_AndroidPlatform_RoutesAndroidAdaptors(t *testing.T) {
+	body := []byte(`{
+		"manifest_analysis": {"manifest_findings": [{"rule": "r", "title": "android-only", "severity": "high", "description": "d", "name": "N"}]},
+		"info_plist": "<?xml version=\"1.0\"?><plist><dict><key>NSAllowsArbitraryLoads</key><true/></dict></plist>"
+	}`)
+	out, err := parseReport(body, "android")
+	if err != nil {
+		t.Fatalf("parseReport: %v", err)
+	}
+	// Android adaptor routes
+	hasAndroid := false
+	for _, f := range out {
+		if f.Title == "android-only" {
+			hasAndroid = true
+		}
+		if f.Metadata["plist_key"] == "NSAllowsArbitraryLoads" {
+			t.Fatal("iOS adaptor leaked into Android platform dispatch")
+		}
+	}
+	if !hasAndroid {
+		t.Fatal("Android manifest finding missing")
+	}
+}
+
+// TestParseReport_UnknownPlatform_RoutesAgnosticOnly verifies
+// unknown platform values route only the 4 platform-agnostic adaptors
+// (parseCodeAnalysis + adaptPermissions + adaptSecrets + adaptTrackers).
+func TestParseReport_UnknownPlatform_RoutesAgnosticOnly(t *testing.T) {
+	body := []byte(`{
+		"permissions": {"android.permission.INTERNET": {"status": "dangerous", "info": "Internet", "description": "d"}},
+		"info_plist": "<?xml version=\"1.0\"?><plist><dict><key>NSAllowsArbitraryLoads</key><true/></dict></plist>",
+		"manifest_analysis": {"manifest_findings": [{"rule": "r", "title": "android-only", "severity": "high", "description": "d", "name": "N"}]}
+	}`)
+	out, err := parseReport(body, "unknown")
+	if err != nil {
+		t.Fatalf("parseReport: %v", err)
+	}
+	// Agnostic adaptor (permissions) routes
+	hasPerm := false
+	for _, f := range out {
+		if f.Permission == "android.permission.INTERNET" {
+			hasPerm = true
+		}
+		if f.Metadata["plist_key"] == "NSAllowsArbitraryLoads" {
+			t.Fatal("iOS adaptor routed under unknown platform")
+		}
+		if f.Title == "android-only" {
+			t.Fatal("Android adaptor routed under unknown platform")
+		}
+	}
+	if !hasPerm {
+		t.Fatal("agnostic permissions adaptor must route under unknown platform")
+	}
+}
+
 // --- helpers ---
 
 func containsTitle(fs []events.RawFinding, title string) bool {
