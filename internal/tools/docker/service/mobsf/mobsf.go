@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 
 	"github.com/odyssey/shieldscan-engine/internal/events"
 	"github.com/odyssey/shieldscan-engine/internal/tools"
@@ -86,18 +87,36 @@ func NewBuildScan(cfg Config) func(context.Context, tools.Target, tools.ScanConf
 			return nil, err
 		}
 
-		fetcher := cfg.FetcherOverride
-		if fetcher == nil {
-			prodFetcher, err := newR2Fetcher(cfg.R2, client.Log)
-			if err != nil {
-				return nil, err
+		// Per MobSF R2 pre-signed URL task Q3 (a) preference + fallback
+		// (shieldscan-docs b25e9ba design + 721f788 plan + 8f71b01 SPEC
+		// addendums + shieldscan-api 824853c orchestrator emission):
+		// when Target.SignedFetchURL is populated, prefer httpFetcher
+		// (plain HTTP GET; no worker-side R2 credentials required); else
+		// fall back to r2Fetcher path (FetcherOverride for tests OR
+		// production s3R2Fetcher) per Q3 (a) backward-compat migration
+		// window. r2.go + s3R2Fetcher retention per Q7-refined; deletion
+		// forward-pinned to "Begin MobSF R2 migration-close task".
+		var fetcher r2Fetcher
+		if target.SignedFetchURL != "" {
+			// Derive staged-file basename hint from UploadRef so MobSF
+			// /api/v1/upload sees the right extension (Task 7.4 Phase 0
+			// V2 empirical: extension drives platform/parser routing).
+			hint := path.Base(mt.UploadRef)
+			fetcher = newHTTPFetcher(target.SignedFetchURL, hint)
+		} else {
+			fetcher = cfg.FetcherOverride
+			if fetcher == nil {
+				prodFetcher, err := newR2Fetcher(cfg.R2, client.Log)
+				if err != nil {
+					return nil, err
+				}
+				fetcher = prodFetcher
 			}
-			fetcher = prodFetcher
 		}
 
 		localPath, cleanup, err := fetcher.Fetch(ctx, mt.UploadRef)
 		if err != nil {
-			return nil, fmt.Errorf("mobsf: r2 fetch: %w", err)
+			return nil, fmt.Errorf("mobsf: fetch binary: %w", err)
 		}
 		defer cleanup()
 

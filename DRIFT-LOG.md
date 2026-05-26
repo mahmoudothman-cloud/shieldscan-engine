@@ -8,6 +8,59 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-05-26 — MobSF R2 Pre-Signed URL Pattern LANDED (Stage 3 cross-repo trio complete)
+
+**Status:** R2 pre-signed URL pattern LANDED per shieldscan-docs commit `8f71b01` (SPEC §13 ADR-013 + ADR-014 R2 addendums) + shieldscan-api commit `824853c` (orchestrator dispatch + audit + r2.py helper) + this commit (engine consumer refactor + http_fetcher + DRIFT-LOG). Cross-repo Stage 3 trio of 3 complete. Forward-pin chain Task 7.4 Q6.4 → ADR-015 Q5 (a) → V10 Q5 (a) → R2 task SETTLES operationally with this commit.
+
+**Authority:** R2 design doc shieldscan-docs commit `b25e9ba` (Y1+Y2+Q1-Q8 + Q7-refined + V-DA-V-DL pre-verification); R2 implementation plan `721f788` (Stage 3 sub-step canonical); Stage 3 Commit 1 `8f71b01`; Stage 3 Commit 2 `824853c`; ADR-015 enablement architectural analog (`9a57865` + `742faed` + `b48fef8`); V10 Stage 3 cross-repo precedent (`d4f6ca7` + `ad7cc94` + `06c444c`).
+
+### Architectural Pattern Validation
+
+R2 task is structurally identical to ADR-015 enablement at orchestrator-as-sole-writer-of-time-bounded-access-tokens. Symmetric layers shipped:
+
+| Layer | ADR-015 (credentials) | R2 task (URLs) |
+|---|---|---|
+| api orchestrator | decrypt ProjectCredential → emit `{type,data}` | generate_presigned_get_url → emit signed_fetch_url |
+| api audit | `SCAN_CREDENTIAL_DECRYPTED` | `SCAN_PRESIGNED_URL_GENERATED` |
+| Wire schema | `JobDispatch.Auth.{type,data}` | `JobMobileConfig.signed_fetch_url` (Q1 (β) sibling field) |
+| ADR addendums | ADR-013 payload-contract + ADR-014 transit-posture | ADR-013 payload-contract + ADR-014 transit-posture |
+| Engine consumer | `target.AuthConfig.Data` → SQLMap `--cookie` | `target.SignedFetchURL` → httpFetcher.Fetch (preferred); r2Fetcher fallback (Q3 (a) migration) |
+| Emission site | `dispatch()` scan-level (Drift #42) | `dispatch()` scan-level (Drift #42 analog) |
+
+### Stage 3 Drift Count: ZERO
+
+Per R2 plan §5 D-deviation framework: expected LOW (~2-4 drifts; smaller than ADR-015 5 drifts; comparable to V10 3-pre-execution-static + 0-post-execution). **Actual: ZERO drifts surfaced across all 3 commits.** Cumulative count stays at 49. Architectural analog template (ADR-015) reduced drift surface to nil; pre-verification calibration accurate; Y-decisions all resolved per defaults at execution.
+
+### Q-Lock Dispositions (Stage 3 trio)
+
+- **Q1 (β)** sibling `SignedFetchURL` field — shipped at engine `events.go` JobMobileConfig + `runner.go` Target + `processor.go` jobDispatchToTarget
+- **Q2 (a)** 600s URL expiry — shipped at api `r2.py` `generate_presigned_get_url(expiry=600)` default
+- **Q3 (a)** engine prefer-SignedFetchURL + UploadRef fallback — shipped at `mobsf.go` `NewBuildScan` branch logic; httpFetcher preferred, r2Fetcher fallback during migration
+- **Q4 (b)** ADR-013 + ADR-014 addendums — shipped at docs `8f71b01`
+- **Q5 (a)** `SCAN_PRESIGNED_URL_GENERATED` audit — shipped at api `audit.py` enum + `orchestrator.py` audit emission
+- **Q6 (a)** 3-commit cross-repo trio — closed at this commit
+- **Q7-refined** retain `r2.go` + s3R2Fetcher this task — deletion forward-pinned to ***"Begin MobSF R2 migration-close task"***
+- **Q8 (a)** `r2.py` helper extension — shipped at api `r2.py`
+
+### Execution-Time Y-Decision Dispositions
+
+- **Y-PRESIGN-METHOD (a)** boto3 sync-wrapped via `asyncio.to_thread` — resolved at api `824853c` C2.1 (mirrors existing `put_object` pattern at same module; zero new dependencies)
+- **Y-HTTP-FETCHER-LOCATION (a)** new file `http_fetcher.go` — resolved at this commit C3.3 (separation-of-concerns; parallel to `r2.go`)
+- **Y-INTEGRATION-TEST-COVERAGE (a-revised)** unit-test via `httptest.NewServer` — resolved at this commit C3.5 (integration test extension deferred as Y10-skipped; unit-test coverage via `TestNewBuildScan_PrefersHTTPFetcherWhenSignedFetchURLPresent` + 2 sibling tests sufficient for SignedFetchURL preference + fallback + error paths)
+- **Y-DRIFT-LOG-PLACEMENT (a)** engine DRIFT-LOG inline — resolved at this commit
+
+### Forward-Pin Successors Preserved
+
+- ***"Begin MobSF R2 migration-close task"*** — Q7-refined; `r2.go` + s3R2Fetcher deletion + `UploadRef` emission removal when SignedFetchURL adoption empirically stable (production metric *"≥30 days zero UploadRef fallback consumption"* OR explicit migration-close decision)
+- ***"Begin framework-level Fetch-via-URL pattern task"*** — Y1 forward-pin; 2nd R2-consumer trigger (Task 7.4 future-work *"Framework-level R2 client promotion"* language)
+- **v1.1+ URL expiry enhancements** — Q2 (c) per-scan-deadline-derived + Q2 (d) refresh-on-expiry at scale-up motivation
+
+### Cumulative Session-Tail Framing-Drift Count
+
+49 catches at execution time across Task 7.5d + 7.1 + 7.4 + 7.5e + 7.6 + ADR-015 + Task 7.4 V10 + MobSF R2 lifecycle arc. **R2 Stage 3 trio added ZERO new drifts** — empirical validation that the verify-then-draft + architectural-analog-template discipline produces near-zero-drift execution when prior task pattern (ADR-015) directly applicable. Two consecutive ZERO-drift Stage 3 trios (V10 Stage 3 Commit 2 + R2 Stage 3 entire trio) confirm pattern maturity.
+
+---
+
 ## 2026-05-25 — Task 7.4 V10 — iOS Section-Dispatch + 5 iOS Adaptors LANDED (Stage 3 Commit 2 of 3)
 
 **Status:** Task 7.4 V10 iOS section-dispatch + 5 iOS adaptors landed at this commit (Stage 3 Commit 2 of 3 cross-repo sequencing). Partner Commit 1 (shieldscan-docs `d4f6ca7`) landed Task 7.4 design doc V10 status FORWARD_PINNED → RESOLVED; Partner Commit 3 (shieldscan-docs; forthcoming) lands Phase 5 sub-phases. V10 closes Task 7.4 final outstanding V-item (16/17 → 17/17 V-items RESOLVED).

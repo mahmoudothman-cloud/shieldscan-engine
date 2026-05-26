@@ -435,6 +435,7 @@ func jobDispatchToTarget(job *events.JobDispatch) tools.Target {
 	}
 	if job.MobileConfig != nil {
 		target.MobileUploadRef = job.MobileConfig.UploadRef
+		target.SignedFetchURL = job.MobileConfig.SignedFetchURL
 	}
 	return target
 }
