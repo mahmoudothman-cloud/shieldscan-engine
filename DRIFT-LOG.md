@@ -8,6 +8,46 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-05-28 — F2 Re-Investigation: Confirmed Non-Triggerable From Engine (Option α close)
+
+**Status:** Investigated + characterized + correctly-deferred. No engine code action warranted at current architectural state.
+
+**Re-investigation trigger:** Task 7.5d Phase D forward-pin "F2 sync-mode race condition remediation" (original entry below at *Finding F2*; preserved verbatim).
+
+**Critical re-grounding:** The F2 forward-pin framing ("sync-mode race remediation") implied a Go-side synchronous-execution data race. Empirical pre-verification refuted this: F2 is a **MobSF-server-side filesystem race** (Python-side, inside the remote container) — HTTP 500 + `[Errno 39] Directory not empty` — where "sync mode" denotes MobSF's `ASYNC_ANALYSIS=false` server config, **not** Go-side synchronous execution. Go's `-race` detector cannot fire on it (Python+filesystem race in a remote container; invisible to Go memory-race instrumentation).
+
+**Empirical findings:**
+- `go test -race -count=1 ./...` → 25 packages green; ZERO Go data races (confirms F2 is not a Go memory race).
+- Engine MobSF consumer call sequence is sequential single-goroutine: upload → scan → report_json → parseReport → deleteScan. `deleteScan` is invoked at `mobsf.go:145` only **after** `parseReport` returns successfully (i.e., post-scan-completion; the `report_json` fetch at `scan.go:113` would not have returned otherwise).
+- No mid-scan `deleteScan` invocation exists in the current engine code path; MobSF's race requires `delete_scan` **while** the scan is still running.
+- F2 is therefore **structurally non-triggerable** from the engine at the current architectural state.
+
+**Architectural gating (why F2 is dormant):**
+- `EphemeralContainer = true` is the v1 default (`mobsf.go:165`; Task 7.4 c15a60d Q5 Option β; ADR-008 addendum canonical). Orphan state (StaticAnalyzerAndroid row + uploads dir) is destroyed with container teardown regardless of whether the race ever occurred.
+- F2 only materializes operationally under warm-pool retention **or** a persistent-service consumer topology — neither on the roadmap per V10 + R2 + ephemeral-default canonical locks.
+
+**Remediation decision (Q1 α):** No-op + preserve forward-pin + this annotation. Rationale:
+1. Race non-triggerable from the engine at current architecture.
+2. Ephemeral teardown destroys orphan state regardless.
+3. Defensive engine code could *log* the HTTP 500 + Errno 39 condition but cannot remediate it — recovery is REST-API-uncleanable per the original F2 entry's RecentScansDB short-circuit ("Scan not found in Database").
+4. A true fix requires `MOBSF_ASYNC_ANALYSIS=1` architectural-posture shift (response-timing + polling side effects) which exceeds F2 scope + couples to the deferred warm-pool transition decision.
+
+Honest engineering answer: no code warranted for a non-triggerable, architecturally-gated, ephemeral-teardown-cleaned race. Writing defensive code for a non-triggerable race is speculative debt.
+
+**Forward-pin disposition:** Both original triggers PRESERVED:
+- *"if warm-pool retention is ever reconsidered"* (would make orphan state persist beyond container teardown).
+- *"if sync-mode race surfaces operationally"* (would indicate a code path reaching mid-scan `delete_scan`).
+
+Additional forward-pin territory surfaced this re-investigation:
+- **"Begin MobSF concurrency posture review task"** — bundle F2 + warm-pool transition decision + `MOBSF_ASYNC_ANALYSIS=1` evaluation (Q1 δ territory; the proper home for a true F2 fix if warm-pool is ever adopted).
+- **"Begin MobSF MOBSF_ASYNC_ANALYSIS=1 adoption evaluation task"** — standalone architectural-posture evaluation (Q1 γ territory).
+
+**Cumulative session-tail framing-drift count:** 50 (Drift #50 = F2 forward-pin-framing-refutation; pre-execution empirical; category: forward-pin framing implied a Go data race; empirical pre-verification refuted to MobSF-server-side filesystem race + non-triggerable). Same catch-class as Drift #44 (network-topology) + Drift #45 (iGoat-Swift) — framing correct on paper, collapses on empirical contact. This re-investigation breaks the two-consecutive-ZERO-drift-trio streak (V10 + R2); the correct outcome for thin-context concurrency territory — pre-verification's job was to catch the framing error before remediation reasoning proceeded, and it did.
+
+**Cross-references:** Task 7.5d *Finding F2* original entry (below; preserved verbatim); `internal/tools/docker/service/mobsf/mobsf.go:145` (deleteScan call site; post-completion) + `:165` (EphemeralContainer=true v1 default); `scan.go:103` (deleteScan definition) + `:113` (report_json fetch proving completion); SPEC §13 ADR-008 + addendum (MobSF service-shape + ephemeral default Q5 β); shieldscan-engine commit `3ccf5b8` (R2 Stage 3 C3; latest engine state pre-this-annotation).
+
+---
+
 ## 2026-05-26 — MobSF R2 Pre-Signed URL Pattern LANDED (Stage 3 cross-repo trio complete)
 
 **Status:** R2 pre-signed URL pattern LANDED per shieldscan-docs commit `8f71b01` (SPEC §13 ADR-013 + ADR-014 R2 addendums) + shieldscan-api commit `824853c` (orchestrator dispatch + audit + r2.py helper) + this commit (engine consumer refactor + http_fetcher + DRIFT-LOG). Cross-repo Stage 3 trio of 3 complete. Forward-pin chain Task 7.4 Q6.4 → ADR-015 Q5 (a) → V10 Q5 (a) → R2 task SETTLES operationally with this commit.
