@@ -396,6 +396,41 @@ func DecodeJobCompletedEvent(data []byte) (*JobCompletedEvent, error) {
 	return &ev, nil
 }
 
+// EventAttackSurface carries rich per-subdomain attack-surface data
+// emitted after recon's httpx phase. Persistence-targeted; consumed
+// by api completions_consumer to UPSERT AttackSurface rows.
+//
+// Per Task 8.3α (shieldscan-docs commits 0030319 design + dba6a7c
+// plan + 721ba02 TOOL-ARCH §8.5 + SPEC §7.6 dual addendums): engine
+// recon pipeline publishes this event to the completions Pub/Sub
+// channel (shieldscan:completions) per ADR-014 mixed-primitive lock
+// AFTER httpx phase completes + BEFORE EventReconCompleted emission
+// per Q-ENGINE-EMIT-CALLSITE (a). Rich payload carries per-subdomain
+// rows aggregated from ReconResult.LiveHosts (URL + status +
+// status_code + tech_stack + last_probed_at). Drift #58 Layer A
+// (engine wire-shape gap) root-cause repair: prior to this addition
+// LiveHosts rich struct was returned to caller only; never published.
+type EventAttackSurface struct {
+	EventType      string         `json:"event_type"` // "attack_surface"
+	ScanID         string         `json:"scan_id"`
+	OrganizationID string         `json:"organization_id"`
+	RootDomain     string         `json:"root_domain"`
+	Subdomains     []SubdomainRow `json:"subdomains"`
+	Timestamp      string         `json:"timestamp"` // RFC3339
+}
+
+// SubdomainRow is the per-subdomain row inside EventAttackSurface.
+// Maps to the V-LC AttackSurface ORM column set at the api consumer
+// side (api consumer parses subdomain label from URL via
+// urlparse(...).hostname per SPEC §7.6).
+type SubdomainRow struct {
+	URL          string   `json:"url"`
+	Status       string   `json:"status"`                  // "live" / "dead" / "timeout"
+	StatusCode   int      `json:"status_code,omitempty"`   // omit for dead/timeout
+	TechStack    []string `json:"tech_stack,omitempty"`    // empty/null for unfingerprinted
+	LastProbedAt string   `json:"last_probed_at,omitempty"` // RFC3339; api fills with event timestamp if absent
+}
+
 // DecodeCancelEvent parses a JSON payload into CancelEvent with
 // DisallowUnknownFields enabled.
 func DecodeCancelEvent(data []byte) (*CancelEvent, error) {

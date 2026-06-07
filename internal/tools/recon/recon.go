@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/odyssey/shieldscan-engine/internal/events"
 	"github.com/odyssey/shieldscan-engine/internal/redis"
@@ -90,6 +91,18 @@ type LiveHost struct {
 // publishIfNotNil helper checks before publishing each event.
 // Production callers always supply a real *redis.ProgressPublisher.
 //
+// Per Task 8.3α (shieldscan-docs commits 0030319 + dba6a7c + 721ba02
+// TOOL-ARCH §8.5 + SPEC §7.6 dual addendums): RunRecon also emits
+// EventAttackSurface to the completions Pub/Sub channel after the
+// httpx phase succeeds + BEFORE EventReconCompleted (per
+// Q-ENGINE-EMIT-CALLSITE a). completionsPub MAY be nil for tests +
+// for the M8.1 forward-pinned pre-production call path; nil-safety
+// mirrors the progress publisher discipline. scanID and orgID drive
+// EventAttackSurface.ScanID/OrganizationID; empty values produce
+// emission-skip on the same nil-safety branch (api consumer requires
+// both for RLS GUC SET + scan FK). Drift #58 Layer A root-cause
+// repair callsite.
+//
 // Failure-tolerant by design (per plan §6.3 literal):
 //   - Subfinder failure → log WARN + return empty ReconResult, nil
 //   - httpx failure → log WARN + return ReconResult{Subdomains: subs}, nil
@@ -111,6 +124,9 @@ func RunRecon(
 	domain string,
 	limit int,
 	publisher *redis.ProgressPublisher,
+	completionsPub *redis.CompletionsPublisher,
+	scanID string,
+	orgID string,
 	log zerolog.Logger,
 ) (*ReconResult, error) {
 	if limit <= 0 {
@@ -164,12 +180,85 @@ func RunRecon(
 	publishIfNotNil(ctx, publisher, events.EventLivenessProbed, events.ProgressEvent{
 		"count": len(liveHosts),
 	})
+
+	// Task 8.3α emission: rich per-subdomain payload to the completions
+	// Pub/Sub channel BEFORE EventReconCompleted (Q-ENGINE-EMIT-CALLSITE a).
+	// Nil-safe per Y-RECON-PUBLISHER-WIRING (a) — skip emission when
+	// completionsPub/scanID/orgID absent (test path + M8.1 forward-pinned
+	// pre-production path). Drift #58 Layer A repair.
+	publishAttackSurfaceIfReady(ctx, completionsPub, scanID, orgID, domain, liveHosts, log)
+
 	publishIfNotNil(ctx, publisher, events.EventReconCompleted, events.ProgressEvent{
 		"subdomain_count": len(subs),
 		"live_count":      len(liveHosts),
 		"status":          "ok",
 	})
 	return &ReconResult{Subdomains: subs, LiveHosts: liveHosts}, nil
+}
+
+// publishAttackSurfaceIfReady builds an EventAttackSurface from the
+// httpx-probed LiveHosts and emits it on the completions Pub/Sub
+// channel. Nil-safe: skips when completionsPub is nil OR scanID/orgID
+// are empty (test path + M8.1 forward-pinned pre-production call
+// path). Errors are log-and-continue per ADR-021 fail-soft posture —
+// recon completion must not depend on persistence-side success;
+// duplicate-delivery is safe by construction at the api consumer
+// (uq_scan_subdomain + ON CONFLICT DO UPDATE per Q-MULTI-PROCESS-
+// POSTURE b). Drift #58 Layer A repair helper.
+func publishAttackSurfaceIfReady(
+	ctx context.Context,
+	completionsPub *redis.CompletionsPublisher,
+	scanID string,
+	orgID string,
+	domain string,
+	liveHosts []LiveHost,
+	log zerolog.Logger,
+) {
+	if completionsPub == nil || scanID == "" || orgID == "" {
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	rows := make([]events.SubdomainRow, 0, len(liveHosts))
+	for _, host := range liveHosts {
+		rows = append(rows, events.SubdomainRow{
+			URL:          host.URL,
+			Status:       statusFromStatusCode(host.StatusCode),
+			StatusCode:   host.StatusCode,
+			TechStack:    host.Tech,
+			LastProbedAt: now,
+		})
+	}
+	ev := events.EventAttackSurface{
+		EventType:      "attack_surface",
+		ScanID:         scanID,
+		OrganizationID: orgID,
+		RootDomain:     domain,
+		Subdomains:     rows,
+		Timestamp:      now,
+	}
+	if err := completionsPub.PublishAttackSurface(ctx, ev); err != nil {
+		log.Warn().Err(err).
+			Str("scan_id", scanID).
+			Str("domain", domain).
+			Int("subdomain_count", len(rows)).
+			Msg("attack-surface publish failed; continuing recon")
+	}
+}
+
+// statusFromStatusCode maps an HTTP status code to a SubdomainRow
+// Status string. Mirrors V-LC api SubdomainStatus enum values:
+//   - 2xx/3xx + 4xx (live: server-responded) → "live"
+//   - 0 (httpx zero-status sentinel; failed probe) → "dead"
+//
+// httpx-failed entries with failed:true are excluded from LiveHosts
+// upstream (parse layer), so the "timeout" branch is reserved for
+// future explicit deadline-exceeded signaling without entering this
+// helper today. Q-EVENT-PAYLOAD-FIELDS field semantic per SPEC §7.6.
+func statusFromStatusCode(code int) string {
+	if code <= 0 {
+		return "dead"
+	}
+	return "live"
 }
 
 // publishIfNotNil safely calls publisher.Publish when publisher is

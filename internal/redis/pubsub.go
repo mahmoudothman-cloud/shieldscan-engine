@@ -162,3 +162,23 @@ func (p *CompletionsPublisher) Publish(ctx context.Context, ev events.JobComplet
 	}
 	return nil
 }
+
+// PublishAttackSurface emits an EventAttackSurface on the completions
+// channel for the api completions_consumer's _handle_attack_surface
+// dispatch (UPSERT into the AttackSurface ORM rows). Per Task 8.3α
+// (shieldscan-docs commits 0030319 design + dba6a7c plan + 721ba02
+// TOOL-ARCH §8.5 + SPEC §7.6 dual addendums). Y-EVENT-PUBLISH-PATH
+// (b1) — second typed method on the existing publisher; same
+// shieldscan:completions channel; no Validate dependency (the wire
+// shape is constructed in code at the recon RunRecon-internal
+// callsite, not received from external input).
+func (p *CompletionsPublisher) PublishAttackSurface(ctx context.Context, ev events.EventAttackSurface) error {
+	data, err := json.Marshal(ev)
+	if err != nil {
+		return fmt.Errorf("marshal attack-surface event: %w", err)
+	}
+	if err := p.client.Publish(ctx, completionsChannel, string(data)).Err(); err != nil {
+		return fmt.Errorf("PUBLISH %s: %w", completionsChannel, err)
+	}
+	return nil
+}

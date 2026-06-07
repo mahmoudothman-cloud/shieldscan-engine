@@ -51,7 +51,7 @@ func TestRunRecon_HappyPath(t *testing.T) {
 	t.Setenv("SHIELDSCAN_SUBFINDER_BINARY", subMock)
 	t.Setenv("SHIELDSCAN_HTTPX_BINARY", httpxMock)
 
-	res, err := RunRecon(t.Context(), "example.com", 100, nil, noopLog())
+	res, err := RunRecon(t.Context(), "example.com", 100, nil, nil, "", "", noopLog())
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	assert.Len(t, res.Subdomains, 2)
@@ -66,7 +66,7 @@ func TestRunRecon_SubfinderFailureReturnsEmpty(t *testing.T) {
 	t.Setenv("SHIELDSCAN_SUBFINDER_BINARY", failMock)
 	t.Setenv("SHIELDSCAN_HTTPX_BINARY", "/bin/echo") // not invoked
 
-	res, err := RunRecon(t.Context(), "example.com", 100, nil, noopLog())
+	res, err := RunRecon(t.Context(), "example.com", 100, nil, nil, "", "", noopLog())
 	require.NoError(t, err, "subfinder failure MUST NOT propagate error to caller")
 	require.NotNil(t, res)
 	assert.Empty(t, res.Subdomains)
@@ -83,7 +83,7 @@ func TestRunRecon_HttpxFailureReturnsSubdomains(t *testing.T) {
 	t.Setenv("SHIELDSCAN_SUBFINDER_BINARY", subMock)
 	t.Setenv("SHIELDSCAN_HTTPX_BINARY", httpxFail)
 
-	res, err := RunRecon(t.Context(), "example.com", 100, nil, noopLog())
+	res, err := RunRecon(t.Context(), "example.com", 100, nil, nil, "", "", noopLog())
 	require.NoError(t, err, "httpx failure MUST NOT propagate error to caller")
 	require.NotNil(t, res)
 	assert.Len(t, res.Subdomains, 1, "subdomains preserved despite httpx failure")
@@ -110,7 +110,7 @@ func TestRunRecon_LimitApplied(t *testing.T) {
 	t.Setenv("SHIELDSCAN_SUBFINDER_BINARY", subMock)
 	t.Setenv("SHIELDSCAN_HTTPX_BINARY", httpxMock)
 
-	res, err := RunRecon(t.Context(), "example.com", 3, nil, noopLog())
+	res, err := RunRecon(t.Context(), "example.com", 3, nil, nil, "", "", noopLog())
 	require.NoError(t, err)
 	assert.Len(t, res.Subdomains, 3, "limit=3 applied; first 3 subdomains kept")
 }
@@ -129,7 +129,7 @@ func TestRunRecon_DefaultLimitWhenZero(t *testing.T) {
 	t.Setenv("SHIELDSCAN_SUBFINDER_BINARY", subMock)
 	t.Setenv("SHIELDSCAN_HTTPX_BINARY", httpxFail)
 
-	res, err := RunRecon(t.Context(), "example.com", 0, nil, noopLog())
+	res, err := RunRecon(t.Context(), "example.com", 0, nil, nil, "", "", noopLog())
 	require.NoError(t, err)
 	assert.Len(t, res.Subdomains, 5,
 		"limit=0 → defensive default 100 applied; 5 subdomains all pass through")
@@ -149,10 +149,72 @@ func TestRunRecon_RespectsCtxCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // pre-cancel
 
-	res, err := RunRecon(ctx, "example.com", 100, nil, noopLog())
+	res, err := RunRecon(ctx, "example.com", 100, nil, nil, "", "", noopLog())
 	// Pre-cancelled ctx → subfinder fails → recon returns empty
 	// ReconResult, nil (failure-tolerant).
 	require.NoError(t, err, "ctx cancel surfaces as subfinder failure → empty result")
 	require.NotNil(t, res)
 	assert.Empty(t, res.Subdomains)
+}
+
+// ─── Task 8.3α EventAttackSurface emission (3) ──────────────────────
+
+// TestStatusFromStatusCode covers the SubdomainStatus mapping per
+// SPEC §7.6 field semantics: positive HTTP status → "live"; zero/
+// negative sentinel → "dead". Reserved "timeout" reserved for
+// future explicit deadline-exceeded signaling.
+func TestStatusFromStatusCode(t *testing.T) {
+	tests := []struct {
+		code int
+		want string
+	}{
+		{200, "live"},
+		{301, "live"},
+		{403, "live"},
+		{500, "live"},
+		{0, "dead"},
+		{-1, "dead"},
+	}
+	for _, tt := range tests {
+		assert.Equalf(t, tt.want, statusFromStatusCode(tt.code),
+			"statusFromStatusCode(%d)", tt.code)
+	}
+}
+
+// TestPublishAttackSurfaceIfReady_NilSafetySkips verifies the
+// Y-RECON-PUBLISHER-WIRING (a) nil-safety branches: emission is
+// skipped when completionsPub is nil OR scanID is empty OR orgID
+// is empty (test path + M8.1 forward-pinned pre-production path).
+// Helper must return without panic.
+func TestPublishAttackSurfaceIfReady_NilSafetySkips(t *testing.T) {
+	liveHosts := []LiveHost{{URL: "https://a.example.com", StatusCode: 200, Tech: []string{"nginx"}}}
+
+	// All three nil-safety branches: nil publisher; empty scanID; empty orgID.
+	publishAttackSurfaceIfReady(t.Context(), nil, "scan-1", "org-1", "example.com", liveHosts, noopLog())
+	publishAttackSurfaceIfReady(t.Context(), nil, "", "org-1", "example.com", liveHosts, noopLog())
+	publishAttackSurfaceIfReady(t.Context(), nil, "scan-1", "", "example.com", liveHosts, noopLog())
+	// No assertion — absence-of-panic is the contract.
+}
+
+// TestRunRecon_AttackSurfaceEmissionNilSafe verifies that RunRecon
+// in the happy path with completionsPub=nil + empty scanID/orgID does
+// NOT panic and successfully returns. Pairs with the unit test on
+// publishAttackSurfaceIfReady to cover the Drift #58 Layer A repair
+// callsite's nil-safety end-to-end through RunRecon. Real-Redis-backed
+// emission coverage is forward-pinned to M8.1 production-wiring
+// integration tests (publisher injection beyond unit-scope here).
+func TestRunRecon_AttackSurfaceEmissionNilSafe(t *testing.T) {
+	subMock := shScript(t,
+		`echo '{"host":"a.example.com","input":"example.com","source":"crtsh"}'`)
+	httpxMock := shScript(t,
+		`echo '{"url":"https://a.example.com","status_code":200,"title":"A","tech":["Nginx"],"webserver":"nginx","content_type":"text/html","failed":false}'`)
+
+	t.Setenv("SHIELDSCAN_SUBFINDER_BINARY", subMock)
+	t.Setenv("SHIELDSCAN_HTTPX_BINARY", httpxMock)
+
+	// completionsPub=nil + scanID/orgID empty → emission skipped silently.
+	res, err := RunRecon(t.Context(), "example.com", 100, nil, nil, "", "", noopLog())
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Len(t, res.LiveHosts, 1)
 }
