@@ -253,10 +253,21 @@ type JobDispatch struct {
 }
 
 // JobTarget is the embedded target object inside JobDispatch.
+//
+// Per Source-Ingestion Fix task (shieldscan-docs commits 90fc933
+// design + 04f44a9 plan + 9d6ab25 TOOL-ARCH §3.2 addendum +
+// shieldscan-api 8dbcbab orchestrator threading): SourceRepoURL is
+// the optional HTTPS git URL the engine clones at job-pickup time
+// (lazy per-job at worker per Q-RECON-TIMING) for trivy-fs-style
+// SCA scans. Populated by the orchestrator when scan_type is in the
+// source-requiring set ({FULL_WEB_SOURCE, FULL_SPECTRUM}); omit
+// otherwise. Per Q-WIRE engine-clones lock the wire carries the URL
+// (not the staged path) — the engine owns the staging-dir lifecycle.
 type JobTarget struct {
 	URL            string `json:"url"`
 	TargetType     string `json:"target_type"`
 	DomainVerified bool   `json:"domain_verified"`
+	SourceRepoURL  string `json:"source_repo_url,omitempty"`
 }
 
 // JobAuth is the optional embedded auth object inside JobDispatch.

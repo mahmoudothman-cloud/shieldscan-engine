@@ -426,6 +426,15 @@ func jobDispatchToTarget(job *events.JobDispatch) tools.Target {
 		Domain:         job.Target.URL, // recon tools may extract domain from URL
 		TargetType:     job.Target.TargetType,
 		DomainVerified: job.Target.DomainVerified,
+		// Source-Ingestion Fix (TOOL-ARCH §3.2 addendum 9d6ab25):
+		// thread the optional HTTPS git URL the orchestrator emitted
+		// for source-requiring ScanTypes per Q-WIRE engine-clones
+		// lock. Empty for non-source ScanTypes.
+		SourceRepoURL: job.Target.SourceRepoURL,
+		// ScanID enables per-tool wrappers (e.g. trivy-fs source-
+		// clone tempdir) to derive collision-free scan-scoped paths
+		// without re-threading job context.
+		ScanID: job.ScanID,
 	}
 	if job.Auth != nil {
 		target.AuthConfig = &tools.AuthConfig{

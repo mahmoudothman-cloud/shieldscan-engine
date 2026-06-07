@@ -2,10 +2,12 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	dockerclient "github.com/docker/docker/client"
 	"github.com/rs/zerolog"
 
+	"github.com/odyssey/shieldscan-engine/internal/source"
 	"github.com/odyssey/shieldscan-engine/internal/tools"
 	"github.com/odyssey/shieldscan-engine/internal/tools/docker"
 	"github.com/odyssey/shieldscan-engine/internal/tools/docker/nmap"
@@ -63,10 +65,30 @@ func buildDockerRegistry(log zerolog.Logger) (map[string]tools.ToolRunner, []*do
 		return nil, nil, fmt.Errorf("worker: sqlmap pool init: %w", err)
 	}
 
+	// Source-Ingestion Fix (TOOL-ARCH §3.2 addendum 9d6ab25):
+	// trivy-fs gets a source-aware wrapper that clones HTTPS git
+	// URLs at job-pickup time. Staging base path is resolved from
+	// $TRIVY_SCAN_BASE_PATH so the existing trivy-fs warm-pool bind
+	// mount surfaces the staging tree as /scan/<scan-id> ReadOnly.
+	// Falls back to trivy.DefaultScanBasePath when the env var is
+	// unset (mirrors trivy.NewPool's resolution).
+	trivyStageBase := os.Getenv(trivy.ScanBasePathEnv)
+	if trivyStageBase == "" {
+		trivyStageBase = trivy.DefaultScanBasePath
+	}
+	trivyStaging, err := source.NewStagingManager(trivyStageBase)
+	if err != nil {
+		return nil, nil, fmt.Errorf("worker: trivy staging init: %w", err)
+	}
+	trivyFsRunner, err := trivy.NewFsSourceRunner(trivyPool, trivyStaging, log)
+	if err != nil {
+		return nil, nil, fmt.Errorf("worker: trivy-fs source runner init: %w", err)
+	}
+
 	runners := map[string]tools.ToolRunner{
 		"nmap":            nmap.NewRunner(nmapPool, log),
 		"trivy-container": trivy.NewContainerRunner(trivyPool, log),
-		"trivy-fs":        trivy.NewFsRunner(trivyPool, log),
+		"trivy-fs":        trivyFsRunner,
 		"sqlmap":          sqlmap.NewRunner(sqlmapPool, log),
 	}
 	pools := []*docker.WarmPool{nmapPool, trivyPool, sqlmapPool}

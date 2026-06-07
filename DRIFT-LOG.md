@@ -8,6 +8,68 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-06-07 — Source-Ingestion Fix LANDED (Stage 3 cross-repo trio complete; Drift #54 root-cause repaired end-to-end)
+
+**Status:** Source-Ingestion Fix operationally settled per shieldscan-docs commit `9d6ab25` (TOOL-ARCHITECTURE.md §3.2 addendum: Source-Acquisition Implementation Lock) + shieldscan-api commit `8dbcbab` (HTTPS validator + orchestrator threading + ScanCreateRequest validator + 7 tests) + this commit (engine consumer: wire field + `internal/source/` NEW package + processor threading + `FsSourceRunner` shim + tests). Cross-repo Stage 3 trio of 3 complete. Drift #54 (FULL_WEB_SOURCE / FULL_SPECTRUM `trivy-fs` aspirational-broken end-to-end; stored-design-intent-with-unimplemented-mechanism catch-class) repaired end-to-end.
+
+**Authority:** Source-Ingestion Fix design doc shieldscan-docs commit `90fc933` (Y1+Y2+Y3+12 Q-chain locks + V-IA-V-II pre-verification + Phase 0 v2 P0v2.A-D + Drift #54 catch-class); implementation plan `04f44a9` (Stage 3 sub-step canonical); Stage 3 Commit 1 `9d6ab25`; Stage 3 Commit 2 `8dbcbab`; TOOL-ARCHITECTURE.md §3.2 design-intent canonical authority (`SourcePath string // for SAST: local git clone path`); Task 7.1 `internal/tools/docker/trivy/` (`trivy-fs` runner canonical; extended by this commit's shim wrapper).
+
+### Architectural Pattern: Host-Clone-Then-ReadOnly-Mount
+
+Source-Ingestion Fix introduces a net-new architectural pattern at the engine layer (no direct prior analog; closest precedents are wire-field additions per R2 `SignedFetchURL` and Target plumbing per V10). Three layers shipped:
+
+| Layer | docs | api | engine |
+|---|---|---|---|
+| Canonical authority | TOOL-ARCH §3.2 addendum | — | — |
+| Validation | — | `ProjectCreateRequest._validate_source_repo_url` + route-handler `_SOURCE_REPO_URL_REQUIRED` gate | `source.CloneRepo` HTTPS-scheme guard (defense-in-depth) |
+| Wire schema | — | `_build_job_payload` → `target.source_repo_url` (conditional on `_SOURCE_REQUIRING_SCAN_TYPES`) | `JobTarget.SourceRepoURL` field; omitempty preserves backward-compat |
+| Source acquisition | — | — | `internal/source/` NEW package (`CloneRepo` + `StagingManager`); host-side `os/exec git clone --depth=1`; per-scan tempdir under `$TRIVY_SCAN_BASE_PATH` |
+| Consumer integration | — | — | `trivy.FsSourceRunner` shim wraps inner `DockerRunner`; pre-Run clones, populates `target.SourcePath = /scan/<scan-id>`, defers `os.RemoveAll` cleanup; delegates to inner runner |
+
+### Stage 3 Drift Count: 3 (Drifts #55-#57)
+
+Per design doc §5 D-deviation forecast: expected MODERATE (~2-4 drifts) per dual-novel-pattern territory. **Actual: 3 drifts surfaced** — close to upper-band.
+
+- **#55** (api C2): test file precision — plan said `tests/schemas/test_projects.py` but validator tests live at `tests/routes/test_projects.py` (`tests/schemas/` only has `test_auth_schemas` + `test_raw_findings`). Same catch-class as #53. Resolved via single grep + redirect.
+- **#56** (engine C3): file naming precision — plan repeatedly references `internal/tools/docker/trivy/trivy_fs.go` but no such file exists; runner code lives in `trivy.go` (`NewFsRunner`) + `scan.go` (`buildArgsFs`). Same catch-class as #53/#55. Resolved by creating new file `source_runner.go` for the shim.
+- **#57** (engine C3; ARCHITECTURAL): plan §3.5 pseudocode assumed cloneRepo could be injected "in NewBuildScan or equivalent setup site" inside trivy_fs.go. Empirically, `DockerRunner` has NO pre-Run hook — `BuildArgs` is a pure `target → argv` function. Resolution: introduced `FsSourceRunner` shim type that wraps the inner `DockerRunner`, implements `tools.ToolRunner` independently, does source-acquisition in its own `Run()` before delegating. Catch-class: framework-extension-point-implied-but-absent (new entry; distinct from framing-vs-empirical #44/#45/#50/#51-53 and stored-design-intent-unimplemented #54). Trade-off acknowledged: shim duplicates `Name()`/`Category()` alongside inner DockerRunner; acceptable for single-consumer case; promotion to framework-level pre-Run hook forward-pinned per rule-of-three.
+
+Cumulative session-tail framing-drift count: **57** (54 prior at Y0 + 1 at C2 + 2 at C3).
+
+### Y-Decisions Resolved at Execution
+
+- **Y-WIRE-FIELD-NAME (a)** `JobTarget.SourceRepoURL` — DB-column-symmetry + explicit URL semantics
+- **Y-PACKAGE-LOCATION (a)** `internal/source/` standalone — separation-of-concerns + future-multi-tool-consumer (when M6 SAST tools land)
+- **Y-CLONE-FAILURE-EVENT-SHAPE (a)** structured wrapped error surfacing through existing processor failure-emission path — Q-EVENTS standard-lifecycle preserved
+
+### Forward-Pin Chain Operational Closure
+
+ADR-015 Q6 (a) credential revocation lifecycle settled at prior session-arc; **this commit closes Drift #54** (FULL_WEB_SOURCE / FULL_SPECTRUM `trivy-fs` aspirational-broken end-to-end) by wiring the orchestrator → wire → engine → host clone → ReadOnly mount → trivy-fs scan path end-to-end. `Project.source_repo_url` column (orphaned since M1) is now actively read by the orchestrator and consumed by the engine.
+
+**Post-Stage-3 forward-pins preserved:**
+
+- ***"Begin SCA ScanType.SCA enablement task"*** — Task 2 of 2 per SCA decomposition; mechanical compressed-lifecycle on now-working source-ingestion path
+- ***"Begin Q-AUTH SSH-key / private-token credential support task"*** — Q-AUTH forward-pin
+- ***"Begin go-git library adoption task"*** — Q-CLONE-LIB forward-pin (richer-API trigger)
+- ***"Begin SOURCE_ACQUISITION_* event-types task"*** — Q-EVENTS forward-pin (richer observability)
+- ***"Begin recon-time source-clone task (Task 8.1 integration)"*** — Q-RECON-TIMING forward-pin
+- ***"Begin R2-upload source-tarball variant task"*** — Y1 (β) forward-pin
+- ***"Begin LRU staging-cache task"*** — Q-CLEANUP forward-pin
+- ***"Begin Project.source_repo_url backfill task"*** — data migration; out-of-v1
+- ***"Begin DockerRunner framework-level pre-Run hook task"*** — Drift #57 rule-of-three trigger if a 2nd source-aware consumer surfaces
+
+### Cross-References
+
+- shieldscan-docs commits `90fc933` (Stage 1 design doc) + `04f44a9` (Stage 2 plan) + `9d6ab25` (Stage 3 C1; TOOL-ARCH §3.2 addendum)
+- shieldscan-api commit `8dbcbab` (Stage 3 C2; HTTPS validator + orchestrator threading + ScanCreateRequest validator + 7 tests; Drift #55)
+- shieldscan-engine pre-fix state at `99e2c31` (F2 close); Stage 3 C3 = this commit
+- Engine source authorities: `internal/events/events.go` (`JobTarget.SourceRepoURL`); `internal/tools/runner.go` (`Target.SourceRepoURL` + `Target.ScanID`); `internal/worker/processor.go` (`jobDispatchToTarget`); `internal/source/{clone,staging}.go` (NEW package); `internal/tools/docker/trivy/source_runner.go` (NEW shim); `cmd/worker/docker_wiring.go` (wiring)
+- TOOL-ARCHITECTURE.md §3.2 + Source-Acquisition Implementation Lock addendum (canonical authority)
+- SPEC §13 ADR-008 (Service-shape; container-mount semantics analog); ADR-013 (sole-writer; orchestrator pattern); ADR-015 (credential-delegation precedent)
+- Phase 0 v2 testbed `/tmp/sif-p0v2-1780787784/NodeGoat/` + `trivy-fs-p0v2.json` (75-finding fixture; reused as forward-pin reference)
+
+---
+
 ## 2026-05-28 — F2 Re-Investigation: Confirmed Non-Triggerable From Engine (Option α close)
 
 **Status:** Investigated + characterized + correctly-deferred. No engine code action warranted at current architectural state.

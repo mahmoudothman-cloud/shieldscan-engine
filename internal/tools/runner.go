@@ -136,13 +136,38 @@ type Target struct {
 	SignedFetchURL string
 
 	// SourcePath is the local filesystem path to a source-code clone
-	// (M6.2 Semgrep, M6.5 Gitleaks, M6.7 Checkov). Populated by the
-	// processor; empty for non-source tools.
+	// (M6.2 Semgrep, M6.5 Gitleaks, M6.7 Checkov; M7.1 Trivy fs-mode).
+	// Container-relative path (/scan/<scan-id>) when the staging
+	// manager has cloned via SourceRepoURL; empty for non-source
+	// tools or when no clone happened.
 	SourcePath string
+
+	// SourceRepoURL is the optional HTTPS git URL the engine clones
+	// at job-pickup time per Source-Ingestion Fix task (shieldscan-
+	// docs commits 90fc933 design + 04f44a9 plan + 9d6ab25 TOOL-ARCH
+	// §3.2 addendum + shieldscan-api 8dbcbab orchestrator threading).
+	// Populated by the processor (jobDispatchToTarget) when the
+	// orchestrator emitted source_repo_url on the wire (source-
+	// requiring ScanTypes: FULL_WEB_SOURCE, FULL_SPECTRUM). The
+	// trivy-fs runner wrapper (internal/tools/docker/trivy.NewFsRunner)
+	// uses this to drive host-side git clone --depth=1 then
+	// populates SourcePath before delegating to the inner
+	// DockerRunner. Per Q-WIRE engine-clones + Q-RECON-TIMING lazy-
+	// per-job-at-worker locks.
+	SourceRepoURL string
 
 	// ContainerImage is the Docker image tag for container scans (M7.3
 	// Trivy). Format: "repo:tag" or "repo@sha256:digest".
 	ContainerImage string
+
+	// ScanID is the scan-level identifier the orchestrator assigned
+	// (JobDispatch.ScanID on the wire). Populated by the processor
+	// (jobDispatchToTarget) so per-tool wrappers that need scan-
+	// scoped resources (e.g. the trivy-fs source-clone tempdir per
+	// Source-Ingestion Fix task) can derive a stable, collision-free
+	// path without re-threading job context. Tools that don't need
+	// it leave it untouched.
+	ScanID string
 
 	// AuthConfig carries decrypted credentials for authenticated scans.
 	// nil when no authentication is configured. ADR-015 (decrypted
