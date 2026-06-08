@@ -8,6 +8,52 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-06-08 — Drift #60 Name-Mismatch Reconciliation LANDED (M8.1α; partial — 1/6 engines resolved; ADR-022 architecture lock preserved)
+
+**Status:** M8.1α compressed-lifecycle CLOSED. Drift #60 name-mismatch sub-category resolved end-to-end per shieldscan-docs `fb8cff9` (SPEC §13 ADR-022 addendum canonical authority) + shieldscan-api `2b36d62` (SCAN_TYPE_TOOLS rename `dependency_check` → `depcheck` at FULL_WEB_SOURCE + FULL_SPECTRUM) + this commit (engine DRIFT-LOG annotation; ZERO code changes per ADR-022 canonical preservation). 5/6 unregistered engines (engine-variant + recon-orphan sub-categories) forward-pinned to M8.1β.
+
+**Drift #60 catch-class:** stored-design-intent-with-unimplemented-mechanism (3rd instance after Drift #54 source-ingestion + Drift #58 AttackSurface consumer). Surfaced at M81_PV pre-verification (prior session; Outcome 3 architectural-decision territory survey for M8.1 scan-executor); expanded to 6-engine surface at M81A_PV pre-verification (prior session; V-SA-V-SH grounding).
+
+### 6-engine surface across 3 sub-categories
+
+| # | Sub-category | Engines | Disposition |
+|---|---|---|---|
+| 1 | Name-mismatch | `dependency_check` (api) ↔ `depcheck` (engine) | **RESOLVED at M8.1α** |
+| 2 | Engine-variant naming | `nuclei_fast`, `nuclei_api`, `zap_api` | M8.1β (architecturally orthogonal to ADR-022; bundled with scan-executor decision) |
+| 3 | Recon-orphan | `subfinder`, `httpx` | M8.1β (ADR-022 architecture lock preserved; invoked from outside per-ScanJob dispatch flow) |
+
+### M8.1α resolution (3-commit cross-repo trio)
+
+- **docs Commit 1 `fb8cff9`:** SPEC §13 ADR-022 addendum — Drift #60 catalog + sub-categories + name-mismatch reconciliation lock + forward-pin chain (+26 LoC)
+- **api Commit 2 `2b36d62`:** `SCAN_TYPE_TOOLS` rename `dependency_check` → `depcheck` at FULL_WEB_SOURCE + FULL_SPECTRUM; behavior-preservation invariant honored (test assertions auto-derive from list; no verbatim updates needed per V-TC pre-verification); 571 full-suite tests preserved (+2/-2 LoC)
+- **engine Commit 3 (this):** DRIFT-LOG inline LANDED entry; ZERO code changes (recon-as-pre-scan-helper preserved; `depcheck` canonical engine name preserved)
+
+### Y/Q-chain locks per M81A_PV pre-verification
+
+- **Y-CANONICAL-NAME-DIRECTION (α):** api adapts to engine canonical name (engine registry is authoritative; binary `dependency-check.sh` resolves to runner key `depcheck` per `cmd/worker/registry_wiring.go` L107-128 spec table)
+- **Q-SCAN-TYPE-TOOLS-UPDATE-SCOPE (a):** FULL_WEB_SOURCE + FULL_SPECTRUM only (2 sites)
+- **Q-TEST-UPDATE-STRATEGY (a):** no-op (V-TC pre-verification confirmed test assertions auto-derive from `SCAN_TYPE_TOOLS`; no verbatim `dependency_check` references at test sites)
+- **Q-ADR-022-ADDENDUM-SHAPE (c):** both canonical (SPEC §13) + DRIFT-LOG annotation
+- **Q-COMMITS (c):** 3-commit cross-repo trio (docs → api → engine)
+
+### Compressed-lifecycle Approach B disposition validated empirically
+
+Bounded refactor + 3-commit cross-repo trio + commit bodies serve as canonical authority artifacts + ZERO design doc + plan ceremony. Aggregate LoC scope **+54 lines** (docs +26 + api +2 + engine ~+26); matches ~60-120 forecast envelope at lower bound. Mirrors cancel-helper extraction (`40ce2f1`) precedent shape. Arc scope-disposition discipline distinguishing ceremonial-overhead from scope-honest-discipline validated.
+
+### Forward-pin chain (5/6 engines remaining)
+
+- **Engine-variant resolution:** `nuclei_fast` / `nuclei_api` / `zap_api` — architectural decision tied to M8.1β scan-executor design (should api dispatch engine=nuclei + config.fast=true vs engine=nuclei_fast as separate engine?)
+- **Recon-orphan resolution:** `subfinder` / `httpx` — target-expansion mechanism invokes `RunRecon` from outside per-ScanJob dispatch flow per ADR-022; tied to M8.1β scan-executor design
+- **Discipline-level forward-pin (rule-of-three trigger fired):** "audit-driven model+spec orphan check" becomes standard pre-verification step for future tasks. Drift #60 establishes pattern durability (3rd instance of stored-design-intent-with-unimplemented-mechanism catch-class); meta-discipline pattern integration into pre-verification template warranted.
+
+**Cumulative session-tail framing-drift count: 60** (Drift #60 formally catalogued at this lifecycle close; ZERO new drifts at M8.1α execution; clean Approach B compressed close).
+
+**Cross-references:** shieldscan-docs commits `fb8cff9` (M8.1α C1 ADR-022 addendum) + `0e5249e` (Task 8.3α P5.A) + `dacf5bb` (Task 8.2 retirement) + `721ba02` (Task 8.3α Stage 3 C1; dual addendum precedent); shieldscan-api commits `2b36d62` (M8.1α C2 SCAN_TYPE_TOOLS rename) + `05023f4` (Task 8.3α Stage 3 C3; Drift #58 reference) + `40ce2f1` (cancel-helper extraction; Approach B precedent); shieldscan-engine commit `fc75a98` (latest engine state pre-this-commit; depcheck canonical registration preserved at `cmd/worker/registry_wiring.go`); ADR-022 SPEC §13 + addendum (canonical authority); source-ingestion fix P5.A close `ac82d48` (Drift #54 reference); M81_PV + M81A_PV pre-verification surface reports (prior session).
+
+**M8.1α lifecycle CLOSED. M8.1β scan-executor architectural decision + Task 8.3β endpoint + audit-driven model+spec orphan check discipline forward-pinned next.**
+
+---
+
 ## 2026-06-07 — Source-Ingestion Fix LANDED (Stage 3 cross-repo trio complete; Drift #54 root-cause repaired end-to-end)
 
 **Status:** Source-Ingestion Fix operationally settled per shieldscan-docs commit `9d6ab25` (TOOL-ARCHITECTURE.md §3.2 addendum: Source-Acquisition Implementation Lock) + shieldscan-api commit `8dbcbab` (HTTPS validator + orchestrator threading + ScanCreateRequest validator + 7 tests) + this commit (engine consumer: wire field + `internal/source/` NEW package + processor threading + `FsSourceRunner` shim + tests). Cross-repo Stage 3 trio of 3 complete. Drift #54 (FULL_WEB_SOURCE / FULL_SPECTRUM `trivy-fs` aspirational-broken end-to-end; stored-design-intent-with-unimplemented-mechanism catch-class) repaired end-to-end.
