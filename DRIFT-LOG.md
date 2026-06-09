@@ -8,6 +8,49 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-06-09 — Drift #60 Engine-Variant Sub-Category RESOLVED (M8.1β.1; 4/6 engines resolved; Approach B compressed-lifecycle 4th instance)
+
+**Status:** M8.1β.1 compressed-lifecycle CLOSED. Drift #60 engine-variant sub-category (`nuclei_fast` / `nuclei_api` / `zap_api`) RESOLVED per Y-ENGINE-VARIANT-RESOLUTION (a) config-flag (M81B_PV V-UE empirically grounded; prior session).
+
+**Resolution mechanism (per V-VC + V-VD pre-implementation findings):**
+
+| Variant engine | Resolved to | Variant axis |
+|---|---|---|
+| `nuclei_fast` (QUICK) | `engine=nuclei` | `ScanConfig.Depth="quick"` via api `_DEPTH_FOR_SCAN_TYPE[ScanType.QUICK]` map + `_build_config_block` helper |
+| `nuclei_api` (API) | `engine=nuclei` | `target.target_type="api"` already auto-set by api `_target_type_for(ScanType.API)` |
+| `zap_api` (API) | `engine=zap` | same mechanism — `target.target_type="api"` automatic |
+
+**Cross-repo trio (M8.1β.1 lifecycle):**
+
+- **docs Commit 1 `bb3e75f`:** SPEC §13 ADR-022 addendum continuation — engine-variant resolution lock + wire-shape preservation + Drift #60 progress 4/6 (+25 LoC)
+- **api Commit 2 `d773776`:** `SCAN_TYPE_TOOLS` rename (3 entries) + `_DEPTH_FOR_SCAN_TYPE` map + `_build_config_block` helper + `quick_scan` fixture + 2 new variant-injection tests + `test_scans.py` comment update (+182/-5 LoC; 573 full suite tests including 2 new = 571 baseline + 2)
+- **engine Commit 3 (this):** DRIFT-LOG progress-update entry; **ZERO engine code changes** per canonical preservation lock (nuclei NativeRunner + zap DockerServiceRunner consumer assignments preserved per ADR-026)
+
+**Drift #60 progress:** **4/6 engines resolved** (1 name-mismatch at M8.1α + 3 engine-variants at M8.1β.1). Remaining 2/6 (`subfinder` + `httpx` recon-orphans) forward-pinned to **M8.1β.2**.
+
+**Wire-shape preservation:** ZERO wire schema changes per V-VF. `target.target_type` discriminator already wired (Source-Ingestion Fix orchestrator state at `8dbcbab`); `config` block already produced. M8.1β.1 only extends the orchestrator's defaults-injection logic.
+
+**Forward-pin chain (M8.1β.2):** scan-executor ADR-style decision document (Outcome 3 architectural-decision territory per M81_PV); Y-EXPAND-LOCATION (c) hybrid follow-up dispatch default per M81B_PV V-UF; remaining 6 Y-decisions (Y-EXPAND-LOCATION + Y-DISPATCH-MODEL + Y-CONCURRENCY-MODEL + Y-MIGRATION-NEEDED + Y-AUDIT-TRAIL-CHANGES + Y-RECON-ENGINE-NAME) pending; multi-session lifecycle ~10-15h+; Task 8.3β attack-surface endpoint forward-pinned post-M8.1β.2.
+
+**Compressed-lifecycle Approach B disposition validated 4th instance** — pattern matured for bounded-mechanical-gap territory:
+
+| # | Lifecycle | Aggregate LoC | Drift count |
+|---|---|---|---|
+| 1 | cancel-helper extraction (`40ce2f1`) | +126/-65 | 0 |
+| 2 | Task 8.2 retirement (`dacf5bb`) | +19/-7 | 0 |
+| 3 | M8.1α (Drift #60 name-mismatch; `fb8cff9` + `2b36d62` + `64b8421`) | +74 | 0 |
+| 4 | M8.1β.1 (Drift #60 engine-variant; `bb3e75f` + `d773776` + this) | ~+250 | 0 |
+
+**Behavior change disposition:** API ScanType behavior-preservation invariant honored (4 jobs per scan; len-assertion unchanged). QUICK ScanType behavior changes in the desired direction — closes the latent dispatch-fail catch-class for `nuclei_fast` (engine had no registered runner; previously emitFailure'd on dispatch).
+
+**Cumulative session-tail framing-drift count: 60** (no new drifts at M8.1β.1 lifecycle close; clean Approach B compressed disposition).
+
+**Cross-references:** shieldscan-docs commits `bb3e75f` (M8.1β.1 ADR-022 continuation) + `fb8cff9` (M8.1α ADR-022 addendum) + `0e5249e` (Task 8.3α P5.A) + `dacf5bb` (Task 8.2 retirement); shieldscan-api commits `d773776` (M8.1β.1 SCAN_TYPE_TOOLS rename + variant-config threading) + `2b36d62` (M8.1α SCAN_TYPE_TOOLS rename) + `8dbcbab` (Source-Ingestion Fix orchestrator state); shieldscan-engine commit `64b8421` (M8.1α DRIFT-LOG entry; latest engine state pre-this-commit); ADR-022 SPEC §13 + M8.1α addendum + M8.1β.1 continuation (canonical authority); ADR-026 NativeRunner/DockerRunner consumer assignments preserved; cancel-helper extraction commit `40ce2f1` (Approach B 1st instance precedent).
+
+**M8.1β.1 lifecycle CLOSED. M8.1β.2 scan-executor ADR-style decision document + Task 8.3β endpoint + discipline-level "audit-driven model+spec orphan check" forward-pin next per milestone-completion-constraint.**
+
+---
+
 ## 2026-06-08 — Drift #60 Name-Mismatch Reconciliation LANDED (M8.1α; partial — 1/6 engines resolved; ADR-022 architecture lock preserved)
 
 **Status:** M8.1α compressed-lifecycle CLOSED. Drift #60 name-mismatch sub-category resolved end-to-end per shieldscan-docs `fb8cff9` (SPEC §13 ADR-022 addendum canonical authority) + shieldscan-api `2b36d62` (SCAN_TYPE_TOOLS rename `dependency_check` → `depcheck` at FULL_WEB_SOURCE + FULL_SPECTRUM) + this commit (engine DRIFT-LOG annotation; ZERO code changes per ADR-022 canonical preservation). 5/6 unregistered engines (engine-variant + recon-orphan sub-categories) forward-pinned to M8.1β.
