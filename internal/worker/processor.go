@@ -12,6 +12,7 @@ import (
 	"github.com/odyssey/shieldscan-engine/internal/events"
 	rdsh "github.com/odyssey/shieldscan-engine/internal/redis"
 	"github.com/odyssey/shieldscan-engine/internal/tools"
+	"github.com/odyssey/shieldscan-engine/internal/tools/recon"
 )
 
 // progressPublisher abstracts the publisher's Publish method so the
@@ -51,6 +52,26 @@ type ProcessorDeps struct {
 	CancelSubscriberFn   func(ctx context.Context, scanID string) (cancelSubscriber, error)
 	CompletionsPublisher completionsPublisher
 	Logger               zerolog.Logger
+
+	// Concrete recon publishers per ADR-028 Phase-1 + Drift #62
+	// Sub-Decision 1 (B). The engine="recon" dispatch case invokes
+	// recon.RunRecon directly (NOT via registry per ADR-022; recon
+	// stays pre-scan-helper). RunRecon's post-fc75a98 signature takes
+	// CONCRETE *redis.ProgressPublisher + *redis.CompletionsPublisher,
+	// whereas the processor's tool-dispatch path uses interface-typed
+	// publishers for per-dispatch test isolation. The recon path needs
+	// concretes, so these fields carry them alongside (not replacing)
+	// the interface-typed fields.
+	//
+	// ReconProgressPubFn is a scan-bound factory (ProgressPublisher
+	// binds scan_id at construction — Drift #62 micro-refinement: the
+	// plan's `reconProgressPub` field is a factory in practice because
+	// the progress stream is per-scan). ReconCompletionsPub is a
+	// singleton (the completions channel is global). Both nil disables
+	// recon dispatch (an engine="recon" job arriving without wiring
+	// fails loud per ADR-021).
+	ReconProgressPubFn  func(scanID string) *rdsh.ProgressPublisher
+	ReconCompletionsPub *rdsh.CompletionsPublisher
 }
 
 // Processor handles a single job from JobDispatch through to
@@ -58,12 +79,14 @@ type ProcessorDeps struct {
 // safe to share across concurrent goroutines (each Process call
 // uses its own jobCtx + per-call publishers/subscribers).
 type Processor struct {
-	registry       *Registry
-	idem           idempotencyClaim
-	progressPubFn  func(string) progressPublisher
-	cancelSubFn    func(context.Context, string) (cancelSubscriber, error)
-	completionsPub completionsPublisher
-	log            zerolog.Logger
+	registry            *Registry
+	idem                idempotencyClaim
+	progressPubFn       func(string) progressPublisher
+	cancelSubFn         func(context.Context, string) (cancelSubscriber, error)
+	completionsPub      completionsPublisher
+	log                 zerolog.Logger
+	reconProgressPubFn  func(string) *rdsh.ProgressPublisher
+	reconCompletionsPub *rdsh.CompletionsPublisher
 }
 
 // NewProcessorFromRedis is a convenience constructor that wires a
@@ -89,6 +112,9 @@ func NewProcessorFromRedis(registry *Registry, client *goredis.Client, log zerol
 		},
 		CompletionsPublisher: rdsh.NewCompletionsPublisher(client),
 		Logger:               log,
+		// Concrete recon publishers per ADR-028 Phase-1 + Drift #62 (B).
+		ReconProgressPubFn:  func(scanID string) *rdsh.ProgressPublisher { return rdsh.NewProgressPublisher(client, scanID) },
+		ReconCompletionsPub: rdsh.NewCompletionsPublisher(client),
 	})
 }
 
@@ -108,12 +134,14 @@ func NewProcessor(deps ProcessorDeps) *Processor {
 		panic("worker.NewProcessor: CompletionsPublisher is required")
 	}
 	return &Processor{
-		registry:       deps.Registry,
-		idem:           deps.IdempotencyClaim,
-		progressPubFn:  deps.ProgressPublisherFn,
-		cancelSubFn:    deps.CancelSubscriberFn,
-		completionsPub: deps.CompletionsPublisher,
-		log:            deps.Logger,
+		registry:            deps.Registry,
+		idem:                deps.IdempotencyClaim,
+		progressPubFn:       deps.ProgressPublisherFn,
+		cancelSubFn:         deps.CancelSubscriberFn,
+		completionsPub:      deps.CompletionsPublisher,
+		log:                 deps.Logger,
+		reconProgressPubFn:  deps.ReconProgressPubFn,
+		reconCompletionsPub: deps.ReconCompletionsPub,
 	}
 }
 
@@ -199,7 +227,18 @@ func (p *Processor) Process(ctx context.Context, job *events.JobDispatch) error 
 		"target": job.Target.URL,
 	})
 
-	// Step 5: Runner lookup.
+	// Step 5: Recon dispatch case (ADR-028 Phase-1 + ADR-022).
+	// engine="recon" is NOT a registered ToolRunner — recon is a
+	// pre-scan helper per ADR-022. Invoke recon.RunRecon directly with
+	// concrete publishers per Drift #62 Sub-Decision 1 (B). RunRecon
+	// emits EventAttackSurface to the completions channel (Task 8.3α
+	// infrastructure at fc75a98); the api completions_consumer UPSERTs
+	// AttackSurface + triggers Phase-2 tool dispatch (ADR-028 Phase-2).
+	if job.Engine == "recon" {
+		return p.dispatchRecon(ctx, jobCtx, progressPub, job, start)
+	}
+
+	// Step 5b: Runner lookup (tool engines).
 	runner, err := p.registry.Get(job.Engine)
 	if err != nil {
 		return p.emitFailure(ctx, progressPub, job, start, err)
@@ -269,6 +308,97 @@ func (p *Processor) Process(ctx context.Context, job *events.JobDispatch) error 
 		"engine":        job.Engine,
 		"finding_count": len(findings),
 		"duration_ms":   base.DurationMs,
+	})
+
+	return nil
+}
+
+// dispatchRecon handles the engine="recon" Phase-1 dispatch case per
+// ADR-028. Invokes recon.RunRecon directly (NOT via registry per
+// ADR-022; recon stays a pre-scan-helper, never ToolRunner-registered).
+//
+// RunRecon emits its own progress events (recon_started, subdomains_
+// discovered, liveness_probed, recon_completed) via the concrete
+// reconProgressPub AND emits EventAttackSurface to the completions
+// channel via the concrete reconCompletionsPub (Task 8.3α
+// infrastructure at fc75a98). This method then publishes the terminal
+// job_completed completion event for the recon ScanJob so the api
+// sole-writer (ADR-013) marks the recon job terminal; the api
+// completions_consumer's AttackSurface UPSERT + Phase-2 tool dispatch
+// (ADR-028 Phase-2) is driven by the EventAttackSurface, not by this
+// job_completed.
+//
+// Recon emits target-discovery data, not findings (ADR-022), so the
+// terminal completion carries FindingCount=0.
+//
+// Drift #62 Sub-Decision 1 (B): concrete publishers carried on the
+// Processor; the interface-typed progressPub is still used for this
+// method's job_started/job_failed/job_completed progress events (test
+// isolation preserved for those), while RunRecon receives concretes.
+func (p *Processor) dispatchRecon(
+	ctx, jobCtx context.Context,
+	progressPub progressPublisher,
+	job *events.JobDispatch,
+	start time.Time,
+) error {
+	if p.reconProgressPubFn == nil || p.reconCompletionsPub == nil {
+		// Fail loud per ADR-021: an engine="recon" job arrived but the
+		// processor has no recon wiring. Misconfiguration, not a
+		// runtime-tolerable condition.
+		return p.emitFailure(ctx, progressPub, job, start,
+			fmt.Errorf("recon dispatch requires recon publishers; none wired"))
+	}
+
+	reconProgressPub := p.reconProgressPubFn(job.ScanID)
+
+	// domain is the wire target_url. The orchestrator (ADR-028 Phase-1;
+	// api Stage 3 Commit 3) sets the recon ScanJob's target_url to the
+	// project root domain. limit=0 → RunRecon applies its tier default
+	// (defaultLimit) internally.
+	result, runErr := recon.RunRecon(
+		jobCtx,
+		job.Target.URL,
+		0,
+		reconProgressPub,
+		p.reconCompletionsPub,
+		job.ScanID,
+		job.OrganizationID,
+		p.log,
+	)
+
+	// Cancellation discrimination. Recon is failure-tolerant per ADR-022
+	// (subfinder/httpx failures return partial result + nil err), so a
+	// caller-initiated cancel surfaces via jobCtx, not necessarily via
+	// runErr. Mirror the tool-dispatch path's discrimination.
+	if errors.Is(jobCtx.Err(), context.Canceled) && !errors.Is(ctx.Err(), context.Canceled) {
+		return p.emitCancellation(ctx, progressPub, job, start)
+	}
+	if runErr != nil {
+		return p.emitFailure(ctx, progressPub, job, start, runErr)
+	}
+
+	// Terminal job_completed for the recon ScanJob (ADR-013 sole-writer).
+	completion := events.JobCompletedEvent{
+		EventType:      events.EventJobCompleted,
+		JobID:          job.ID,
+		ScanID:         job.ScanID,
+		Engine:         job.Engine,
+		Status:         "completed",
+		FindingCount:   0,
+		DurationMs:     int(time.Since(start).Milliseconds()),
+		IdempotencyKey: job.IdempotencyKey,
+		Timestamp:      time.Now().UTC().Format(time.RFC3339),
+		EventSeq:       events.EventSeq{Index: 1, Total: 1},
+	}
+	if err := p.completionsPub.Publish(ctx, completion); err != nil {
+		return fmt.Errorf("publish recon completion event: %w", err)
+	}
+
+	p.emitProgress(ctx, progressPub, events.EventJobCompleted, events.ProgressEvent{
+		"job_id":          job.ID,
+		"engine":          job.Engine,
+		"live_host_count": len(result.LiveHosts),
+		"duration_ms":     completion.DurationMs,
 	})
 
 	return nil

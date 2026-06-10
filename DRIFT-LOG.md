@@ -8,6 +8,65 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-06-10 — Drift #62 Recon-Dispatch Type-Mismatch RESOLVED (M8.1β.2 Stage 3 C2; 5th-instance plan-vs-empirical-precision catch-class)
+
+**Status:** RESOLVED inline at M8.1β.2 Stage 3 Commit 2 per Sub-Decisions 1+2+3 (brainstorming Mode 2 this session).
+
+V-Z pre-verification (prior session) surfaced empirical drift from Stage 2 plan `fb61129` §3.5/§4.2 pseudo-code: `recon.RunRecon` takes concrete `*redis.ProgressPublisher` + `*redis.CompletionsPublisher` (post-`fc75a98` signature); `processor.go` uses interface-typed publishers (`progressPublisher` / `completionsPublisher`) for per-dispatch test isolation; the `completionsPublisher` interface exposes only `Publish(ctx, JobCompletedEvent)` — NOT `PublishAttackSurface` that RunRecon calls. The plan pseudo-code `recon.RunRecon(ctx, ..., progressPub, completionsPub, ...)` could not compile (interface→concrete mismatch + missing method on consumer interface).
+
+### Resolution lock (Sub-Decisions ratified this session)
+
+- **Sub-Decision 1 (B): Concrete-typed processor fields.** `ProcessorDeps` extended with `ReconProgressPubFn func(scanID string) *redis.ProgressPublisher` + `ReconCompletionsPub *redis.CompletionsPublisher` concrete fields alongside (not replacing) the existing interface-typed fields. The tool-dispatch path keeps interface-typed publishers (test isolation preserved); the recon path uses concretes. Micro-refinement vs the plan's `reconProgressPub` field shorthand: `ProgressPublisher` binds `scan_id` at construction, so the field is a scan-bound **factory** (`ReconProgressPubFn`), not a singleton; `ReconCompletionsPub` is a singleton (completions channel is global).
+- **Sub-Decision 2 (B.i): miniredis-backed concrete publishers in tests** per `fc75a98` + Task 8.3α C3 precedent pattern (`processorFixture` extended; `TestProcessor_ReconDispatch` + `TestProcessor_ReconDispatch_NoWiringFailsLoud`).
+- **Sub-Decision 3: Task 8.3α composition preserved cleanly.** `fc75a98` RunRecon signature untouched (Drift #62 option (D) "modify recon.go" rejected); `EventAttackSurface` emission flow unchanged; api consumer unchanged; pure additive change at the `processor.go` dispatch layer.
+
+### Catch-class lineage (5 instances of plan/design-vs-empirical-precision)
+
+- #53 (earlier arc; parameter precision)
+- #55 (source-ingestion fix C2; test path precision)
+- #56 (source-ingestion fix C3; file naming precision)
+- #59 (Task 8.3α C2; RunRecon +3 params signature extension)
+- #61 (M8.1β.2 V-WD; `Scan.created_by_user_id` field absence)
+- #62 (M8.1β.2 V-Z; interface-vs-concrete type mismatch + missing method on consumer interface)
+
+### Meta-pattern signal (recon-invocation architectural seam)
+
+Drift #59 (RunRecon signature) and Drift #62 (processor→RunRecon interface mismatch) are BOTH at adjacent layers of the same architectural surface (recon-invocation parameter shape). Discipline-level forward-pin: **"Examine the recon-invocation architectural seam at pre-verification for future engine-side dispatch additions."**
+
+### Discipline-level meta-pattern extension
+
+DEFERRED-EMPIRICAL marking (Drift #61 established) now extends to **type signatures + interface contracts + dependency-injection patterns** referenced in plan pseudo-code — not just database fields / file paths / API contracts.
+
+**Cumulative session-tail framing-drift count: 62** (Drift #58 + #59 + #60 + #61 + #62).
+
+**Cross-references:** V-Z surface report (prior session; Drift #62 candidate + 4 options); Stage 2 plan `fb61129` §3.5/§4.2 (pseudo-code that drifted); `fc75a98` (Task 8.3α RunRecon signature; untouched per Sub-Decision 3); docs Commit 1 `9507acb` (ADR-028 canonical authority).
+
+---
+
+## 2026-06-10 — Drift #60 Recon-Orphan Sub-Category RESOLVED (M8.1β.2 Stage 3 C2; 6/6 engines resolved end-to-end)
+
+**Status:** M8.1β.2 Stage 3 Commit 2 LANDED. Recon-orphan sub-category (`subfinder` + `httpx`; 2 engines) RESOLVED STRUCTURALLY per ADR-028 Y-RECON-ENGINE-NAME (a) + (a.ii) implicit orchestrator dispatch (Stage 1 design doc `3f07611` + Stage 2 plan `fb61129` + ADR-028 canonical at SPEC §13 commit `9507acb`).
+
+**Resolution mechanism:**
+
+- `subfinder` + `httpx` REMOVED from `SCAN_TYPE_TOOLS` (api Stage 3 Commit 3 forthcoming)
+- api orchestrator implicitly dispatches `engine="recon"` ScanJob at phase-1 for web-ScanType category (api Stage 3 Commit 3 forthcoming)
+- engine `processor.Process` invokes `recon.RunRecon` directly via NEW dispatch case `engine="recon"` (this commit; per Drift #62 resolution) — NOT via registry per ADR-022 (recon stays helper not ToolRunner; canonical lock preserved)
+
+**Drift #60 6/6 closure end-to-end:**
+
+- Name-mismatch (1/1; RESOLVED at M8.1α): `depcheck` (commits `fb8cff9` + `2b36d62` + `64b8421`)
+- Engine-variant (3/3; RESOLVED at M8.1β.1): `nuclei_fast` + `nuclei_api` + `zap_api` (commits `bb3e75f` + `d773776` + `9ccde1a`)
+- Recon-orphan (2/2; RESOLVED at M8.1β.2): `subfinder` + `httpx` (docs commit `9507acb` ADR-028 canonical + this engine commit + api commit 3 forthcoming)
+
+**Drift #60 catch-class CLOSED at M8.1β.2 lifecycle.** Discipline-level "audit-driven model+spec orphan check" forward-pin preserved (rule-of-three trigger fired at #60; 3 instances of stored-design-intent-with-unimplemented-mechanism — #54 source-ingestion + #58 AttackSurface consumer + #60 SCAN_TYPE_TOOLS orphans).
+
+**ADR-022 canonical preservation honored:** Engine code preserved the ADR-022 architectural lock — recon stays pre-scan-helper at `internal/tools/recon/`; never ToolRunner-registered. `processor.Process` dispatch case for `engine="recon"` invokes `RunRecon` directly (NOT `registry.Get`). Composability with Task 8.3α infrastructure (RunRecon emits `EventAttackSurface` to completions Pub/Sub at `fc75a98`; api consumes at `05023f4`) preserved.
+
+**Cross-references:** docs Commit 1 `9507acb` (ADR-028 + ADR-022 addendum continuation + Drift #60 6/6 closure canonical); api Commit 3 forthcoming (SCAN_TYPE_TOOLS web-ScanType rename + phase-1 dispatch + dispatch_phase2); api Commit 4 forthcoming (completions_consumer phase-2 hook + e2e); M8.1α DRIFT-LOG `64b8421` (Drift #60 catalog establishment); M8.1β.1 DRIFT-LOG `9ccde1a` (Drift #60 4/6 progress); Task 8.3α Stage 3 C2 `fc75a98` (RunRecon emission infrastructure).
+
+---
+
 ## 2026-06-09 — Drift #60 Engine-Variant Sub-Category RESOLVED (M8.1β.1; 4/6 engines resolved; Approach B compressed-lifecycle 4th instance)
 
 **Status:** M8.1β.1 compressed-lifecycle CLOSED. Drift #60 engine-variant sub-category (`nuclei_fast` / `nuclei_api` / `zap_api`) RESOLVED per Y-ENGINE-VARIANT-RESOLUTION (a) config-flag (M81B_PV V-UE empirically grounded; prior session).

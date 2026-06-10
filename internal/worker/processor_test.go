@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -104,8 +106,25 @@ func processorFixture(t *testing.T, runner *testRunner) (*Processor, *goredis.Cl
 		CancelSubscriberFn:   cancelFn,
 		CompletionsPublisher: completionsPub,
 		Logger:               zerolog.Nop(),
+		// Concrete recon publishers per ADR-028 Phase-1 + Drift #62 (B);
+		// miniredis-backed per Sub-Decision 2 (B.i). Harmless for
+		// non-recon dispatch tests (fields sit unused).
+		ReconProgressPubFn:  func(scanID string) *rdsh.ProgressPublisher { return rdsh.NewProgressPublisher(client, scanID) },
+		ReconCompletionsPub: rdsh.NewCompletionsPublisher(client),
 	})
 	return p, client, mr
+}
+
+// reconScript writes a tiny POSIX shell script + makes it executable.
+// Mirrors the recon package's shScript helper (different test package,
+// so duplicated here). Used to mock subfinder/httpx binaries for the
+// engine="recon" dispatch test.
+func reconScript(t *testing.T, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "mock.sh")
+	require.NoError(t, os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755))
+	return p
 }
 
 // makeJob constructs a JobDispatch for tests with sane defaults.
@@ -535,3 +554,110 @@ func TestProcessor_JobDispatchToScanConfig_MobileExtraArgs(t *testing.T) {
 
 // _ = sync.RWMutex{} // unused-import guard for sync (used elsewhere)
 var _ = sync.RWMutex{}
+
+// TestProcessor_ReconDispatch pins the ADR-028 Phase-1 dispatch case:
+// engine="recon" routes to recon.RunRecon directly (NOT via registry
+// per ADR-022) with concrete publishers (Drift #62 Sub-Decision 1 (B)),
+// emits EventAttackSurface to the completions channel (Task 8.3α), and
+// emits a terminal job_completed for the recon ScanJob (ADR-013).
+//
+// Mock subfinder + httpx binaries (miniredis-backed publishers per
+// Sub-Decision 2 (B.i)) produce one live host so EventAttackSurface
+// carries a subdomain row + the job_completed lands FindingCount=0
+// (recon emits target-discovery, not findings, per ADR-022).
+func TestProcessor_ReconDispatch(t *testing.T) {
+	// Registry has NO "recon" entry — proves dispatch does NOT use
+	// registry.Get for recon (ADR-022). A non-recon runner is present
+	// only to satisfy the fixture's registry construction.
+	runner := &testRunner{name: "nuclei", category: "dast"}
+	p, client, _ := processorFixture(t, runner)
+
+	subMock := reconScript(t,
+		`echo '{"host":"api.example.com","input":"example.com","source":"crtsh"}'`)
+	httpxMock := reconScript(t,
+		`echo '{"url":"https://api.example.com","status_code":200,"title":"API","tech":["nginx"],"webserver":"nginx","content_type":"text/html","failed":false}'`)
+	t.Setenv("SHIELDSCAN_SUBFINDER_BINARY", subMock)
+	t.Setenv("SHIELDSCAN_HTTPX_BINARY", httpxMock)
+
+	completionsCh := subscribeCompletions(t, client)
+
+	job := makeJob("recon", "scn_recon", "scn_recon:recon:1")
+	job.Target.URL = "example.com" // orchestrator sets recon target_url to root domain
+	require.NoError(t, p.Process(t.Context(), job))
+
+	// The non-recon runner must NOT have been invoked — recon does not
+	// route through registry.Get (ADR-022 canonical lock).
+	assert.Equal(t, int32(0), runner.runCalled.Load(),
+		"recon dispatch must NOT invoke a registered ToolRunner")
+
+	// Two events land on the completions channel: EventAttackSurface
+	// (emitted inside RunRecon) + the terminal job_completed (emitted by
+	// dispatchRecon). Order is emission-order: attack_surface first
+	// (during httpx phase), then job_completed. Drain both + classify.
+	sawAttackSurface := false
+	sawJobCompleted := false
+	for i := 0; i < 2; i++ {
+		select {
+		case msg := <-completionsCh:
+			var probe map[string]any
+			require.NoError(t, json.Unmarshal([]byte(msg.Payload), &probe))
+			switch probe["event_type"] {
+			case "attack_surface":
+				sawAttackSurface = true
+				assert.Equal(t, "scn_recon", probe["scan_id"])
+				subs, ok := probe["subdomains"].([]any)
+				require.True(t, ok, "attack_surface event carries subdomains array")
+				assert.Len(t, subs, 1, "one live host discovered")
+			case string(events.EventJobCompleted):
+				sawJobCompleted = true
+				var ev events.JobCompletedEvent
+				require.NoError(t, json.Unmarshal([]byte(msg.Payload), &ev))
+				assert.Equal(t, "completed", ev.Status)
+				assert.Equal(t, "scn_recon", ev.ScanID)
+				assert.Equal(t, "recon", ev.Engine)
+				assert.Equal(t, 0, ev.FindingCount,
+					"recon emits target-discovery not findings (ADR-022)")
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("did not receive both completions events (attack_surface=%v job_completed=%v)",
+				sawAttackSurface, sawJobCompleted)
+		}
+	}
+	assert.True(t, sawAttackSurface, "EventAttackSurface emitted (Task 8.3α composition)")
+	assert.True(t, sawJobCompleted, "terminal job_completed emitted (ADR-013 sole-writer)")
+}
+
+// TestProcessor_ReconDispatch_NoWiringFailsLoud pins the ADR-021
+// fail-loud guard: an engine="recon" job arriving at a processor with
+// no recon publishers wired emits a failure (misconfiguration, not a
+// runtime-tolerable condition).
+func TestProcessor_ReconDispatch_NoWiringFailsLoud(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+
+	registry := NewRegistry(map[string]tools.ToolRunner{
+		"nuclei": &testRunner{name: "nuclei", category: "dast"},
+	})
+	// NewProcessor WITHOUT ReconProgressPubFn / ReconCompletionsPub.
+	p := NewProcessor(ProcessorDeps{
+		Registry:            registry,
+		IdempotencyClaim:    rdsh.NewIdempotencyClaim(client),
+		ProgressPublisherFn: func(scanID string) progressPublisher { return rdsh.NewProgressPublisher(client, scanID) },
+		CancelSubscriberFn: func(ctx context.Context, scanID string) (cancelSubscriber, error) {
+			return rdsh.NewCancelSubscriber(ctx, client, scanID)
+		},
+		CompletionsPublisher: rdsh.NewCompletionsPublisher(client),
+		Logger:               zerolog.Nop(),
+	})
+
+	completionsCh := subscribeCompletions(t, client)
+	job := makeJob("recon", "scn_nowire", "scn_nowire:recon:1")
+	err := p.Process(t.Context(), job)
+	require.Error(t, err, "recon dispatch with no wiring returns the failure error")
+	assert.Contains(t, err.Error(), "recon publishers")
+
+	ev := recvCompletion(t, completionsCh, 2*time.Second)
+	assert.Equal(t, "failed", ev.Status, "recon dispatch with no wiring fails loud")
+	assert.Equal(t, "recon", ev.Engine)
+}
