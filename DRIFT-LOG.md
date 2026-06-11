@@ -8,6 +8,39 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-06-10 — Drift #63 Test-Scope-Incompleteness RESOLVED (M8.1β.2 Stage 3 Commit 3; 6th-instance plan-vs-empirical-precision catch-class + sub-category test-impact-surface)
+
+**Status:** RESOLVED at shieldscan-api commit `04a9b5c` (M8.1β.2 Stage 3 C3) via Option 1 ratified scope expansion. Catalogued here at M8.1β.2 Stage 4 P5.A (this commit) — closing the catalog gap surfaced by V-CC pre-annotation verification (Drift #63 lived only in `04a9b5c` commit body, not at any DRIFT-LOG; engine DRIFT-LOG is canonical framing-drift catalog home per Drift #60 + #62 sibling entries).
+
+V-AAE pre-verification (M8.1β.2 Stage 3 Commit 3) grepped only `tests/services/test_orchestrator.py` for web-ScanType behavior-change assertions. Empirically, web-ScanType phase-1 behavior change (FULL_WEB job_count 8→1; QUICK 4→1) rippled to `tests/routes/test_scans.py` route-level tests asserting the same observable behavior. 3 route tests failed at C3 execution full-suite gate.
+
+### Resolution lock (Option 1 ratified Stage 3 C3 session)
+
+- Expanded C3 scope to include `tests/routes/test_scans.py`
+- 3 mechanical assertion updates (8→1, 4→1, job_count 4→1)
+- Drift #63 catalogued in commit `04a9b5c` body
+- ZERO-regressions-at-each-commit discipline preserved (full suite 578 green at commit boundary)
+
+### Catch-class lineage (6 instances of plan/design-vs-empirical-precision; sub-category test-impact-surface 1st instance)
+
+- #53 (earlier arc; parameter precision)
+- #55 (Task 8.3α PV; test path precision)
+- #56 (source-ingestion fix C3; file naming precision)
+- #59 (M8.1β.1 C2; RunRecon +3 params)
+- #61 (M8.1β.2 V-WD; `Scan.created_by_user_id` field absence)
+- #62 (M8.1β.2 V-Z; interface-vs-concrete type mismatch)
+- #63 (M8.1β.2 C3 execution; test-scope-incompleteness — sub-category test-impact-surface)
+
+### Discipline-level forward-pin extension
+
+From Drift #60 audit-driven orphan check + Drift #61/#62 DEFERRED-EMPIRICAL: **"Pre-verification scope completeness across test-impact-surface. When ScanType behavior changes, SCAN_TYPE_TOOLS changes, audit event shape changes, or dispatch shape changes occur, pre-verification should grep ALL test files (routes + services + integration + e2e) for behavior-change-impact assertions — not just the primary file under modification. Test-impact-surface extends to any file asserting job counts, dispatch event details, or downstream observable behavior."**
+
+**Cumulative session-tail framing-drift count: 63** (Drift #58 + #59 + #60 + #61 + #62 + #63; bumped from 62 at Drift #62 entry below — persistent catalog now matches the ratified count at M8.1β.2 close).
+
+**Cross-references:** shieldscan-api commit `04a9b5c` (M8.1β.2 Stage 3 C3; Drift #63 catalogued in commit body; resolved inline via Option 1 ratified scope expansion); shieldscan-docs commit `9d571b6` (M8.1β.2 P5.A Commit 1 docs; Drift #63 documented at IMPLEMENTATION-PLAN.md Task 8.1 closure-annotation blockquote); engine DRIFT-LOG #60 6/6 + #62 entries (`2cf6f5d`; companion entries at same lifecycle).
+
+---
+
 ## 2026-06-10 — Drift #62 Recon-Dispatch Type-Mismatch RESOLVED (M8.1β.2 Stage 3 C2; 5th-instance plan-vs-empirical-precision catch-class)
 
 **Status:** RESOLVED inline at M8.1β.2 Stage 3 Commit 2 per Sub-Decisions 1+2+3 (brainstorming Mode 2 this session).
