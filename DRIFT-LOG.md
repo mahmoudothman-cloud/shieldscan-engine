@@ -8,6 +8,18 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-06-16 — M9.0 AI Pipeline Foundation cross-reference (ADR-029; api-side milestone; recon-invocation-seam-analog discipline extended)
+
+**Engine-side note only — M9.0 is api-only** (no engine code changed; preserves the Go/Python language boundary per ADR-029 Q1 rejected-alternative (c)). Logged here so the engine drift catalogue stays aware of the cross-repo discipline evolution.
+
+The M9.0 AI pipeline introduces an **ai-pipeline-dispatch seam** at the api side (`completions_consumer` → `orchestrator.dispatch_ai_pipeline` → `AIPipelineConsumer` → consumer-driven terminal transition) that is the direct analog of the engine's recon-invocation seam (Drift #59 + #62 territory). The recon-invocation-architectural-seam forward-pin established at M8.1β.2 (examine adjacent-layer seams at pre-verification for type-signature / interface-contract / DI precision) was honored at M9.0 C2 via the V-JJ pre-verification.
+
+**Drift #66-averted (api-side; documented at shieldscan-api DRIFT-LOG 4616672):** V-JJC pre-verification predicted a Path β/γ test-impact-surface (Drift #63 catch-class extension) at the `_maybe_complete_scan` interposition; the ratified DQ3 empty-short-circuit design choice averted manifestation (0 tests broken). No catalogue increment per the averted-prediction discipline established at V-IIB/C1. Arc discipline-tier signal: pre-verification + ratification + design-choice → zero-execution-drift.
+
+**Cumulative session-tail framing-drift count: 65** (unchanged; #64 + #65 closed api-side at M9.0 C1; #66 averted-not-incremented).
+
+**Cross-references:** shieldscan-docs `45dcabe` (ADR-029 SPEC §13) + `62499a3` (M9.0 P5.A docs); shieldscan-api `51b26ea` + `1c98330` + `8410df4` (M9.0 Stage 3 C1/C2/C3) + `4616672` (api DRIFT-LOG #64/#65/#66-averted).
+
 ## 2026-06-10 — Drift #63 Test-Scope-Incompleteness RESOLVED (M8.1β.2 Stage 3 Commit 3; 6th-instance plan-vs-empirical-precision catch-class + sub-category test-impact-surface)
 
 **Status:** RESOLVED at shieldscan-api commit `04a9b5c` (M8.1β.2 Stage 3 C3) via Option 1 ratified scope expansion. Catalogued here at M8.1β.2 Stage 4 P5.A (this commit) — closing the catalog gap surfaced by V-CC pre-annotation verification (Drift #63 lived only in `04a9b5c` commit body, not at any DRIFT-LOG; engine DRIFT-LOG is canonical framing-drift catalog home per Drift #60 + #62 sibling entries).
