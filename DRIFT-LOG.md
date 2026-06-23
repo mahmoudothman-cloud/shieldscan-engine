@@ -8,6 +8,32 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-06-23 — Drift #66 cross-reference (M9.A AI Pipeline Embedding + Deduplication; ADR-030; api-side milestone; recon-invocation-seam-adjacent at AI pipeline seam)
+
+**Engine-side note only — M9.A is api-only** (no engine code changed; engine recon executes upstream of the api ai-pipeline seam, and the engine has no SQLAlchemy unit-of-work for the raw_findings → vulnerabilities transition). Logged here to preserve the api+engine DRIFT-LOG sync convention per the M8.1β.2 V-CC reconciliation precedent.
+
+**Drift #66 — "Resolution γ FK-ordering — ORM-vs-DB layer assumption mismatch" (NOVEL catch-class; api-side; documented at shieldscan-api DRIFT-LOG `cee75bf`).** Surfaced at api M9.A Stage 3 C1 (`91ec273`) test execution: ADR-030 Q7 Resolution γ pre-generates the Vulnerability id to skip an ORM flush-for-id, but the DB-level FK (`raw_findings.vulnerability_id` → `vulnerabilities.id`) still requires the Vulnerability row persisted before the raw_finding UPDATE; SQLAlchemy's unit-of-work can't infer the order without a `relationship()`. Resolved via an intermediate flush in `_create_vulnerability_from_finding`; regression-guarded at C2 (`251960a`).
+
+**Recon-invocation-seam-adjacent territory.** Drift #66 occurred at the api ai-pipeline seam — downstream of the engine recon → api scan-jobs → api ai-pipeline-consumer → `pipeline.run()` chain. The engine's recon-invocation-architectural-seam discipline (Drift #59 + #62; extended to the ai-pipeline-dispatch seam at M9.0 per the 2026-06-16 entry below) conceptually reaches this ai-pipeline-rewrite seam where #66 was caught. The seam-discipline now spans a third layer (recon-dispatch → ai-dispatch → ai-pipeline-internals); the cross-reference is preserved for catalogue continuity.
+
+**Disambiguation.** Distinct from the prior "#66-averted lineage" shorthand (the 2026-06-16 entry below) — that used "#66" as a would-be-next-number placeholder and never incremented (count stayed 65). Drift #66 is the first real increment (65→66).
+
+⇒ **M9.A entire lifecycle DECLARABLE CLOSED at this commit's landing:**
+- Stage 1 design doc ✅ `aaf7ea0`
+- Stage 2 implementation plan ✅ `a8ad52c`
+- Stage 3 C0 docs ADR-030 ✅ `d408b2c`
+- Stage 3 C1 api implementation ✅ `91ec273`
+- Stage 3 C2 api tests + smoke ✅ `251960a`
+- Stage 4 P5.A Commit 1 docs annotations ✅ `c9130db`
+- Stage 4 P5.A Commit 2 api DRIFT-LOG #66 sync ✅ `cee75bf`
+- Stage 4 P5.A Commit 3 engine DRIFT-LOG cross-ref ✅ this commit
+
+⇒ **M9.B activation trigger:** ***"Begin M9.B — Correlation + Scoring"*** (Tasks 9.3+9.4 sub-milestone per Q11-M9.0 strict linear sequencing).
+
+**Cumulative session-tail framing-drift count: 66** (Drift #58-#66; Drift #66 NOVEL "ORM-vs-DB layer assumption mismatch" catch-class persistent at api `cee75bf` + this engine cross-ref).
+
+**Cross-references:** shieldscan-docs `aaf7ea0` + `a8ad52c` + `d408b2c` (ADR-030 SPEC §13) + `c9130db` (M9.A P5.A docs); shieldscan-api `91ec273` (C1 impl + #66 surfaced) + `251960a` (C2 tests + regression-guard) + `cee75bf` (api DRIFT-LOG #66 entry) + `4616672` (M9.0 P5.A api DRIFT-LOG); shieldscan-engine `6254849` (M9.0 P5.A engine DRIFT-LOG precedent for this commit); SPEC §13 ADR-030 (M9.A architectural authority operational).
+
 ## 2026-06-16 — M9.0 AI Pipeline Foundation cross-reference (ADR-029; api-side milestone; recon-invocation-seam-analog discipline extended)
 
 **Engine-side note only — M9.0 is api-only** (no engine code changed; preserves the Go/Python language boundary per ADR-029 Q1 rejected-alternative (c)). Logged here so the engine drift catalogue stays aware of the cross-repo discipline evolution.
