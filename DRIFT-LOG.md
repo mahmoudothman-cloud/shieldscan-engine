@@ -8,6 +8,29 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-06-29 — M9.B Sub-Milestone CLOSED cross-reference (AI Pipeline: Correlation + Scoring; ADR-031; api-side milestone; no catalogue increment)
+
+**Engine-side note only — M9.B is api-only** (correlation + scoring + cwe_hierarchy modules all api-side; engine recon executes upstream of the api ai-pipeline seam; M9.B operates on Vulnerabilities post-M9.A clustering with no engine involvement; `correlation_cluster_id` + `severity_score` columns are api-only). Logged here to preserve the api+engine DRIFT-LOG sync convention per the M8.1β.2 V-CC reconciliation precedent.
+
+**M9.B Sub-Milestone CLOSED with zero catalogue increments** — surfaced at the api DRIFT-LOG M9.B closure entry (`56c9d18`); cumulative framing-drift count **preserved at 66** (Drift #66 from M9.A C1, the 2026-06-23 entry below, remains the latest catalogued drift). C1+C2+C3 landed at 0 catalogued drifts via PY5 (tool_name pre-grounding) + PY6 (standalone-column lower-FK-risk) + test-gate discipline (the C2 Q1-evidence-loading and C3 fixture-scoping corrections were within-lock under-implementations caught pre-commit — not Y-lock deviations, not increments).
+
+⇒ **M9.B entire lifecycle DECLARABLE CLOSED at this commit's landing:**
+- Stage 1 design doc ✅ `d10be51`
+- Stage 2 implementation plan ✅ `a172fd1`
+- Stage 3 C0 docs ADR-031 ✅ `fb4b07e`
+- Stage 3 C1 api schema + modules ✅ `5dee684`
+- Stage 3 C2 api pipeline integration ✅ `6c9e270`
+- Stage 3 C3 api tests + smoke ✅ `f82c38a`
+- Stage 4 P5.A Commit 1 docs annotations ✅ `42259cf`
+- Stage 4 P5.A Commit 2 api DRIFT-LOG M9.B closure entry ✅ `56c9d18`
+- Stage 4 P5.A Commit 3 engine DRIFT-LOG cross-ref ✅ this commit
+
+⇒ **M9.C activation trigger:** ***"Begin M9.C — Fix Generation + Executive Summary"*** (Tasks 9.5+9.6 sub-milestone per Q11-M9.0 strict linear sequencing).
+
+**Cumulative session-tail framing-drift count: 66** (preserved through the entire M9.B lifecycle).
+
+**Cross-references:** shieldscan-docs `d10be51` + `a172fd1` + `fb4b07e` + `42259cf`; shieldscan-api `f82c38a` + `6c9e270` + `5dee684` + `56c9d18` + `cee75bf` (M9.A P5.A api DRIFT-LOG precedent); shieldscan-engine `99f04e7` (M9.A P5.A engine DRIFT-LOG precedent for this commit); SPEC §13 ADR-031 (M9.B architectural authority operational).
+
 ## 2026-06-23 — Drift #66 cross-reference (M9.A AI Pipeline Embedding + Deduplication; ADR-030; api-side milestone; recon-invocation-seam-adjacent at AI pipeline seam)
 
 **Engine-side note only — M9.A is api-only** (no engine code changed; engine recon executes upstream of the api ai-pipeline seam, and the engine has no SQLAlchemy unit-of-work for the raw_findings → vulnerabilities transition). Logged here to preserve the api+engine DRIFT-LOG sync convention per the M8.1β.2 V-CC reconciliation precedent.
