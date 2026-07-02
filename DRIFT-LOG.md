@@ -8,6 +8,28 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-07-02 — M9.C Sub-Milestone CLOSED cross-reference (AI Pipeline: Fix Generation + Executive Summary; ADR-032; api-side milestone; no catalogue increment)
+
+**Engine-side note only — M9.C is api-only** (fix_generation.py + summary.py + pipeline.run() extension + all 36 M9.C tests are api-side; engine recon executes upstream of the api ai-pipeline seam; M9.C operates on Vulnerabilities post-M9.A clustering + M9.B correlation/scoring with no engine involvement; `Vulnerability.ai_fix_text` + `Scan.executive_summary` columns are api-only per ADR-013 sole-writer — api writes both fields; engine + workers don't touch). Logged here to preserve the api+engine DRIFT-LOG sync convention per the M8.1β.2 V-CC reconciliation precedent.
+
+**M9.C Sub-Milestone CLOSED with zero catalogue increments** — surfaced at the api DRIFT-LOG M9.C closure entry (`0c57bcc`); cumulative framing-drift count **preserved at 66** (Drift #66 from M9.A C1 remains the latest catalogued drift). C1+C2 landed at 0 catalogued drifts via PY5 (V-AB DEFERRED-EMPIRICAL pre-grounding operationalized at V-BB+V-CC cascades) + PY6 (no-migration territory per V-AAH/I) + PY7 (test-fixture ordering discipline) + test-gate discipline (the C1 429-test-assertion narrowing per Option A was a within-lock under-implementation caught pre-commit — 3rd test-gate-within-lock instance; not a Y-lock deviation, not an increment). 7-instance averted-prediction lineage + 3-instance test-gate-within-lock pattern operational. M9.C is the FIRST real Anthropic Claude API integration in the ShieldScan AI Pipeline.
+
+⇒ **M9.C entire lifecycle DECLARABLE CLOSED at this commit's landing:**
+- Stage 1 design doc ✅ `261cf10`
+- Stage 2 implementation plan ✅ `f86a7b0`
+- Stage 3 C0 docs ADR-032 ✅ `e8fbd8c`
+- Stage 3 C1 api modules + integration ✅ `a0522a1`
+- Stage 3 C2 api tests + smoke ✅ `6eff189`
+- Stage 4 P5.A Commit 1 docs annotations ✅ `0a829cb`
+- Stage 4 P5.A Commit 2 api DRIFT-LOG M9.C closure entry ✅ `0c57bcc`
+- Stage 4 P5.A Commit 3 engine DRIFT-LOG cross-ref ✅ this commit
+
+⇒ **M9.D activation trigger:** ***"Begin M9.D — Pipeline Orchestrator"*** (Task 9.7 sub-milestone per Q11-M9.0 strict linear sequencing; final M9 sub-milestone before M9 fully closes).
+
+**Cumulative session-tail framing-drift count: 66** (preserved through the entire M9.C lifecycle).
+
+**Cross-references:** shieldscan-docs `261cf10` + `f86a7b0` + `e8fbd8c` + `0a829cb`; shieldscan-api `a0522a1` + `6eff189` + `0c57bcc`; shieldscan-engine `f4a7c35` (M9.B P5.A engine DRIFT-LOG precedent for this commit); SPEC §13 ADR-032 (M9.C architectural authority operational).
+
 ## 2026-06-29 — M9.B Sub-Milestone CLOSED cross-reference (AI Pipeline: Correlation + Scoring; ADR-031; api-side milestone; no catalogue increment)
 
 **Engine-side note only — M9.B is api-only** (correlation + scoring + cwe_hierarchy modules all api-side; engine recon executes upstream of the api ai-pipeline seam; M9.B operates on Vulnerabilities post-M9.A clustering with no engine involvement; `correlation_cluster_id` + `severity_score` columns are api-only). Logged here to preserve the api+engine DRIFT-LOG sync convention per the M8.1β.2 V-CC reconciliation precedent.
