@@ -8,6 +8,29 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-07-02 — M9.D Sub-Milestone CLOSED cross-reference + 🔒 MILESTONE 9 ENTIRELY CLOSED (AI Pipeline: Orchestrator; ADR-033; api-side milestone; no catalogue increment)
+
+**Engine-side note only — M9.D is api-only** (ai_pipeline_consumer.py terminal-metadata wiring + test_m9d_orchestrator_smoke.py all api-side; `Scan.completed_at` + `Scan.error_message` are api-only per ADR-013 sole-writer; engine recon executes upstream of the api consumer seam). Logged here to preserve the api+engine DRIFT-LOG sync convention per the M8.1β.2 V-CC reconciliation precedent.
+
+**M9.D Sub-Milestone CLOSED with zero catalogue increments** — surfaced at the api DRIFT-LOG M9.D closure entry (`2e4c4c3`); cumulative framing-drift count **preserved at 66** (Drift #66 from M9.A C1 remains the latest catalogued drift; 8-instance averted-prediction lineage with V-EEC latest; 3-instance test-gate-within-lock pattern not incremented at M9.D).
+
+⇒ **M9.D entire lifecycle DECLARABLE CLOSED at this commit's landing:**
+- Stage 1 design (compressed; absorbs Stage 2 per Q5) ✅ `988326e`
+- Stage 3 C0 docs ADR-033 ✅ `1583f27`
+- Stage 3 C1 api terminal-metadata wiring ✅ `5c092df`
+- Stage 3 C2 api e2e orchestrator smoke ✅ `2f155f0`
+- Stage 4 P5.A Commit 1 docs annotations ✅ `2777ad4`
+- Stage 4 P5.A Commit 2 api DRIFT-LOG closure entry ✅ `2e4c4c3`
+- Stage 4 P5.A Commit 3 engine DRIFT-LOG cross-ref ✅ this commit
+
+⇒ **🔒 MILESTONE 9 — AI ANALYSIS PIPELINE — ENTIRELY CLOSED:** M9.0 (foundation; ADR-029) + M9.A (embed/dedup; ADR-030) + M9.B (correlate/score; ADR-031) + M9.C (fix-gen/summary; ADR-032; FIRST real Anthropic integration) + M9.D (orchestrator; ADR-033 closure-by-composition). Pipeline operational end-to-end: completions-event → dispatch → embed → dedup → correlate → score → fix-gen → summary → terminal metadata; 751 tests green; cost-tracking operational per Gotcha 5.
+
+⇒ **M10 activation trigger:** ***"Begin M10 — Report Architecture"***.
+
+**Cumulative session-tail framing-drift count: 66** (preserved through the entire M9.D lifecycle and all of Milestone 9's sub-milestone chain).
+
+**Cross-references:** shieldscan-docs `2777ad4` + `1583f27` + `988326e`; shieldscan-api `2e4c4c3` + `2f155f0` + `5c092df`; shieldscan-engine `e45e5a9` (M9.C P5.A precedent for this commit); SPEC §13 ADR-033.
+
 ## 2026-07-02 — M9.C Sub-Milestone CLOSED cross-reference (AI Pipeline: Fix Generation + Executive Summary; ADR-032; api-side milestone; no catalogue increment)
 
 **Engine-side note only — M9.C is api-only** (fix_generation.py + summary.py + pipeline.run() extension + all 36 M9.C tests are api-side; engine recon executes upstream of the api ai-pipeline seam; M9.C operates on Vulnerabilities post-M9.A clustering + M9.B correlation/scoring with no engine involvement; `Vulnerability.ai_fix_text` + `Scan.executive_summary` columns are api-only per ADR-013 sole-writer — api writes both fields; engine + workers don't touch). Logged here to preserve the api+engine DRIFT-LOG sync convention per the M8.1β.2 V-CC reconciliation precedent.
