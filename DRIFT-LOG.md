@@ -8,6 +8,18 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-07-06 — M10.A Sub-Milestone CLOSED cross-reference (Vulnerability Endpoints; Task 10.1; first M10 sub-milestone; api-side milestone; no catalogue increment)
+
+**Engine-side note only — M10.A is api-only** (vulnerability routes/schemas/tests all api-side; `Vulnerability` + `VulnerabilityHistory` rows are api-owned per ADR-013 sole-writer; the engine emits raw findings upstream and never reads or writes Vulnerability rows). Logged here to preserve the api+engine DRIFT-LOG sync convention per the M8.1β.2 V-CC reconciliation precedent.
+
+**M10.A Sub-Milestone CLOSED with zero catalogue increments** — surfaced at the api DRIFT-LOG M10.A closure entry (`dfe7785`). First M10 sub-milestone, and the **first C0-less sub-milestone** in the arc (no ADR + no SPEC edit + no migration; VulnerabilityStatus + VulnerabilityHistory tables pre-existed scaffolded-unwired). Chain (all γ): Stage 1 `df68e69` + C1 `5cc968a` + C2 `0251ee7` + P5.A `a4cca91` (docs) + `dfe7785` (api) + this (engine). Delivered: all 7 SPEC §6 vulnerability operations tenancy-enforced; 24 tests (777 total ZERO regressions); FIRST VulnerabilityHistory write-site at PATCH; ai_fix_text customer-reachable via /fix; NEW VulnerabilityAction audit enum.
+
+Cumulative framing-drift count **preserved at 66** (Drift #66 from M9.A C1 remains the latest catalogued drift; 9-instance averted-prediction lineage incl. V-HHD VulnerabilityAction; 3-instance test-gate-within-lock pattern not incremented at M10.A).
+
+⇒ M10 progress: 1 of 4 sub-milestones closed (M10.A ✅; M10.B/C/D ahead). Next per DQ5: ***"Begin M10.B — Report Generation + Delivery"*** (ADR-034 territory; report-rendering cluster Tasks 10.2+10.3+10.4; reports-table migration per DQ3 per-format persistence).
+
+---
+
 ## 2026-07-02 — M9.D Sub-Milestone CLOSED cross-reference + 🔒 MILESTONE 9 ENTIRELY CLOSED (AI Pipeline: Orchestrator; ADR-033; api-side milestone; no catalogue increment)
 
 **Engine-side note only — M9.D is api-only** (ai_pipeline_consumer.py terminal-metadata wiring + test_m9d_orchestrator_smoke.py all api-side; `Scan.completed_at` + `Scan.error_message` are api-only per ADR-013 sole-writer; engine recon executes upstream of the api consumer seam). Logged here to preserve the api+engine DRIFT-LOG sync convention per the M8.1β.2 V-CC reconciliation precedent.
