@@ -8,6 +8,18 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-07-26 — M10.B Sub-Milestone CLOSED cross-reference (Report Generation + Delivery; Tasks 10.2/10.3/10.4; second M10 sub-milestone; api-side milestone; no catalogue increment)
+
+**Engine-side note only — M10.B is api-only** (the report pipeline is entirely api-side: `reports` table + the `ReportContext` assembler + JSON/SARIF/PDF generators + `routes/reports.py`; `Report` rows are api-written per ADR-013 sole-writer; the engine emits raw findings upstream and never reads or writes reports). Logged here to preserve the api+engine DRIFT-LOG sync convention per the M8.1β.2 V-CC reconciliation precedent.
+
+**M10.B Sub-Milestone CLOSED with zero catalogue increments** — surfaced at the api DRIFT-LOG M10.B closure entry (`6b75278`); ADR-034 canonical at SPEC §13 (`f099a5c`). Chain (all γ; 5 code + 2 docs micro-commits): Stage 1 `92fe1c7` + C0 `f099a5c` + C1 `ac91e62` + C1-docs `67f0676` + C2 `c383b06` + C3 `9b2724e` + C3-docs `a50898f` + C4 `0d7e5e5` + P5.A `397df21` + `6b75278` + this. Delivered: the report pipeline reachable end-to-end (scan → M9 analysis → ReportContext → PDF/JSON/SARIF/executive → customer download); SARIF 2.1.0 jsonschema-conformance-validated; two dependency escalations (jsonschema + pydyf) VERSIONS.md-locked in-session per Rule 4.
+
+Cumulative framing-drift count **preserved at 66** (Drift #66 from M9.A C1 remains the latest catalogued drift; 11-instance averted-prediction lineage incl. the 10th TENANT_TABLES-dual-mechanism + 11th target-on-Project catches; 3-instance test-gate-within-lock pattern NOT incremented at M10.B).
+
+⇒ M10 progress: 2 of 4 sub-milestones closed (M10.A ✅ + M10.B ✅; M10.C/M10.D ahead). Next per DQ5: ***"Begin M10.C — Compliance Mapping"*** (Task 10.5; 2-table migration — compliance_frameworks + cwe_control_mappings — + SOC2/ISO-27001 seed; compressed shape per DQ4).
+
+---
+
 ## 2026-07-06 — M10.A Sub-Milestone CLOSED cross-reference (Vulnerability Endpoints; Task 10.1; first M10 sub-milestone; api-side milestone; no catalogue increment)
 
 **Engine-side note only — M10.A is api-only** (vulnerability routes/schemas/tests all api-side; `Vulnerability` + `VulnerabilityHistory` rows are api-owned per ADR-013 sole-writer; the engine emits raw findings upstream and never reads or writes Vulnerability rows). Logged here to preserve the api+engine DRIFT-LOG sync convention per the M8.1β.2 V-CC reconciliation precedent.
