@@ -8,6 +8,20 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-07-31 — M10.D Sub-Milestone CLOSED + 🏁 M10 REPORT ARCHITECTURE ENTIRELY CLOSED cross-reference (Tool Health; Task 10.6; fourth + final M10 sub-milestone; no catalogue increment)
+
+**Engine-side note — M10.D READS an engine-produced signal but made NO engine changes.** Distinct from M10.A/B/C (which had zero engine scope): M10.D's tool-health endpoint consumes the **heartbeat goroutine's** `shieldscan:workers:*` SETEX keys (`internal/worker/heartbeat.go`), read api-side via `redis.scan_iter`. The heartbeat **pre-existed M10.D and was untouched** — read-only consumption, no engine edit. Logged here to preserve the api+engine DRIFT-LOG sync convention per the M8.1β.2 V-CC reconciliation precedent.
+
+**M10.D Sub-Milestone CLOSED with zero catalogue increments** — surfaced at the api DRIFT-LOG M10.D + M10-closure entry (`c9d483b`). Chain (all γ; **no C0 / no migration / no ADR** — a Redis-read-only aggregation endpoint over the existing signal; the leanest sub-milestone shape in the arc): Stage 1 `74f0688` + C1 `3d94c42` + P5.A `93c16e9` + `c9d483b` + this. Delivered: `GET /orgs/{org_id}/tools/health` — **two-state per-tool availability** over the worker-fleet heartbeat (`available` if ≥1 live worker advertises the tool, else `unavailable`; **no fabricated "degraded"** — the M10.C `not_assessed` honesty echo). Suite 834 passed / 1 skipped (intentional drain forward-pin) / 0 failed.
+
+**🏁 M10 REPORT ARCHITECTURE — ENTIRELY CLOSED across all three repos (4 of 4).** M10.A vulnerability endpoints + M10.B report generation/delivery (ADR-034) + M10.C compliance mapping + M10.D tool health — all CLOSED. M10 landed **0 catalogued drifts** as a whole (cumulative held at **66** across the entire milestone; 13-instance averted-prediction lineage; 3-instance test-gate-within-lock NOT incremented; Drift #66 remains latest). The decomposition mini-chain **DQ1-DQ5** (`41ad3e6`) is complete/exhausted. M10 delivered the **customer-facing surface over the M9 pipeline**: vulnerability triage + downloadable PDF/JSON/SARIF reports + compliance posture + worker-fleet health.
+
+**⇒ M10 complete — no further M10 trigger.** The next milestone is the subsequent roadmap item (a fresh planning entry, not begun).
+
+Cross-references: shieldscan-docs `93c16e9` + `74f0688` + `41ad3e6`; shieldscan-api `c9d483b` + `3d94c42`; shieldscan-engine `5fcc06a` (M10.C P5.A precedent) + `internal/worker/heartbeat.go` (M10.D signal source); SPEC §6 line 567 + §7 heartbeat contract.
+
+---
+
 ## 2026-07-31 — M10.C Sub-Milestone CLOSED cross-reference (Compliance Mapping; Task 10.5; third M10 sub-milestone; api-side milestone; no catalogue increment)
 
 **Engine-side note only — M10.C is api-only** (compliance mapping is entirely api-side: the `compliance_frameworks` → `compliance_controls` → `cwe_control_mappings` tables + the SOC2 / ISO 27001:2013 seed + `services/compliance/mapper.py` + `routes/compliance.py`; these are **GLOBAL reference data** per SPEC line 345, *not* tenant-scoped; posture is computed api-side from `Vulnerability.cwe_id`). The engine emits raw findings upstream and never touches compliance. Logged here to preserve the api+engine DRIFT-LOG sync convention per the M8.1β.2 V-CC reconciliation precedent.
