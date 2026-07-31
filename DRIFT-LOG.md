@@ -8,6 +8,20 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-07-31 — M10.C Sub-Milestone CLOSED cross-reference (Compliance Mapping; Task 10.5; third M10 sub-milestone; api-side milestone; no catalogue increment)
+
+**Engine-side note only — M10.C is api-only** (compliance mapping is entirely api-side: the `compliance_frameworks` → `compliance_controls` → `cwe_control_mappings` tables + the SOC2 / ISO 27001:2013 seed + `services/compliance/mapper.py` + `routes/compliance.py`; these are **GLOBAL reference data** per SPEC line 345, *not* tenant-scoped; posture is computed api-side from `Vulnerability.cwe_id`). The engine emits raw findings upstream and never touches compliance. Logged here to preserve the api+engine DRIFT-LOG sync convention per the M8.1β.2 V-CC reconciliation precedent.
+
+**M10.C Sub-Milestone CLOSED with zero catalogue increments** — surfaced at the api DRIFT-LOG M10.C closure entry (`08aa94a`). Chain (all γ; **no C0** — data-model + seed over existing patterns, though carrying a first-of-kind seed migration `a7c3e9f04b21`): Stage 1 `bee52c6` + C1 `edea03a` + C2 `40b8243` + P5.A `10b4502` + `08aa94a` + this. Delivered: compliance mapping reachable end-to-end (scan findings → CWE → control → three-state posture `pass`/`fail`/`not_assessed`, per-scan × framework + org-wide worst-state aggregate); the `not_assessed` state never overclaims compliance on controls a vuln scan cannot assess. Suite 828, ZERO regressions.
+
+**Counters preserved.** Cumulative session-tail framing-drift count: **66** (M10.C at 0 catalogued drifts; 12-instance averted-prediction lineage — the create_all-vs-migration seed-split refinement in-class; 3-instance test-gate-within-lock **NOT** incremented — C1/C2 authoring iterations were malformed-query fixes, product source untouched; **Drift #66** M9.A C1 ORM-vs-DB remains the latest catalogue entry).
+
+**M10 progress: 3 of 4 sub-milestones closed** (M10.A ✅ + M10.B ✅ + M10.C ✅; only **M10.D Tool Health** remaining). ⇒ Next per DQ5: *"Begin M10.D — Tool Health"* (Task 10.6; minimal shape per DQ4 — the **FINAL** M10 sub-milestone, closes M10 entirely).
+
+Cross-references: shieldscan-docs `10b4502` + `bee52c6` + `41ad3e6`; shieldscan-api `08aa94a` + `40b8243` + `edea03a`; shieldscan-engine `7941df6` (M10.B P5.A precedent); SPEC §DB + §6 compliance endpoints + line 345 global-data.
+
+---
+
 ## 2026-07-26 — M10.B Sub-Milestone CLOSED cross-reference (Report Generation + Delivery; Tasks 10.2/10.3/10.4; second M10 sub-milestone; api-side milestone; no catalogue increment)
 
 **Engine-side note only — M10.B is api-only** (the report pipeline is entirely api-side: `reports` table + the `ReportContext` assembler + JSON/SARIF/PDF generators + `routes/reports.py`; `Report` rows are api-written per ADR-013 sole-writer; the engine emits raw findings upstream and never reads or writes reports). Logged here to preserve the api+engine DRIFT-LOG sync convention per the M8.1β.2 V-CC reconciliation precedent.
