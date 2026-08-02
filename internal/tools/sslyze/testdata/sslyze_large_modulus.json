@@ -1,0 +1,52 @@
+{
+  "sslyze_version": "6.1.0",
+  "_synthetic": "large RSA-2048 modulus regression fixture (float64-overflow guard); heartbleed synthesized",
+  "invalid_server_strings": [],
+  "server_scan_results": [
+    {
+      "uuid": "00000000-0000-0000-0000-000000000009",
+      "server_location": {
+        "hostname": "cert.example.com",
+        "port": 443,
+        "ip_address": "192.0.2.99"
+      },
+      "scan_status": "COMPLETED",
+      "connectivity_status": "COMPLETED",
+      "scan_result": {
+        "heartbleed": {
+          "status": "COMPLETED",
+          "result": {
+            "is_vulnerable_to_heartbleed": true
+          }
+        },
+        "certificate_info": {
+          "status": "COMPLETED",
+          "result": {
+            "hostname_used_for_server_name_indication": "cert.example.com",
+            "certificate_deployments": [
+              {
+                "received_certificate_chain": [
+                  {
+                    "subject": {
+                      "rfc4514_string": "CN=cert.example.com"
+                    },
+                    "public_key": {
+                      "algorithm": "RSA",
+                      "key_size": 2048,
+                      "rsa_e": 65537,
+                      "rsa_n": 21544670714207338200476584459113301306962735113143656021420230285016436759245260595464800941015275642459145307281265346329413039433660614063392101590965522080420584911533997394500131833593101404530705092256045045517861479095079837441225396225650780313721097234690870028591717261027377205738368266082620257014609555593112228280456649857709712996570784023550881372051870439554017461805640209433505728576118077817295735812307904905065567434867763936269131742155524820818083789807213473150104734484620882313119028387104465290030664845568665758810350110926291557029068090288819736430212319069968098795703902407373064153771
+                    },
+                    "serial_number": 305441741049081234567890123456789012345
+                  }
+                ],
+                "leaf_certificate_subject_matches_hostname": true,
+                "verified_chain_has_sha1_signature": false,
+                "received_chain_has_valid_order": true
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

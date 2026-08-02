@@ -1,6 +1,7 @@
 package sslyze
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -52,8 +53,18 @@ func parseOutput(log zerolog.Logger) func([]byte) ([]events.RawFinding, error) {
 			return findings, nil
 		}
 
+		// UseNumber so JSON numbers decode as json.Number (string-backed)
+		// rather than float64. SSLyze embeds the server's RSA public-key
+		// modulus as a JSON integer (600+ digits for a 2048-bit key); the
+		// default float64 decode overflows on it ("cannot unmarshal number
+		// ... into Go value of type float64") and fails the WHOLE parse,
+		// even though the parser never reads the modulus. json.Number holds
+		// it losslessly; the small numbers the parser does read (e.g. port)
+		// resolve via jsonx.ExtractFloat, which handles json.Number.
+		dec := json.NewDecoder(bytes.NewReader(stdout))
+		dec.UseNumber()
 		var doc map[string]any
-		if err := json.Unmarshal(stdout, &doc); err != nil {
+		if err := dec.Decode(&doc); err != nil {
 			return nil, fmt.Errorf("sslyze: parse JSON: %w", err)
 		}
 

@@ -27,6 +27,8 @@
 // driven by genuine new-tool needs, not speculation.
 package jsonx
 
+import "encoding/json"
+
 // ExtractString walks m[key] expecting a string. Returns "" on:
 //   - nil map
 //   - missing key
@@ -100,9 +102,14 @@ func ExtractStringSlice(m map[string]any, key string) []string {
 // ExtractFloat walks m[key] expecting a number. Returns 0 on nil
 // map / missing key / type mismatch.
 //
-// JSON numbers decode as float64 via the stdlib's `json.Unmarshal`
-// into `any` — this helper relies on that contract. Callers needing
-// integer values cast the returned float64 (e.g., `int(...)`).
+// Handles both number shapes that a JSON decode into `any` can produce:
+//   - float64, from the default `json.Unmarshal` (most parsers).
+//   - json.Number, from a decoder configured with `UseNumber()` — the
+//     SSLyze parser uses this so a 600+-digit RSA modulus elsewhere in
+//     the document does not overflow float64 during the eager
+//     full-document decode. json.Number preserves such values as
+//     strings; this helper still resolves the small numbers it reads
+//     (e.g. port) via Float64(). Callers needing integers cast (int(...)).
 func ExtractFloat(m map[string]any, key string) float64 {
 	if m == nil {
 		return 0
@@ -111,7 +118,11 @@ func ExtractFloat(m map[string]any, key string) float64 {
 	if !ok {
 		return 0
 	}
-	if f, ok := v.(float64); ok {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case json.Number:
+		f, _ := n.Float64()
 		return f
 	}
 	return 0

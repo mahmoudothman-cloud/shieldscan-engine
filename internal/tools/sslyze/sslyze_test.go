@@ -151,6 +151,33 @@ func TestParseOutput_WeakMultiFindings(t *testing.T) {
 	}
 }
 
+// TestParseOutput_LargeRSAModulusNoOverflow is the regression guard for
+// the float64-overflow bug found on live bring-up: SSLyze embeds the
+// server's RSA-2048 public-key modulus as a ~617-digit JSON integer,
+// which overflowed float64 under the default json.Unmarshal and failed
+// the WHOLE parse ("cannot unmarshal number ... into Go value of type
+// float64") even though the parser never reads the modulus. The parser
+// now decodes with UseNumber. This also asserts port (a JSON number)
+// still extracts under UseNumber via jsonx.ExtractFloat's json.Number
+// branch — the heartbleed finding's TargetURL carries ":443".
+func TestParseOutput_LargeRSAModulusNoOverflow(t *testing.T) {
+	raw := readFixture(t, "sslyze_large_modulus.json")
+	findings, err := parseOutput(noopLog())(raw)
+	require.NoError(t, err,
+		"a 617-digit RSA modulus MUST NOT overflow the parse (UseNumber)")
+	require.NotEmpty(t, findings, "heartbleed finding synthesized from the COMPLETED server")
+
+	var found bool
+	for _, f := range findings {
+		if f.FindingType == "ssl-heartbleed" {
+			found = true
+			assert.Equal(t, "cert.example.com:443", f.TargetURL,
+				"port (a JSON number) still extracts under UseNumber")
+		}
+	}
+	assert.True(t, found, "heartbleed finding present despite the large modulus in the same doc")
+}
+
 func TestParseOutput_Empty(t *testing.T) {
 	raw := readFixture(t, "sslyze_empty.json")
 	findings, err := parseOutput(noopLog())(raw)
