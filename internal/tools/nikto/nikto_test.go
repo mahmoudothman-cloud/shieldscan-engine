@@ -28,6 +28,33 @@ func fixturePath(t *testing.T, name string) string {
 func noopLog() zerolog.Logger { return zerolog.New(nil).Level(zerolog.Disabled) }
 func testConfig() Config      { return Config{BinaryPath: "/bin/echo"} }
 
+// mockNiktoScript writes a mock nikto that honors -o: it locates the -o
+// value in its args and writes valid nikto XML to THAT path (like real
+// nikto's XML plugin). If -o is empty (the placeholder was never
+// substituted), it emits nikto's real failure and exits 2.
+func mockNiktoScript(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "nikto-mock.sh")
+	body := `#!/bin/sh
+out=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$a"; fi
+  prev="$a"
+done
+if [ -z "$out" ] || [ "$out" = "{{outputFile}}" ]; then
+  echo "Unable to open '' for write at nikto_report_xml.plugin line 60" >&2
+  exit 2
+fi
+cat > "$out" <<'XML'
+<niktoscan><scandetails sitename="https://example.com:443"><item id="999976"><description>Missing X-Frame-Options header</description><uri>/</uri></item></scandetails></niktoscan>
+XML
+`
+	require.NoError(t, os.WriteFile(p, []byte(body), 0o755))
+	return p
+}
+
 // ─── Construction (3) ────────────────────────────────────────────────
 
 func TestNewNiktoRunner_IdentityFields(t *testing.T) {
@@ -187,6 +214,31 @@ func TestParseOutput_MissingFieldsSkipped(t *testing.T) {
 		assert.NotEmpty(t, f.FindingType)
 		assert.NotEmpty(t, f.Description)
 	}
+}
+
+// ─── OutputFile substitution end-to-end (1) ──────────────────────────
+
+// TestNiktoRunner_OutputFilePlaceholderSubstituted is the end-to-end
+// regression guard for the live full_web finding (nikto -o ”). It drives
+// the REAL NewNiktoRunner().Run() with a mock nikto that writes XML only
+// to its -o path. It passes only if the runner substitutes {{outputFile}}
+// for a real tempfile — i.e. OutputFile=true AND OutputFilePlaceholder
+// equals the -o value buildArgs emits. If the placeholder were left
+// literal (the reported bug), the mock exits 2 with nikto's real
+// "open ” for write" message and Run errors. Unlike the parser tests
+// (which bypass Run), this exercises the exact path that failed live.
+func TestNiktoRunner_OutputFilePlaceholderSubstituted(t *testing.T) {
+	r := NewNiktoRunner(Config{BinaryPath: mockNiktoScript(t)}, noopLog())
+	findings, err := r.Run(
+		t.Context(),
+		tools.Target{URL: "https://example.com"},
+		tools.ScanConfig{},
+	)
+	require.NoError(t, err,
+		"Run must succeed: -o {{outputFile}} must be substituted to a real tempfile path")
+	require.Len(t, findings, 1,
+		"the finding proves the mock wrote to the substituted -o path and ParseOutputFile read it")
+	assert.Equal(t, "nikto-999976", findings[0].FindingType)
 }
 
 // ─── deriveTargetHostport helper (1) ─────────────────────────────────
