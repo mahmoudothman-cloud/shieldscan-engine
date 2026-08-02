@@ -25,13 +25,6 @@ func fixturePath(t *testing.T, name string) string {
 	return filepath.Join("testdata", name)
 }
 
-func readFixture(t *testing.T, name string) []byte {
-	t.Helper()
-	data, err := os.ReadFile(fixturePath(t, name))
-	require.NoError(t, err)
-	return data
-}
-
 func noopLog() zerolog.Logger { return zerolog.New(nil).Level(zerolog.Disabled) }
 func testConfig() Config      { return Config{BinaryPath: "/bin/echo"} }
 
@@ -50,8 +43,10 @@ func TestNewNiktoRunner_DefaultsApplied(t *testing.T) {
 	assert.Equal(t, 15*time.Minute, r.Timeout)
 	assert.False(t, r.ExitCodeLenient, "naturally-clean: Nikto exits 0 even with findings")
 	assert.Nil(t, r.Env, "Perl tool; no Python warnings to suppress")
-	assert.False(t, r.OutputFile, "stdout-mode (XML to stdout via -Format xml)")
-	assert.NotNil(t, r.ParseOutput)
+	assert.True(t, r.OutputFile,
+		"OutputFile mode: Nikto's XML plugin requires -o, it does not stream to stdout")
+	assert.Equal(t, "{{outputFile}}", r.OutputFilePlaceholder)
+	assert.NotNil(t, r.ParseOutputFile)
 }
 
 // TestNewNiktoRunner_ConstantsExported regression-guards Pattern 4
@@ -72,11 +67,33 @@ func TestBuildArgs_HasAllRequiredFlags(t *testing.T) {
 	for _, want := range []string{
 		"-h",
 		"-Format", "xml",
+		"-o", "{{outputFile}}",
 		"-ask", "no",
 		"-nointeractive",
 	} {
 		assert.Contains(t, joined, want, "missing required flag/arg %q", want)
 	}
+}
+
+// TestBuildArgs_HasNonEmptyOutputPath is the regression guard for the
+// live full_web finding: `-Format xml` WITHOUT `-o` made Nikto open an
+// empty filename ("Unable to open ” for write") and exit 2. buildArgs
+// MUST pass a non-empty output-path argument immediately after -o.
+func TestBuildArgs_HasNonEmptyOutputPath(t *testing.T) {
+	args := buildArgs(testConfig())(
+		tools.Target{URL: "https://app.example.com"},
+		tools.ScanConfig{},
+	)
+	var oValue string
+	for i, a := range args {
+		if a == "-o" && i+1 < len(args) {
+			oValue = args[i+1]
+			break
+		}
+	}
+	require.NotEmpty(t, oValue, "-o must be present with a non-empty output path")
+	assert.Equal(t, "{{outputFile}}", oValue,
+		"-o must carry the ADR-023 OutputFile placeholder NativeRunner substitutes")
 }
 
 // TestBuildArgs_NoTextFormat is the regression guard for the
@@ -105,7 +122,7 @@ func TestBuildArgs_TargetIsHostport(t *testing.T) {
 // ─── ParseOutput (5) ─────────────────────────────────────────────────
 
 func TestParseOutput_BasicSingleFinding(t *testing.T) {
-	findings, err := parseOutput(noopLog())(readFixture(t, "nikto_basic.xml"))
+	findings, err := parseOutputFile(noopLog())(fixturePath(t, "nikto_basic.xml"))
 	require.NoError(t, err)
 	require.Len(t, findings, 1)
 
@@ -119,7 +136,7 @@ func TestParseOutput_BasicSingleFinding(t *testing.T) {
 }
 
 func TestParseOutput_MultiFindings(t *testing.T) {
-	findings, err := parseOutput(noopLog())(readFixture(t, "nikto_multi.xml"))
+	findings, err := parseOutputFile(noopLog())(fixturePath(t, "nikto_multi.xml"))
 	require.NoError(t, err)
 	require.Len(t, findings, 5)
 
@@ -141,7 +158,7 @@ func TestParseOutput_MultiFindings(t *testing.T) {
 }
 
 func TestParseOutput_Empty(t *testing.T) {
-	findings, err := parseOutput(noopLog())(readFixture(t, "nikto_empty.xml"))
+	findings, err := parseOutputFile(noopLog())(fixturePath(t, "nikto_empty.xml"))
 	require.NoError(t, err)
 	assert.Empty(t, findings)
 }
@@ -149,8 +166,10 @@ func TestParseOutput_Empty(t *testing.T) {
 // TestParseOutput_MalformedXMLFatal: top-level malformed XML IS
 // fatal. Matches single-doc parser convention from 6.2/6.5/6.7.
 func TestParseOutput_MalformedXMLFatal(t *testing.T) {
-	garbage := []byte(`<niktoscan><scandetails><item id="X"`)
-	_, err := parseOutput(noopLog())(garbage)
+	tmp := filepath.Join(t.TempDir(), "malformed.xml")
+	require.NoError(t,
+		os.WriteFile(tmp, []byte(`<niktoscan><scandetails><item id="X"`), 0o644))
+	_, err := parseOutputFile(noopLog())(tmp)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nikto")
 }
@@ -159,7 +178,7 @@ func TestParseOutput_MalformedXMLFatal(t *testing.T) {
 // empty `description` are skipped with WARN; valid items flow.
 // Fixture has 4 items; expect 2 surviving findings.
 func TestParseOutput_MissingFieldsSkipped(t *testing.T) {
-	findings, err := parseOutput(noopLog())(readFixture(t, "nikto_missing_fields.xml"))
+	findings, err := parseOutputFile(noopLog())(fixturePath(t, "nikto_missing_fields.xml"))
 	require.NoError(t, err)
 	require.Len(t, findings, 2,
 		"4 items: 2 valid + missing-id + empty-description = 2 surviving")

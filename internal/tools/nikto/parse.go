@@ -3,6 +3,7 @@ package nikto
 import (
 	"encoding/xml"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/odyssey/shieldscan-engine/internal/events"
@@ -39,11 +40,15 @@ type niktoItem struct {
 	URI         string `xml:"uri"`
 }
 
-// parseOutput returns a closure satisfying NativeRunner.ParseOutput.
+// parseOutputFile returns a closure satisfying NativeRunner.ParseOutputFile
+// (ADR-023 OutputFile mode).
 //
-// Nikto 2.1.5+ XML format. Stable across 2.x. Stdout-mode (Nikto
-// emits XML to stdout when -Format xml without -o flag). Verified at
-// M6.6 pre-prep.
+// Nikto 2.1.5+ XML format. Stable across 2.x. File-output mode: Nikto's
+// XML report plugin (nikto_report_xml.plugin) writes to the -o path and
+// does NOT stream to stdout — `-Format xml` without `-o` makes it open an
+// empty filename and die ("Unable to open ” for write"). NativeRunner
+// mints the tempfile, substitutes it for the -o placeholder, and hands
+// this closure the populated path.
 //
 // Per-item field map (Nikto → RawFinding):
 //
@@ -64,15 +69,19 @@ type niktoItem struct {
 //   - ToolName ("nikto"), EngineCategory ("infrastructure")
 //   - DiscoveredAt (RFC3339)
 //   - Fingerprint (via tools.ComputeFingerprint)
-func parseOutput(log zerolog.Logger) func([]byte) ([]events.RawFinding, error) {
-	return func(stdout []byte) ([]events.RawFinding, error) {
+func parseOutputFile(log zerolog.Logger) func(string) ([]events.RawFinding, error) {
+	return func(outputFilePath string) ([]events.RawFinding, error) {
 		findings := []events.RawFinding{}
-		if len(stdout) == 0 {
+		data, err := os.ReadFile(outputFilePath) //nolint:gosec // G304: NativeRunner-minted tempfile
+		if err != nil {
+			return nil, fmt.Errorf("nikto: read output file: %w", err)
+		}
+		if len(data) == 0 {
 			return findings, nil
 		}
 
 		var doc niktoScan
-		if err := xml.Unmarshal(stdout, &doc); err != nil {
+		if err := xml.Unmarshal(data, &doc); err != nil {
 			return nil, fmt.Errorf("nikto: parse XML: %w", err)
 		}
 

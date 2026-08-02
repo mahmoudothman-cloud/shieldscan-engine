@@ -2,8 +2,9 @@
 //
 // Nikto (https://github.com/sullo/nikto) is a Perl-based web-server
 // security auditor invoked as a subprocess via tools.NativeRunner.
-// This package supplies the BuildArgs + ParseOutput closures that
-// adapt Nikto's `-Format xml` output to events.RawFinding.
+// This package supplies the BuildArgs + ParseOutputFile closures that
+// adapt Nikto's `-Format xml` file output to events.RawFinding
+// (ADR-023 OutputFile mode — Nikto's XML plugin requires -o).
 //
 // First-instance patterns at M6.6:
 //
@@ -67,6 +68,10 @@ type Config struct {
 
 const niktoTimeout = 15 * time.Minute // Nikto runs ~6500 checks; can be slow
 
+// outputFilePlaceholder matches the Wapiti / Dep-Check convention
+// (ADR-023 OutputFile mode).
+const outputFilePlaceholder = "{{outputFile}}"
+
 // NewNiktoRunner constructs a *tools.NativeRunner wired for Nikto.
 //
 // Construction defaults pinned (regression-guarded by
@@ -76,41 +81,45 @@ const niktoTimeout = 15 * time.Minute // Nikto runs ~6500 checks; can be slow
 //   - MaxStdoutBytes=tools.DefaultMaxStdoutBytes (50 MiB)
 //   - ExitCodeLenient=false (naturally-clean; 4th instance)
 //   - Env=nil (Perl tool; no Python warnings)
-//   - OutputFile=false (XML to stdout via -Format xml)
+//   - OutputFile=true (ADR-023; Nikto's XML plugin REQUIRES -o, it does
+//     not stream XML to stdout — see buildArgs)
+//   - OutputFilePlaceholder="{{outputFile}}"; ParseOutputFile set
 func NewNiktoRunner(cfg Config, log zerolog.Logger) *tools.NativeRunner {
 	return &tools.NativeRunner{
-		ToolName:        "nikto",
-		ToolCategory:    "infrastructure",
-		BinaryPath:      cfg.BinaryPath,
-		Timeout:         niktoTimeout,
-		MaxStdoutBytes:  tools.DefaultMaxStdoutBytes,
-		ExitCodeLenient: false,
-		Env:             nil,
-		BuildArgs:       buildArgs(cfg),
-		ParseOutput:     parseOutput(log),
+		ToolName:              "nikto",
+		ToolCategory:          "infrastructure",
+		BinaryPath:            cfg.BinaryPath,
+		Timeout:               niktoTimeout,
+		MaxStdoutBytes:        tools.DefaultMaxStdoutBytes,
+		ExitCodeLenient:       false,
+		Env:                   nil,
+		OutputFile:            true,
+		OutputFilePlaceholder: outputFilePlaceholder,
+		BuildArgs:             buildArgs(cfg),
+		ParseOutputFile:       parseOutputFile(log),
 	}
 }
 
 // buildArgs returns a closure constructing the Nikto command line.
 //
-// Invocation (replaces TOOL-ARCH §6.7 stale `-Format txt` literal at
-// M6.6 docs commit):
+// Invocation:
 //
-//	nikto -h <hostname:port> -Format xml -ask no -nointeractive
+//	nikto -h <hostname:port> -Format xml -o {{outputFile}} -ask no -nointeractive
 //
 // Per-flag rationale:
 //   - -h <target>: target hostname (with port). Derived from
 //     target.URL via deriveTargetHostport (similar to 6.4 SSLyze).
-//   - -Format xml: XML output to stdout. Stable across Nikto 2.1.5
-//     and 2.5.0; verified at M6.6 pre-prep. NOT -Format txt
-//     (deprecated parser shape; XML is structured + reliable).
+//   - -Format xml: XML output. Stable across Nikto 2.1.5 and 2.5.0.
+//     NOT -Format txt (deprecated parser shape; XML is structured).
+//   - -o {{outputFile}}: ADR-023 OutputFile placeholder. REQUIRED —
+//     Nikto's XML report plugin (nikto_report_xml.plugin) writes to a
+//     file and does NOT stream to stdout; `-Format xml` WITHOUT `-o`
+//     makes it open an empty filename and exit 2 with
+//     "Unable to open ” for write" (found on live full_web bring-up).
+//     The M6.6 "XML to stdout" assumption was wrong; corrected to
+//     OutputFile mode (3rd ADR-023 consumer, after Dep-Check + Wapiti).
 //   - -ask no: never prompt for user input (CI safety).
 //   - -nointeractive: no terminal interaction.
-//
-// No -o/-output flag — XML goes to stdout; NativeRunner stdout-mode
-// captures it. If Nikto corrupts stdout in a future version (Wapiti
-// precedent), fall back to OutputFile mode (3rd ADR-023 consumer
-// candidate).
 //
 // ScanConfig.Depth ignored at 6.6 (no Nikto knob with that semantic).
 // Auth: N/A (Nikto operates on HTTP-handshake-level probes).
@@ -119,6 +128,7 @@ func buildArgs(_ Config) func(tools.Target, tools.ScanConfig) []string {
 		return []string{
 			"-h", deriveTargetHostport(target.URL),
 			"-Format", "xml",
+			"-o", outputFilePlaceholder,
 			"-ask", "no",
 			"-nointeractive",
 		}
