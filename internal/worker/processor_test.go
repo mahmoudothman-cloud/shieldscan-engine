@@ -195,6 +195,10 @@ func TestProcessor_HappyPath(t *testing.T) {
 	assert.Equal(t, events.EventJobCompleted, ev.EventType)
 	assert.Equal(t, "completed", ev.Status)
 	assert.Equal(t, "scn_happy", ev.ScanID)
+	assert.Equal(t, "org_test", ev.OrganizationID,
+		"organization_id MUST be threaded onto the completion event — the api "+
+			"completions_consumer SETs app.current_org_id (RLS GUC) from it and "+
+			"KeyErrors if absent, blocking all persistence")
 	assert.Equal(t, 1, ev.FindingCount)
 	assert.Equal(t, events.EventSeq{Index: 1, Total: 1}, ev.EventSeq)
 	require.Len(t, ev.Findings, 1)

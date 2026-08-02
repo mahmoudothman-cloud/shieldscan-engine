@@ -181,6 +181,7 @@ type JobCompletedEvent struct {
 	EventType      EventType    `json:"event_type"` // job_completed | partial_findings
 	JobID          string       `json:"job_id"`
 	ScanID         string       `json:"scan_id"`
+	OrganizationID string       `json:"organization_id"` // REQUIRED: api completions_consumer SETs app.current_org_id from this (RLS GUC); KeyErrors if absent
 	Engine         string       `json:"engine"`
 	Status         string       `json:"status"` // completed | partial | partial_findings | failed | canceled
 	FindingCount   int          `json:"finding_count,omitempty"`
