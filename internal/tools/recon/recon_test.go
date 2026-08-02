@@ -58,19 +58,64 @@ func TestRunRecon_HappyPath(t *testing.T) {
 	assert.Len(t, res.LiveHosts, 2)
 }
 
-// TestRunRecon_SubfinderFailureReturnsEmpty: subfinder fails; recon
-// returns empty ReconResult (NOT nil), nil error. Failure-tolerance
-// is plan-literal-mandated.
-func TestRunRecon_SubfinderFailureReturnsEmpty(t *testing.T) {
+// TestRunRecon_SubfinderFailureStillProbesTarget: subfinder fails, but
+// recon STILL probes the scan target host via httpx (single-host-scan
+// fix — subfinder failure is no longer an early return before httpx).
+// Failure-tolerance is preserved (nil error); the target is probed
+// regardless. Subdomains empty (the target is not a "discovered"
+// subdomain).
+func TestRunRecon_SubfinderFailureStillProbesTarget(t *testing.T) {
 	failMock := shScript(t, `exit 1`)
+	httpxMock := shScript(t,
+		`echo '{"url":"https://example.com","status_code":200,"failed":false}'`)
 	t.Setenv("SHIELDSCAN_SUBFINDER_BINARY", failMock)
-	t.Setenv("SHIELDSCAN_HTTPX_BINARY", "/bin/echo") // not invoked
+	t.Setenv("SHIELDSCAN_HTTPX_BINARY", httpxMock)
 
-	res, err := RunRecon(t.Context(), "example.com", 100, nil, nil, "", "", noopLog())
+	res, err := RunRecon(t.Context(), "https://example.com", 100, nil, nil, "", "", noopLog())
 	require.NoError(t, err, "subfinder failure MUST NOT propagate error to caller")
 	require.NotNil(t, res)
-	assert.Empty(t, res.Subdomains)
-	assert.Empty(t, res.LiveHosts)
+	assert.Empty(t, res.Subdomains, "no subdomains discovered")
+	assert.Len(t, res.LiveHosts, 1, "target host still probed despite subfinder failure")
+}
+
+// TestRunRecon_ZeroSubdomainsStillProbesTarget is the regression guard
+// for the single-host-scan bug: Subfinder succeeds but finds ZERO
+// subdomains (the normal case for a host not in any public dataset).
+// Recon must STILL probe the target host via httpx and yield >=1 live
+// host. Previously it early-returned before httpx ("no_subdomains") so
+// phase-2 engine dispatch got an empty target list and scanned nothing.
+func TestRunRecon_ZeroSubdomainsStillProbesTarget(t *testing.T) {
+	emptySubMock := shScript(t, `exit 0`) // succeeds, emits no subdomains
+	httpxMock := shScript(t,
+		`echo '{"url":"https://shieldscan.odyssey-eg.com","status_code":200,"title":"Juice Shop","failed":false}'`)
+	t.Setenv("SHIELDSCAN_SUBFINDER_BINARY", emptySubMock)
+	t.Setenv("SHIELDSCAN_HTTPX_BINARY", httpxMock)
+
+	// domain is the full target_url the API passes (live-scan evidence).
+	res, err := RunRecon(t.Context(), "https://shieldscan.odyssey-eg.com", 100, nil, nil, "", "", noopLog())
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Empty(t, res.Subdomains, "subfinder found no subdomains")
+	assert.Len(t, res.LiveHosts, 1, "target host probed even with zero subdomains")
+	assert.Equal(t, "https://shieldscan.odyssey-eg.com", res.LiveHosts[0].URL)
+}
+
+// TestProbeSet covers target-host extraction + dedup: the API passes a
+// URL; the target is normalized to a bare host, placed first, and
+// deduped against subdomains case-insensitively.
+func TestProbeSet(t *testing.T) {
+	got := probeSet(
+		"https://shieldscan.odyssey-eg.com",
+		[]string{"api.odyssey-eg.com", "SHIELDSCAN.odyssey-eg.com"},
+	)
+	assert.Equal(t,
+		[]string{"shieldscan.odyssey-eg.com", "api.odyssey-eg.com"},
+		got,
+		"target host first (bare, from URL); case-insensitive duplicate subdomain dropped")
+
+	assert.Equal(t, []string{"example.com"}, probeSet("example.com", nil),
+		"bare-host target, no subdomains → just the target")
+	assert.Empty(t, probeSet("", nil), "empty target + no subs → empty probe set")
 }
 
 // TestRunRecon_HttpxFailureReturnsSubdomains: subfinder succeeds;

@@ -27,8 +27,10 @@ package recon
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/odyssey/shieldscan-engine/internal/events"
@@ -103,8 +105,19 @@ type LiveHost struct {
 // both for RLS GUC SET + scan FK). Drift #58 Layer A root-cause
 // repair callsite.
 //
+// Target-always-probed (single-host-scan fix): the scan target host
+// is, by definition, a host to scan, so it is ALWAYS seeded into the
+// httpx probe set independent of Subfinder's result. Subdomains are
+// additive. This prevents the single-host case (a target with no
+// publicly-discoverable subdomains — e.g. a freshly-created subdomain)
+// from probing nothing: previously RunRecon early-returned before httpx
+// when Subfinder found 0 subdomains, so phase-2 engine dispatch got an
+// empty target list and the scan scanned nothing.
+//
 // Failure-tolerant by design (per plan §6.3 literal):
-//   - Subfinder failure → log WARN + return empty ReconResult, nil
+//   - Subfinder failure (non-ctx) → log WARN + STILL probe the target
+//     host via httpx (subdomains treated as empty; not an early return)
+//   - ctx cancellation → return quickly (no point probing a dead ctx)
 //   - httpx failure → log WARN + return ReconResult{Subdomains: subs}, nil
 //   - Errors are NEVER propagated to the caller; partial data is
 //     the useful state for M8's routing decisions.
@@ -114,11 +127,12 @@ type LiveHost struct {
 //  1. EventReconStarted   — at entry
 //  2. EventSubdomainsDiscovered — after Subfinder (count + subdomains)
 //  3. EventLivenessProbed — after httpx (live count)
-//  4. EventReconCompleted — at exit (status: ok / subfinder_failed /
-//     httpx_failed / no_subdomains)
+//  4. EventReconCompleted — at exit (status: ok / httpx_failed /
+//     canceled)
 //
-// Step 3 is skipped on subfinder failure / no subdomains. Step 4
-// always fires.
+// Step 3 is skipped only on ctx cancellation / httpx failure. Step 4
+// always fires. httpx now runs for every real scan (the target is
+// always present), so the old "no_subdomains" early-exit is gone.
 func RunRecon(
 	ctx context.Context,
 	domain string,
@@ -139,13 +153,20 @@ func RunRecon(
 
 	subs, err := runSubfinder(ctx, domain, subfinderTimeout)
 	if err != nil {
-		log.Warn().Err(err).Str("domain", domain).Msg("subfinder failed")
-		publishIfNotNil(ctx, publisher, events.EventReconCompleted, events.ProgressEvent{
-			"subdomain_count": 0,
-			"live_count":      0,
-			"status":          "subfinder_failed",
-		})
-		return &ReconResult{}, nil
+		// ctx cancellation short-circuits the whole recon — no point
+		// probing a dead ctx (httpx would fail immediately anyway).
+		if ctx.Err() != nil {
+			publishIfNotNil(ctx, publisher, events.EventReconCompleted, events.ProgressEvent{
+				"subdomain_count": 0,
+				"live_count":      0,
+				"status":          "canceled",
+			})
+			return &ReconResult{}, nil
+		}
+		// Non-ctx subfinder failure is tolerated: log + continue with
+		// no subdomains. The target host is still probed below.
+		log.Warn().Err(err).Str("domain", domain).Msg("subfinder failed; still probing target host")
+		subs = nil
 	}
 
 	if len(subs) > limit {
@@ -157,18 +178,27 @@ func RunRecon(
 		"subdomains": subs,
 	})
 
-	if len(subs) == 0 {
+	// Always probe the scan target host itself, plus any discovered
+	// subdomains (deduped, target first). The target is by definition a
+	// host to scan, so httpx must probe it regardless of Subfinder's
+	// result — this is what makes single-host scans (zero discoverable
+	// subdomains) actually scan something, instead of the old
+	// early-return-before-httpx path.
+	probeTargets := probeSet(domain, subs)
+	if len(probeTargets) == 0 {
+		// Defensive: only reachable if the target host is unparseable
+		// AND Subfinder returned nothing. Nothing to probe.
 		publishIfNotNil(ctx, publisher, events.EventReconCompleted, events.ProgressEvent{
-			"subdomain_count": 0,
+			"subdomain_count": len(subs),
 			"live_count":      0,
-			"status":          "no_subdomains",
+			"status":          "no_targets",
 		})
 		return &ReconResult{Subdomains: subs}, nil
 	}
 
-	liveHosts, err := runHttpx(ctx, subs, httpxTimeout)
+	liveHosts, err := runHttpx(ctx, probeTargets, httpxTimeout)
 	if err != nil {
-		log.Warn().Err(err).Int("subdomain_count", len(subs)).Msg("httpx failed")
+		log.Warn().Err(err).Int("probe_count", len(probeTargets)).Msg("httpx failed")
 		publishIfNotNil(ctx, publisher, events.EventReconCompleted, events.ProgressEvent{
 			"subdomain_count": len(subs),
 			"live_count":      0,
@@ -194,6 +224,57 @@ func RunRecon(
 		"status":          "ok",
 	})
 	return &ReconResult{Subdomains: subs, LiveHosts: liveHosts}, nil
+}
+
+// targetHost extracts the bare host (host or host:port) from the scan
+// target. The API passes target_url — e.g.
+// "https://shieldscan.odyssey-eg.com" — so this strips the scheme and
+// any path. httpx accepts both URLs and bare hosts on stdin;
+// normalizing to a bare host keeps the probe set in the same shape as
+// Subfinder output, so dedup against discovered subdomains is
+// meaningful. Returns "" only for empty/whitespace input.
+func targetHost(domain string) string {
+	s := strings.TrimSpace(domain)
+	if s == "" {
+		return ""
+	}
+	if strings.Contains(s, "://") {
+		if u, err := url.Parse(s); err == nil && u.Host != "" {
+			return u.Host
+		}
+	}
+	// Bare host, possibly with a stray path — take the authority
+	// portion before the first '/'.
+	if i := strings.IndexByte(s, '/'); i >= 0 {
+		s = s[:i]
+	}
+	return s
+}
+
+// probeSet builds the httpx probe list: the scan target host first,
+// then the discovered subdomains, deduplicated case-insensitively. The
+// target is ALWAYS included (single-host-scan fix); subdomains are
+// additive. Empty/whitespace entries are dropped.
+func probeSet(domain string, subs []string) []string {
+	out := make([]string, 0, len(subs)+1)
+	seen := make(map[string]struct{}, len(subs)+1)
+	add := func(h string) {
+		h = strings.TrimSpace(h)
+		if h == "" {
+			return
+		}
+		key := strings.ToLower(h)
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, h)
+	}
+	add(targetHost(domain))
+	for _, s := range subs {
+		add(s)
+	}
+	return out
 }
 
 // publishAttackSurfaceIfReady builds an EventAttackSurface from the
