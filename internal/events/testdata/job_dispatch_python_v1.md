@@ -36,9 +36,11 @@ alongside v1 (deprecate v1 only after Python emit is fully migrated).
 - `auth` is optional but populated when authenticated scan.
 - `config` is open-ended (`map[string]any` Go-side); tool-specific
   fields like `template_categories` (Nuclei) are passed through.
-- `callback_channel` is a forward-pin Python sets to the per-scan
-  progress stream key — currently unused by Go side; Go derives the
-  key from `scan_id` directly.
+- `callback_stream` (renamed from the plan-literal `callback_channel`
+  to match the API producer; see shieldscan-api orchestrator.py) is a
+  forward-pin Python sets to the per-scan progress stream key —
+  currently unused by Go side; Go derives the key from `scan_id`
+  directly.
 
 ## Provenance
 

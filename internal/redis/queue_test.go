@@ -25,7 +25,7 @@ func TestJobConsumer_PopFromMiniredis(t *testing.T) {
 		"engine": "nuclei", "idempotency_key": "k1",
 		"target": {"url":"https://x.example.com","target_type":"web","domain_verified":true},
 		"auth": null, "config": {"depth":"quick"},
-		"mobile_config": null, "callback_channel": "shieldscan:progress:s1",
+		"mobile_config": null, "callback_stream": "shieldscan:progress:s1",
 		"created_at": "2026-04-18T14:30:00Z"
 	}`
 	require.NoError(t, client.LPush(t.Context(), "shieldscan:queue:high", payload).Err())
@@ -54,7 +54,7 @@ func TestJobConsumer_MultiPriorityDrainOrder(t *testing.T) {
 			"engine": "nuclei", "idempotency_key": "k",
 			"target": {"url":"https://x.example.com","target_type":"web","domain_verified":true},
 			"auth": null, "config": {}, "mobile_config": null,
-			"callback_channel": "c", "created_at": "t"
+			"callback_stream": "c", "created_at": "t"
 		}`
 	}
 
@@ -201,6 +201,6 @@ func TestJobConsumer_MatchesPythonWireFormat(t *testing.T) {
 	// Nullable mobile_config.
 	assert.Nil(t, job.MobileConfig)
 
-	assert.Equal(t, "shieldscan:progress:scn_x1y2z3", job.CallbackChannel)
+	assert.Equal(t, "shieldscan:progress:scn_x1y2z3", job.CallbackStream)
 	assert.Equal(t, "2026-04-18T14:30:00Z", job.CreatedAt)
 }

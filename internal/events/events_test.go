@@ -405,7 +405,7 @@ func TestDecodeJobDispatch_PythonFixture(t *testing.T) {
 	assert.Equal(t, "session=abc123; csrf=xyz789", job.Auth.Data)
 	assert.Equal(t, "standard", job.Config["depth"])
 	assert.Nil(t, job.MobileConfig)
-	assert.Equal(t, "shieldscan:progress:scn_x1y2z3", job.CallbackChannel)
+	assert.Equal(t, "shieldscan:progress:scn_x1y2z3", job.CallbackStream)
 	assert.Equal(t, "2026-04-18T14:30:00Z", job.CreatedAt)
 }
 
@@ -415,7 +415,7 @@ func TestDecodeJobDispatch_DisallowUnknownFields(t *testing.T) {
 	bad := []byte(`{"id":"j","scan_id":"s","organization_id":"o","engine":"n",
 		"idempotency_key":"k","target":{"url":"u","target_type":"web","domain_verified":true},
 		"auth":null,"config":{},"mobile_config":null,
-		"callback_channel":"c","created_at":"t",
+		"callback_stream":"c","created_at":"t",
 		"future_field_python_added":"surprise"}`)
 	_, err := DecodeJobDispatch(bad)
 	require.Error(t, err)

@@ -20,6 +20,6 @@
     "timeout_seconds": 1800
   },
   "mobile_config": null,
-  "callback_channel": "shieldscan:progress:scn_x1y2z3",
+  "callback_stream": "shieldscan:progress:scn_x1y2z3",
   "created_at": "2026-04-18T14:30:00Z"
 }

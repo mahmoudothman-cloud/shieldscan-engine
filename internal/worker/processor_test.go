@@ -140,9 +140,9 @@ func makeJob(engine, scanID, idemKey string) *events.JobDispatch {
 			TargetType:     "web",
 			DomainVerified: true,
 		},
-		Config:          map[string]any{"depth": "quick"},
-		CallbackChannel: "shieldscan:progress:" + scanID,
-		CreatedAt:       "2026-04-18T14:30:00Z",
+		Config:         map[string]any{"depth": "quick"},
+		CallbackStream: "shieldscan:progress:" + scanID,
+		CreatedAt:      "2026-04-18T14:30:00Z",
 	}
 }
 

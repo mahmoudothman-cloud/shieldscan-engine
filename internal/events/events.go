@@ -239,17 +239,17 @@ type CancelEvent struct {
 // — any new top-level field on the Python side requires a
 // corresponding addition here.
 type JobDispatch struct {
-	ID              string           `json:"id"`
-	ScanID          string           `json:"scan_id"`
-	OrganizationID  string           `json:"organization_id"`
-	Engine          string           `json:"engine"`
-	IdempotencyKey  string           `json:"idempotency_key"`
-	Target          JobTarget        `json:"target"`
-	Auth            *JobAuth         `json:"auth"`
-	Config          map[string]any   `json:"config"`
-	MobileConfig    *JobMobileConfig `json:"mobile_config"`
-	CallbackChannel string           `json:"callback_channel"`
-	CreatedAt       string           `json:"created_at"`
+	ID             string           `json:"id"`
+	ScanID         string           `json:"scan_id"`
+	OrganizationID string           `json:"organization_id"`
+	Engine         string           `json:"engine"`
+	IdempotencyKey string           `json:"idempotency_key"`
+	Target         JobTarget        `json:"target"`
+	Auth           *JobAuth         `json:"auth"`
+	Config         map[string]any   `json:"config"`
+	MobileConfig   *JobMobileConfig `json:"mobile_config"`
+	CallbackStream string           `json:"callback_stream"`
+	CreatedAt      string           `json:"created_at"`
 }
 
 // JobTarget is the embedded target object inside JobDispatch.
@@ -425,9 +425,9 @@ type EventAttackSurface struct {
 // urlparse(...).hostname per SPEC §7.6).
 type SubdomainRow struct {
 	URL          string   `json:"url"`
-	Status       string   `json:"status"`                  // "live" / "dead" / "timeout"
-	StatusCode   int      `json:"status_code,omitempty"`   // omit for dead/timeout
-	TechStack    []string `json:"tech_stack,omitempty"`    // empty/null for unfingerprinted
+	Status       string   `json:"status"`                   // "live" / "dead" / "timeout"
+	StatusCode   int      `json:"status_code,omitempty"`    // omit for dead/timeout
+	TechStack    []string `json:"tech_stack,omitempty"`     // empty/null for unfingerprinted
 	LastProbedAt string   `json:"last_probed_at,omitempty"` // RFC3339; api fills with event timestamp if absent
 }
 
