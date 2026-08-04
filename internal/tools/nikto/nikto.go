@@ -84,6 +84,8 @@ const outputFilePlaceholder = "{{outputFile}}"
 //   - OutputFile=true (ADR-023; Nikto's XML plugin REQUIRES -o, it does
 //     not stream XML to stdout — see buildArgs)
 //   - OutputFilePlaceholder="{{outputFile}}"; ParseOutputFile set
+//   - OutputFileExtension=".xml" (Nikto's XML plugin infers format from
+//     the -o extension and rejects the framework-default ".out")
 func NewNiktoRunner(cfg Config, log zerolog.Logger) *tools.NativeRunner {
 	return &tools.NativeRunner{
 		ToolName:              "nikto",
@@ -95,8 +97,11 @@ func NewNiktoRunner(cfg Config, log zerolog.Logger) *tools.NativeRunner {
 		Env:                   nil,
 		OutputFile:            true,
 		OutputFilePlaceholder: outputFilePlaceholder,
-		BuildArgs:             buildArgs(cfg),
-		ParseOutputFile:       parseOutputFile(log),
+		// Nikto's XML report plugin infers format from the -o extension
+		// and refuses a ".out" file — the tempfile MUST end in ".xml".
+		OutputFileExtension: ".xml",
+		BuildArgs:           buildArgs(cfg),
+		ParseOutputFile:     parseOutputFile(log),
 	}
 }
 

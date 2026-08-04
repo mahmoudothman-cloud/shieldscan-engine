@@ -468,6 +468,39 @@ func TestNativeRunner_OutputFile_PathSubstituted(t *testing.T) {
 	assert.Equal(t, "ok", findings[0].Title)
 }
 
+// TestNativeRunner_OutputFile_ExtensionHonored pins the OutputFileExtension
+// override: the minted tempfile path ends in the configured extension.
+// Nikto needs ".xml" because its XML report plugin infers the output
+// format from the -o extension and rejects the default ".out". An empty
+// extension keeps ".out" (Wapiti/Dep-Check unchanged).
+func TestNativeRunner_OutputFile_ExtensionHonored(t *testing.T) {
+	mock := shScript(t, `echo "[]" > "$1"`)
+	capturePath := func(ext string) string {
+		var got string
+		r := &NativeRunner{
+			ToolName: "ext-test", ToolCategory: "test",
+			BinaryPath:            mock,
+			BuildArgs:             func(Target, ScanConfig) []string { return []string{"{{outputFile}}"} },
+			OutputFile:            true,
+			OutputFilePlaceholder: "{{outputFile}}",
+			OutputFileExtension:   ext,
+			ParseOutputFile: func(path string) ([]events.RawFinding, error) {
+				got = path
+				return nil, nil
+			},
+			Timeout: 5 * time.Second,
+		}
+		_, err := r.Run(t.Context(), Target{}, ScanConfig{})
+		require.NoError(t, err)
+		return got
+	}
+
+	assert.Equal(t, ".xml", filepath.Ext(capturePath(".xml")),
+		"custom OutputFileExtension must be the tempfile suffix")
+	assert.Equal(t, ".out", filepath.Ext(capturePath("")),
+		"empty OutputFileExtension keeps the .out default")
+}
+
 // TestNativeRunner_OutputFile_TempfileCleanedUpOnSuccess pins the
 // invariant: post-Run, the tempfile no longer exists when Run
 // succeeded.

@@ -140,6 +140,19 @@ type NativeRunner struct {
 	// ParseOutputFile should NOT delete the file itself — NativeRunner's
 	// defer handles cleanup symmetrically across success and error paths.
 	ParseOutputFile func(outputFilePath string) ([]events.RawFinding, error)
+
+	// OutputFileExtension optionally overrides the suffix of the minted
+	// output tempfile. Empty (the default) yields ".out".
+	//
+	// Needed by tools whose report writer infers the output FORMAT from
+	// the file extension rather than a format flag. Nikto's XML report
+	// plugin (nikto_report_xml.plugin) refuses to write to a ".out" file
+	// and dies with "Unable to open '' for write", so Nikto sets ".xml".
+	// Tools that select format via a flag (Wapiti -f json, Dep-Check
+	// --format JSON) leave this empty and get ".out".
+	//
+	// Ignored when OutputFile=false. Include the leading dot (".xml").
+	OutputFileExtension string
 }
 
 // Compile-time interface assertion. If NativeRunner ever drifts from
@@ -191,7 +204,13 @@ func (n *NativeRunner) Run(ctx context.Context, target Target, cfg ScanConfig) (
 	// error paths symmetrically.
 	var tempfilePath string
 	if n.OutputFile {
-		f, err := os.CreateTemp("", "shieldscan-"+n.ToolName+"-*.out")
+		// Extension defaults to ".out"; tools whose writer infers format
+		// from the extension (e.g. Nikto's XML plugin) override it.
+		ext := ".out"
+		if n.OutputFileExtension != "" {
+			ext = n.OutputFileExtension
+		}
+		f, err := os.CreateTemp("", "shieldscan-"+n.ToolName+"-*"+ext)
 		if err != nil {
 			return nil, fmt.Errorf("%s: create tempfile: %w", n.ToolName, err)
 		}

@@ -36,6 +36,9 @@ func mockNiktoScript(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	p := filepath.Join(dir, "nikto-mock.sh")
+	// Mirrors real nikto: the XML report plugin infers format from the -o
+	// extension and refuses anything that isn't .xml (empty / unsubstituted
+	// / .out all fail with the empty-path error).
 	body := `#!/bin/sh
 out=""
 prev=""
@@ -43,10 +46,13 @@ for a in "$@"; do
   if [ "$prev" = "-o" ]; then out="$a"; fi
   prev="$a"
 done
-if [ -z "$out" ] || [ "$out" = "{{outputFile}}" ]; then
-  echo "Unable to open '' for write at nikto_report_xml.plugin line 60" >&2
-  exit 2
-fi
+case "$out" in
+  *.xml) ;;
+  *)
+    echo "Unable to open '' for write at nikto_report_xml.plugin line 60" >&2
+    exit 2
+    ;;
+esac
 cat > "$out" <<'XML'
 <niktoscan><scandetails sitename="https://example.com:443"><item id="999976"><description>Missing X-Frame-Options header</description><uri>/</uri></item></scandetails></niktoscan>
 XML
@@ -73,6 +79,8 @@ func TestNewNiktoRunner_DefaultsApplied(t *testing.T) {
 	assert.True(t, r.OutputFile,
 		"OutputFile mode: Nikto's XML plugin requires -o, it does not stream to stdout")
 	assert.Equal(t, "{{outputFile}}", r.OutputFilePlaceholder)
+	assert.Equal(t, ".xml", r.OutputFileExtension,
+		"Nikto's XML plugin infers format from the -o extension; must be .xml, not the default .out")
 	assert.NotNil(t, r.ParseOutputFile)
 }
 
@@ -221,12 +229,14 @@ func TestParseOutput_MissingFieldsSkipped(t *testing.T) {
 // TestNiktoRunner_OutputFilePlaceholderSubstituted is the end-to-end
 // regression guard for the live full_web finding (nikto -o ”). It drives
 // the REAL NewNiktoRunner().Run() with a mock nikto that writes XML only
-// to its -o path. It passes only if the runner substitutes {{outputFile}}
-// for a real tempfile — i.e. OutputFile=true AND OutputFilePlaceholder
-// equals the -o value buildArgs emits. If the placeholder were left
-// literal (the reported bug), the mock exits 2 with nikto's real
-// "open ” for write" message and Run errors. Unlike the parser tests
-// (which bypass Run), this exercises the exact path that failed live.
+// when its -o path ends in .xml (mirroring nikto's XML plugin, which
+// infers format from the extension). It passes only if the runner both
+// substitutes {{outputFile}} for a real tempfile AND mints it with the
+// .xml extension (OutputFileExtension). If the placeholder were left
+// literal, OR the tempfile kept the framework-default .out, the mock
+// exits 2 with nikto's real "open '' for write" message and Run errors.
+// Unlike the parser tests (which bypass Run), this exercises the exact
+// path that failed live.
 func TestNiktoRunner_OutputFilePlaceholderSubstituted(t *testing.T) {
 	r := NewNiktoRunner(Config{BinaryPath: mockNiktoScript(t)}, noopLog())
 	findings, err := r.Run(
