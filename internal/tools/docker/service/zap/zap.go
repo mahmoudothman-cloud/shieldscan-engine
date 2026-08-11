@@ -184,6 +184,20 @@ func NewRunner(cli docker.DockerClient, cfg Config, log zerolog.Logger) *service
 			EphemeralContainer: true, // V4 Option γ default
 			ReadinessEndpoint:  "/JSON/core/view/version/?apikey=" + cfg.APIKey,
 			AuthFunc:           zapQueryParamAuth(cfg.APIKey),
+			// Launch the ZAP daemon with the SAME api.key the client uses, so
+			// the control-API handshake succeeds. api.addrs.* opens the API to
+			// non-localhost callers (the mapped host port looks non-local to
+			// ZAP); safe because spinup binds the host port to 127.0.0.1 only.
+			// Exact daemon flags are verified live (see the wiring plan's
+			// reality-check); the api.key here is the load-bearing part.
+			Cmd: []string{
+				"zap.sh", "-daemon",
+				"-host", "0.0.0.0",
+				"-port", fmt.Sprintf("%d", ContainerPort),
+				"-config", "api.key=" + cfg.APIKey,
+				"-config", "api.addrs.addr.name=.*",
+				"-config", "api.addrs.addr.regex=true",
+			},
 		},
 		BuildScan: NewBuildScan(cfg),
 		Log:       zapLog,

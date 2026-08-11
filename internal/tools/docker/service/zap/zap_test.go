@@ -3,6 +3,7 @@ package zap
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/odyssey/shieldscan-engine/internal/tools"
@@ -168,4 +169,25 @@ func TestNewRunner_Smoke(t *testing.T) {
 	assert.True(t, r.ServiceConfig.EphemeralContainer, "V4 ephemeral default")
 	assert.Equal(t, Image, r.ServiceConfig.Image)
 	assert.Equal(t, ContainerPort, r.ServiceConfig.ContainerPort)
+}
+
+// TestNewRunner_ApiKeyReachesBothSides pins the load-bearing invariant: the
+// SAME APIKey must reach BOTH (a) the HTTP client side (ReadinessEndpoint +
+// AuthFunc) AND (b) the container-launch Cmd (`-config api.key=...`). If they
+// diverge the daemon rejects the client's key and every ZAP scan fails. Both
+// derive from cfg.APIKey inside NewRunner, so they match by construction — this
+// test guards that the Cmd side was actually wired.
+func TestNewRunner_ApiKeyReachesBothSides(t *testing.T) {
+	const key = "K123-unique-test-key"
+	r := NewRunner(nil, Config{APIKey: key}, noopLog())
+
+	// (a) client side — readiness endpoint carries the key.
+	assert.Contains(t, r.ServiceConfig.ReadinessEndpoint, "apikey="+key,
+		"client readiness must use the API key")
+
+	// (b) container side — the daemon Cmd sets the matching -config api.key.
+	joined := strings.Join(r.ServiceConfig.Cmd, " ")
+	assert.Contains(t, joined, "api.key="+key,
+		"container Cmd must launch the ZAP daemon with the matching -config api.key")
+	assert.Contains(t, joined, "-daemon", "ZAP must run in daemon mode")
 }
