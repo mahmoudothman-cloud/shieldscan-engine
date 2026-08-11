@@ -39,6 +39,15 @@ type ServiceConfig struct {
 	// started with `-config api.key=...` matching the client's key.
 	Cmd []string
 
+	// APIProxyHost selects the addressing model for BOTH the readiness
+	// probe and the per-scan Client (see serviceAddressing). Empty
+	// (default) addresses the container's mapped host:port directly —
+	// every normal HTTP service. Non-empty (ZAP: "zap") treats the mapped
+	// port as an HTTP forward-proxy and targets http://<APIProxyHost>/...
+	// through it, because ZAP serves its API on the same port as its
+	// forward proxy and 502s a direct request.
+	APIProxyHost string
+
 	// Readiness probe (Q2; runs at spin-up only per Q6)
 	ReadinessEndpoint       string
 	ReadinessExpectedStatus int
@@ -150,7 +159,10 @@ func (r *DockerServiceRunner) Run(ctx context.Context, target tools.Target, cfg 
 	}
 	defer releaseFn()
 
-	client := r.buildClient(c)
+	client, err := r.buildClient(c)
+	if err != nil {
+		return nil, fmt.Errorf("%s: build client: %w", r.ToolName, err)
+	}
 	findings, err := r.BuildScan(ctx, target, cfg, client)
 	if err != nil {
 		return nil, fmt.Errorf("%s: build scan: %w", r.ToolName, err)
@@ -185,6 +197,7 @@ func (r *DockerServiceRunner) acquireEphemeral(ctx context.Context) (*docker.Con
 		ReadinessTimeout:        r.ServiceConfig.ReadinessTimeout,
 		ReadinessPollInterval:   r.ServiceConfig.ReadinessPollInterval,
 		Cmd:                     r.ServiceConfig.Cmd,
+		APIProxyHost:            r.ServiceConfig.APIProxyHost,
 	})
 	c, err := factory(ctx, r.Cli, r.ServiceConfig.Image, r.Log)
 	if err != nil {
@@ -218,7 +231,7 @@ func (r *DockerServiceRunner) acquireFromPool(ctx context.Context) (*docker.Cont
 	return c, release, nil
 }
 
-func (r *DockerServiceRunner) buildClient(c *docker.Container) *Client {
+func (r *DockerServiceRunner) buildClient(c *docker.Container) (*Client, error) {
 	timeout := r.ServiceConfig.RequestTimeout
 	if timeout <= 0 {
 		timeout = DefaultRequestTimeout
@@ -228,10 +241,26 @@ func (r *DockerServiceRunner) buildClient(c *docker.Container) *Client {
 	// constructs from the ctx passed to BuildScan, applying
 	// timeout via context.WithTimeout as needed).
 	_ = timeout // reserved for future per-tool override propagation
+
+	// Addressing model per ServiceConfig.APIProxyHost: direct (nil
+	// transport → DefaultTransport) for normal services, forward-proxy
+	// to the magic host for ZAP. Same helper the readiness probe uses so
+	// both sides agree on how the container is reached.
+	baseURL, transport, err := serviceAddressing(c.BaseURL, r.ServiceConfig.APIProxyHost)
+	if err != nil {
+		return nil, err
+	}
+	httpClient := &http.Client{Timeout: 0}
+	// Assign Transport only when non-nil: a typed-nil *http.Transport in
+	// the RoundTripper interface field is non-nil and panics on use;
+	// leaving it unset falls back to http.DefaultTransport (direct mode).
+	if transport != nil {
+		httpClient.Transport = transport
+	}
 	return &Client{
-		BaseURL:    c.BaseURL,
-		HTTPClient: &http.Client{Timeout: 0},
+		BaseURL:    baseURL,
+		HTTPClient: httpClient,
 		AuthFunc:   r.ServiceConfig.AuthFunc,
 		Log:        r.Log,
-	}
+	}, nil
 }

@@ -67,6 +67,40 @@ type Client struct {
 	Log        zerolog.Logger
 }
 
+// serviceAddressing computes the request base URL and HTTP transport for
+// a service's addressing model, given the container's mapped host:port
+// (e.g. "http://127.0.0.1:49xxx") and an optional forward-proxy magic
+// host.
+//
+// Direct mode (apiProxyHost == ""): requests go straight to the mapped
+// address. Returns (mappedAddr, nil) — a nil transport means net/http
+// uses DefaultTransport, preserving the pre-existing behavior for every
+// normal HTTP service (MobSF and friends).
+//
+// Proxy mode (apiProxyHost != ""): the mapped host:port is treated as an
+// HTTP forward-proxy and requests target http://<apiProxyHost>/... routed
+// THROUGH it. ZAP requires this: its control API is served on the SAME
+// port as its forward proxy, so a plain GET to the mapped port is
+// interpreted as a proxy-forward and returns 502 Bad Gateway. Reaching
+// the API means proxying to ZAP's magic host "zap" — verified live
+// against ghcr.io/zaproxy/zaproxy ZAP 2.17.0:
+//
+//	curl    http://127.0.0.1:P/JSON/core/view/version/?apikey=K            → 502
+//	curl -x http://127.0.0.1:P http://zap/JSON/core/view/version/?apikey=K → 200
+//
+// The mapped port is bound to 127.0.0.1 only (spinup PortBindings), so
+// the open forward-proxy is not reachable off the worker host.
+func serviceAddressing(mappedAddr, apiProxyHost string) (baseURL string, transport *http.Transport, err error) {
+	if apiProxyHost == "" {
+		return mappedAddr, nil, nil
+	}
+	proxyURL, err := url.Parse(mappedAddr)
+	if err != nil {
+		return "", nil, fmt.Errorf("service: parse proxy address %q: %w", mappedAddr, err)
+	}
+	return "http://" + apiProxyHost, &http.Transport{Proxy: http.ProxyURL(proxyURL)}, nil
+}
+
 // PollPredicate decides whether polling is complete given a response
 // body. Tri-state per Q4 lock: (done=true, err=nil) = success;
 // (done=false, err=nil) = continue polling; (done=*, err!=nil) =

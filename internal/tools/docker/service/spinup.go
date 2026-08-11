@@ -32,6 +32,14 @@ type ServiceContainerOpts struct {
 	// 127.0.0.1 only (see PortBindings below), so an API-key + open
 	// api.addrs combo is not publicly reachable.
 	Cmd []string
+
+	// APIProxyHost selects the addressing model for the readiness probe
+	// (see serviceAddressing). Empty (default) probes the mapped address
+	// directly. Non-empty (ZAP: "zap") routes the probe THROUGH the mapped
+	// port as an HTTP forward-proxy, targeting http://<APIProxyHost>/...;
+	// required because ZAP's API shares the proxy port and 502s a direct
+	// probe.
+	APIProxyHost string
 }
 
 // ServiceContainerFactory returns a docker.ContainerFactoryFunc
@@ -125,7 +133,7 @@ func ServiceContainerFactory(opts ServiceContainerOpts) docker.ContainerFactoryF
 
 		// 6. Readiness probe.
 		if opts.ReadinessEndpoint != "" {
-			if err := waitForReady(ctx, baseURL, opts.ReadinessEndpoint, opts.ReadinessExpectedStatus, opts.ReadinessTimeout, opts.ReadinessPollInterval); err != nil {
+			if err := waitForReady(ctx, baseURL, opts.ReadinessEndpoint, opts.ReadinessExpectedStatus, opts.ReadinessTimeout, opts.ReadinessPollInterval, opts.APIProxyHost); err != nil {
 				_ = cli.ContainerStop(ctx, createResp.ID, container.StopOptions{})
 				_ = cli.ContainerRemove(ctx, createResp.ID, container.RemoveOptions{Force: true})
 				return nil, fmt.Errorf("service container factory: readiness: %w", err)

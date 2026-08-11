@@ -26,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/odyssey/shieldscan-engine/internal/events"
 	"github.com/odyssey/shieldscan-engine/internal/tools"
@@ -184,6 +185,18 @@ func NewRunner(cli docker.DockerClient, cfg Config, log zerolog.Logger) *service
 			EphemeralContainer: true, // V4 Option γ default
 			ReadinessEndpoint:  "/JSON/core/view/version/?apikey=" + cfg.APIKey,
 			AuthFunc:           zapQueryParamAuth(cfg.APIKey),
+			// ZAP serves its control API on the SAME port as its forward
+			// proxy, so a direct GET to the mapped port returns 502. Every
+			// ZAP API call (readiness + spider + ascan + alerts) must be
+			// routed THROUGH the mapped port as a proxy, targeting the magic
+			// host "zap" — see serviceAddressing. Verified live against ZAP
+			// 2.17.0 (direct 502 vs proxied 200).
+			APIProxyHost: "zap",
+			// Cold boot (fresh config + Flyway DB migration + ~50 add-ons)
+			// took ~45-60s+ to answer in live testing; with correct
+			// addressing readiness passes well under this, but give margin
+			// over the 120s framework default.
+			ReadinessTimeout: 240 * time.Second,
 			// Launch the ZAP daemon with the SAME api.key the client uses, so
 			// the control-API handshake succeeds. api.addrs.* opens the API to
 			// non-localhost callers (the mapped host port looks non-local to

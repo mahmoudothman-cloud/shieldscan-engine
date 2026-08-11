@@ -21,10 +21,16 @@ import (
 // is pre-Client-construction; the standalone client has explicit
 // per-request timeout via ctx.WithTimeout for each probe.
 //
+// apiProxyHost selects the addressing model (see serviceAddressing): ""
+// probes the mapped address directly (MobSF etc.); non-empty (ZAP:
+// "zap") probes http://<apiProxyHost><endpoint> THROUGH the mapped port
+// as a forward-proxy — without this, ZAP answers every readiness probe
+// with 502 and readiness always times out even though the daemon is up.
+//
 // Fixed pollInterval (not exponential) — readiness is short-window
 // probing; exponential backoff would unnecessarily delay detection
 // of services that come up slowly-but-uniformly.
-func waitForReady(ctx context.Context, baseURL, endpoint string, expectedStatus int, timeout, pollInterval time.Duration) error {
+func waitForReady(ctx context.Context, baseURL, endpoint string, expectedStatus int, timeout, pollInterval time.Duration, apiProxyHost string) error {
 	if expectedStatus == 0 {
 		expectedStatus = http.StatusOK
 	}
@@ -35,9 +41,20 @@ func waitForReady(ctx context.Context, baseURL, endpoint string, expectedStatus 
 		timeout = 120 * time.Second
 	}
 
+	reqBase, transport, err := serviceAddressing(baseURL, apiProxyHost)
+	if err != nil {
+		return fmt.Errorf("readiness: %w", err)
+	}
 	probeClient := &http.Client{Timeout: 0} // ctx provides timeout
+	// Assign Transport only when non-nil: a typed-nil *http.Transport in
+	// the RoundTripper interface field is non-nil and panics on use;
+	// leaving it unset falls back to http.DefaultTransport (direct mode).
+	if transport != nil {
+		probeClient.Transport = transport
+		defer transport.CloseIdleConnections()
+	}
 	deadline := time.Now().Add(timeout)
-	url := baseURL + endpoint
+	url := reqBase + endpoint
 
 	var lastErr error
 	for time.Now().Before(deadline) {

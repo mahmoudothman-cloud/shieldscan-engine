@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/odyssey/shieldscan-engine/internal/tools"
 	"github.com/odyssey/shieldscan-engine/internal/tools/docker/service"
@@ -169,6 +170,12 @@ func TestNewRunner_Smoke(t *testing.T) {
 	assert.True(t, r.ServiceConfig.EphemeralContainer, "V4 ephemeral default")
 	assert.Equal(t, Image, r.ServiceConfig.Image)
 	assert.Equal(t, ContainerPort, r.ServiceConfig.ContainerPort)
+	// ZAP addressing fix: every API call (readiness + scan) must proxy to
+	// the "zap" magic host, and cold boot needs a raised readiness margin.
+	assert.Equal(t, "zap", r.ServiceConfig.APIProxyHost,
+		"ZAP must use proxy addressing (its API shares the proxy port; direct GET → 502)")
+	assert.Equal(t, 240*time.Second, r.ServiceConfig.ReadinessTimeout,
+		"raised readiness margin for ZAP cold boot")
 }
 
 // TestNewRunner_ApiKeyReachesBothSides pins the load-bearing invariant: the
