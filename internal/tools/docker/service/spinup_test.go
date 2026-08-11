@@ -38,6 +38,37 @@ func TestServiceContainerFactory_BuildsBaseURL(t *testing.T) {
 	assert.Equal(t, "127.0.0.1:55555", parsed.Host, "BaseURL must bind 127.0.0.1 + dynamic port")
 }
 
+// TestServiceContainerFactory_CmdInjected pins the daemon-launch Cmd
+// override: when Opts.Cmd is set, it reaches container.Config.Cmd (ZAP
+// needs `zap.sh -daemon -config api.key=...`); when empty, Config.Cmd
+// stays nil so the image's default entrypoint runs (existing tools
+// — nmap/trivy/sqlmap use one-shot DockerRunner, but any future
+// stdout-mode service must be unaffected).
+func TestServiceContainerFactory_CmdInjected(t *testing.T) {
+	cli := newStubDockerClient(t)
+	factory := ServiceContainerFactory(ServiceContainerOpts{
+		ContainerPort: 8080,
+		Cmd:           []string{"zap.sh", "-daemon", "-config", "api.key=K1"},
+	})
+	_, err := factory(context.Background(), cli, "img:1", noopLog())
+	require.NoError(t, err)
+	require.NotNil(t, cli.capturedConfig)
+	assert.Equal(t,
+		[]string{"zap.sh", "-daemon", "-config", "api.key=K1"},
+		[]string(cli.capturedConfig.Cmd), // container.Config.Cmd is strslice.StrSlice
+		"Opts.Cmd must reach container.Config.Cmd")
+}
+
+func TestServiceContainerFactory_NoCmd_LeavesConfigCmdNil(t *testing.T) {
+	cli := newStubDockerClient(t)
+	factory := ServiceContainerFactory(ServiceContainerOpts{ContainerPort: 8080})
+	_, err := factory(context.Background(), cli, "img:1", noopLog())
+	require.NoError(t, err)
+	require.NotNil(t, cli.capturedConfig)
+	assert.Nil(t, cli.capturedConfig.Cmd,
+		"empty Opts.Cmd must leave Config.Cmd nil (image default entrypoint)")
+}
+
 func TestServiceContainerFactory_NoHostPortMapped_Errors(t *testing.T) {
 	cli := newStubDockerClient(t)
 	cli.inspectHostPort = "" // no mapping returned

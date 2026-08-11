@@ -34,6 +34,11 @@ type ServiceConfig struct {
 	EphemeralContainer bool
 	MaxPoolSize        int
 
+	// Cmd overrides the container's launch command (empty → image
+	// default entrypoint). First needed by ZAP, whose daemon must be
+	// started with `-config api.key=...` matching the client's key.
+	Cmd []string
+
 	// Readiness probe (Q2; runs at spin-up only per Q6)
 	ReadinessEndpoint       string
 	ReadinessExpectedStatus int
@@ -179,6 +184,7 @@ func (r *DockerServiceRunner) acquireEphemeral(ctx context.Context) (*docker.Con
 		ReadinessExpectedStatus: r.ServiceConfig.ReadinessExpectedStatus,
 		ReadinessTimeout:        r.ServiceConfig.ReadinessTimeout,
 		ReadinessPollInterval:   r.ServiceConfig.ReadinessPollInterval,
+		Cmd:                     r.ServiceConfig.Cmd,
 	})
 	c, err := factory(ctx, r.Cli, r.ServiceConfig.Image, r.Log)
 	if err != nil {

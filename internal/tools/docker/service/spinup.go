@@ -24,6 +24,14 @@ type ServiceContainerOpts struct {
 	ReadinessExpectedStatus int
 	ReadinessTimeout        time.Duration
 	ReadinessPollInterval   time.Duration
+
+	// Cmd overrides the container's launch command. Empty leaves the
+	// image's default entrypoint intact. Needed by services whose daemon
+	// must be started with args — e.g. ZAP's
+	// `zap.sh -daemon -config api.key=...`. The port is still bound to
+	// 127.0.0.1 only (see PortBindings below), so an API-key + open
+	// api.addrs combo is not publicly reachable.
+	Cmd []string
 }
 
 // ServiceContainerFactory returns a docker.ContainerFactoryFunc
@@ -74,6 +82,10 @@ func ServiceContainerFactory(opts ServiceContainerOpts) docker.ContainerFactoryF
 		cfg := &container.Config{
 			Image:        imageRef,
 			ExposedPorts: nat.PortSet{portKey: struct{}{}},
+		}
+		// Optional launch-command override (empty → image default entrypoint).
+		if len(opts.Cmd) > 0 {
+			cfg.Cmd = opts.Cmd
 		}
 		hostCfg := &container.HostConfig{
 			PortBindings: nat.PortMap{

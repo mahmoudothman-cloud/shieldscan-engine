@@ -37,6 +37,9 @@ type stubDockerClient struct {
 	// mapping" (factory will surface 'no host port mapped' error).
 	inspectHostPort string
 	inspectErr      error
+	// capturedConfig records the *container.Config passed to the most
+	// recent ContainerCreate, so tests can assert Cmd/Image/etc.
+	capturedConfig *container.Config
 }
 
 func newStubDockerClient(_ *testing.T) *stubDockerClient {
@@ -49,12 +52,13 @@ func (s *stubDockerClient) ImagePull(_ context.Context, _ string, _ image.PullOp
 
 func (s *stubDockerClient) ContainerCreate(
 	_ context.Context,
-	_ *container.Config,
+	cfg *container.Config,
 	_ *container.HostConfig,
 	_ *network.NetworkingConfig,
 	_ *ocispec.Platform,
 	_ string,
 ) (container.CreateResponse, error) {
+	s.capturedConfig = cfg
 	id := fmt.Sprintf("stub-svc-%d", s.counter.Add(1))
 	return container.CreateResponse{ID: id}, nil
 }
