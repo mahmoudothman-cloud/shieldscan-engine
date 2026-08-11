@@ -11,6 +11,7 @@ import (
 	"github.com/odyssey/shieldscan-engine/internal/tools"
 	"github.com/odyssey/shieldscan-engine/internal/tools/docker"
 	"github.com/odyssey/shieldscan-engine/internal/tools/docker/nmap"
+	"github.com/odyssey/shieldscan-engine/internal/tools/docker/service/zap"
 	"github.com/odyssey/shieldscan-engine/internal/tools/docker/sqlmap"
 	"github.com/odyssey/shieldscan-engine/internal/tools/docker/trivy"
 )
@@ -85,11 +86,29 @@ func buildDockerRegistry(log zerolog.Logger) (map[string]tools.ToolRunner, []*do
 		return nil, nil, fmt.Errorf("worker: trivy-fs source runner init: %w", err)
 	}
 
+	// ZAP (OWASP DAST) — the FIRST DockerServiceRunner wired into the worker.
+	// Unlike the one-shot DockerRunners above, ZAP runs an ephemeral service
+	// container per scan (no warm pool → not added to `pools`). The daemon and
+	// the client must share an API key; source it from the env. Empty key →
+	// WARN + register anyway (graceful degradation, per the wiring-plan
+	// decision): dropping zap would recreate the "no runner registered"
+	// confusion, and failing startup would break the other engines over one
+	// optional tool. A missing key instead surfaces as the explicit per-scan
+	// "zap: APIKey required" error.
+	zapAPIKey := os.Getenv("SHIELDSCAN_ZAP_API_KEY")
+	if zapAPIKey == "" {
+		log.Warn().Msg(
+			"SHIELDSCAN_ZAP_API_KEY not set; zap engine registered but scans " +
+				"will fail with 'zap: APIKey required' until it is configured",
+		)
+	}
+
 	runners := map[string]tools.ToolRunner{
 		"nmap":            nmap.NewRunner(nmapPool, log),
 		"trivy-container": trivy.NewContainerRunner(trivyPool, log),
 		"trivy-fs":        trivyFsRunner,
 		"sqlmap":          sqlmap.NewRunner(sqlmapPool, log),
+		"zap":             zap.NewRunner(docker.NewProductionClient(cli), zap.Config{APIKey: zapAPIKey}, log),
 	}
 	pools := []*docker.WarmPool{nmapPool, trivyPool, sqlmapPool}
 
