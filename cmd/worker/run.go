@@ -112,8 +112,12 @@ func runMain(ctx context.Context, deps runMainDeps) int {
 
 	// Run startup sequence. NativeTools populated at 6.8 (M6 CLOSE)
 	// from buildRegistry's resolved binaries; Phase 1 stat-checks
-	// each path. DockerSvcs remains empty until M7 (Docker service
-	// tools) populates it via DockerServiceRunner instances.
+	// each path. Service runners (e.g. ZAP) are wired into the registry
+	// map like every other ToolRunner and reached via registry.Get —
+	// NOT via DockerSvcs. DockerSvcs (the Phase-2 startup health check)
+	// stays empty because ZAP is ephemeral-per-scan: there is no
+	// long-lived container to probe at startup. A future *persistent*
+	// service (e.g. MobSF) may populate DockerSvcs.
 	startup := worker.NewStartup(worker.StartupDeps{
 		Registry:    registry,
 		NativeTools: natives,
