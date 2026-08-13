@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/odyssey/shieldscan-engine/internal/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -139,6 +140,33 @@ func TestParseAlerts_FullSampleMapping(t *testing.T) {
 func TestParseAlerts_EmptyInput(t *testing.T) {
 	out := parseAlerts(nil, "https://example.com/")
 	assert.Empty(t, out)
+}
+
+// TestParseAlerts_FingerprintDistinctByPluginID pins the fix for the
+// collapsed-fingerprint bug: parseAlerts left FindingType empty, so
+// alerts sharing (url, param) but from different ZAP rules hashed to the
+// same fingerprint (608 findings → 121). With FindingType=pluginId, three
+// alerts at the SAME url + param but different pluginId fingerprint
+// distinctly.
+func TestParseAlerts_FingerprintDistinctByPluginID(t *testing.T) {
+	const url = "https://example.com/"
+	alerts := []zapAlert{
+		{Name: "Missing CSP", Risk: "Medium", PluginID: "10038", URL: url},
+		{Name: "Missing X-Frame-Options", Risk: "Medium", PluginID: "10020", URL: url},
+		{Name: "Cookie without SameSite", Risk: "Low", PluginID: "10054", URL: url},
+	}
+
+	findings := parseAlerts(alerts, url)
+	require.Len(t, findings, 3)
+
+	fps := make(map[string]struct{})
+	for _, f := range findings {
+		require.NotEmpty(t, f.FindingType, "FindingType (pluginId) must feed the fingerprint")
+		assert.Empty(t, f.Parameter, "same (url, param); pluginId is the only differing input")
+		f.ToolName = "zap" // mirror the service runner enrichment step
+		fps[tools.ComputeFingerprint(f)] = struct{}{}
+	}
+	assert.Len(t, fps, 3, "distinct pluginIds must fingerprint distinctly, not collapse")
 }
 
 func TestFetchAlerts_BulkFetchSuccess(t *testing.T) {

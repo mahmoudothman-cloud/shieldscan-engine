@@ -142,7 +142,14 @@ func parseAlerts(alerts []zapAlert, scanTargetURL string) []events.RawFinding {
 			continue
 		}
 		f := events.RawFinding{
-			Title:       a.Name,
+			Title: a.Name,
+			// FindingType = ZAP pluginId. ComputeFingerprint hashes
+			// tool|finding_type|target_url|param|...; with FindingType
+			// empty, alerts sharing (url, param) but differing in rule
+			// collapsed to one fingerprint (608 findings → 121). pluginId
+			// is ZAP's stable per-rule identifier and restores the true
+			// (rule, url, param) cardinality.
+			FindingType: a.PluginID,
 			Severity:    severity,
 			Description: a.Description,
 			CWEID:       a.CWEID,

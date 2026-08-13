@@ -139,18 +139,38 @@ func primaryAddress(addrs []nmapAddress) string {
 }
 
 // buildFinding constructs a RawFinding from a single open-port observation.
-// Severity is always Informational (per Q6 lock); CVE matching + rule-based
-// severity escalation are M9 + future-task concerns.
+// Severity is always "info" — the lowercase shieldscan-api Severity enum
+// value (the API's Pydantic Literal rejects "Informational"; the mixed-case
+// spelling failed ingest validation). CVE matching + rule-based severity
+// escalation are M9 + future-task concerns.
+//
+// FindingType ("open-port-<protocol>") and TargetURL ("host:port") are set
+// here because ComputeFingerprint hashes tool|finding_type|target_url|...:
+// with both empty, every nmap finding collapsed to the constant hash of
+// "nmap|||||0". protocol distinguishes tcp/udp/sctp on the same host:port;
+// host:port distinguishes ports and hosts.
 func buildFinding(host string, p nmapPort, target string) events.RawFinding {
 	return events.RawFinding{
 		Title:       buildTitle(p),
-		Severity:    "Informational",
+		Severity:    "info",
 		Description: buildDescription(host, p),
+		FindingType: "open-port-" + p.Protocol,
+		TargetURL:   buildTargetURL(host, p.PortID),
 		Metadata:    buildMetadata(host, p, target),
 		// Identity fields (ToolName, EngineCategory, DiscoveredAt, Fingerprint)
 		// populated by DockerRunner enrichment loop per ToolRunner contract
 		// (internal/tools/runner.go:65-69 docstring).
 	}
+}
+
+// buildTargetURL builds the fingerprint-bearing target identifier for an
+// open port as "host:port". IPv6 literal hosts are bracketed
+// ("[2001:db8::1]:22") so the host/port colon boundary is unambiguous.
+func buildTargetURL(host, port string) string {
+	if strings.Contains(host, ":") { // IPv6 literal (or MAC fallback)
+		return fmt.Sprintf("[%s]:%s", host, port)
+	}
+	return fmt.Sprintf("%s:%s", host, port)
 }
 
 func buildTitle(p nmapPort) string {

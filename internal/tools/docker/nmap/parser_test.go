@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/odyssey/shieldscan-engine/internal/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,7 +27,7 @@ func TestParseOutput_TypicalWebServer(t *testing.T) {
 	assert.Len(t, findings, 4, "typical web server fixture has 4 open ports")
 
 	for _, f := range findings {
-		assert.Equal(t, "Informational", f.Severity)
+		assert.Equal(t, "info", f.Severity)
 	}
 
 	require.NotEmpty(t, findings[0].Metadata)
@@ -326,6 +327,57 @@ func TestBuildMetadata_NoTunnelWhenEmpty(t *testing.T) {
 	}
 	m := buildMetadata("192.0.2.10", p, "192.0.2.10")
 	assert.NotContains(t, m, "tunnel")
+}
+
+// TestParseOutput_FingerprintInputsAreDistinct pins the fix for the
+// collapsed-fingerprint bug: every nmap finding used to hash to the
+// constant SHA256("nmap|||||0") because parseOutput set neither
+// FindingType nor TargetURL. With FindingType="open-port-<proto>" and
+// TargetURL="host:port", the three ways open ports differ each yield a
+// distinct fingerprint:
+//   - two ports on one host      (192.0.2.1:22 vs :80)   — TargetURL
+//   - same port on two hosts     (192.0.2.1:22 vs .2:22) — TargetURL
+//   - same host+port, other proto (192.0.2.1:80 tcp/udp) — FindingType
+func TestParseOutput_FingerprintInputsAreDistinct(t *testing.T) {
+	xml := []byte(`<?xml version="1.0"?>
+<nmaprun>
+  <host>
+    <status state="up"/>
+    <address addr="192.0.2.1" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="22"><state state="open"/><service name="ssh"/></port>
+      <port protocol="tcp" portid="80"><state state="open"/><service name="http"/></port>
+      <port protocol="udp" portid="80"><state state="open"/><service name="http"/></port>
+    </ports>
+  </host>
+  <host>
+    <status state="up"/>
+    <address addr="192.0.2.2" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="22"><state state="open"/><service name="ssh"/></port>
+    </ports>
+  </host>
+</nmaprun>`)
+
+	findings, err := parseOutput(xml, "test.invalid")
+	require.NoError(t, err)
+	require.Len(t, findings, 4, "3 open ports on host A + 1 on host B")
+
+	fps := make(map[string]struct{})
+	for _, f := range findings {
+		assert.Equal(t, "info", f.Severity, "lowercase api Severity enum value")
+		require.NotEmpty(t, f.FindingType, "FindingType must feed the fingerprint")
+		require.NotEmpty(t, f.TargetURL, "TargetURL must feed the fingerprint")
+		f.ToolName = "nmap" // mirror the DockerRunner enrichment step
+		fps[tools.ComputeFingerprint(f)] = struct{}{}
+	}
+	assert.Len(t, fps, 4, "each open port must fingerprint distinctly, not collapse to one")
+}
+
+func TestBuildTargetURL(t *testing.T) {
+	assert.Equal(t, "192.0.2.1:22", buildTargetURL("192.0.2.1", "22"))
+	assert.Equal(t, "[2001:db8::1]:443", buildTargetURL("2001:db8::1", "443"),
+		"IPv6 literal host must be bracketed")
 }
 
 func TestParseOutput_UnknownFieldsXMLCapturesCPE(t *testing.T) {
