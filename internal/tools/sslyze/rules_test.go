@@ -73,6 +73,46 @@ func TestRuleRobot_NotVulnerable(t *testing.T) {
 	assert.Empty(t, findings, "robot_result=NOT_VULNERABLE_NO_ORACLE → 0 findings")
 }
 
+// TestRuleRobot_AllNotVulnerableResultsProduceNoFinding pins the fix for a
+// live-scan bug: only NOT_VULNERABLE_NO_ORACLE was excluded, so a clean
+// NOT_VULNERABLE_RSA_NOT_SUPPORTED result synthesized a CRITICAL finding
+// titled "ROBOT attack vulnerability (NOT_VULNERABLE_RSA_NOT_SUPPORTED)" —
+// the top-severity item in every report, asserting the exact opposite of
+// what SSLyze reported.
+func TestRuleRobot_AllNotVulnerableResultsProduceNoFinding(t *testing.T) {
+	for _, rr := range []string{
+		"NOT_VULNERABLE_NO_ORACLE",
+		"NOT_VULNERABLE_RSA_NOT_SUPPORTED",
+	} {
+		t.Run(rr, func(t *testing.T) {
+			p := map[string]any{
+				"result": map[string]any{"robot_result": rr},
+			}
+			assert.Empty(t, ruleRobot(p, "modern.example.com:443"),
+				"%s asserts the server is NOT vulnerable → 0 findings", rr)
+		})
+	}
+}
+
+// TestRuleRobot_VulnerableResultsStillEmit guards against over-filtering:
+// the prefix match must not silence genuine oracle results.
+func TestRuleRobot_VulnerableResultsStillEmit(t *testing.T) {
+	for _, rr := range []string{
+		"VULNERABLE_WEAK_ORACLE",
+		"VULNERABLE_STRONG_ORACLE",
+	} {
+		t.Run(rr, func(t *testing.T) {
+			p := map[string]any{
+				"result": map[string]any{"robot_result": rr},
+			}
+			findings := ruleRobot(p, "vuln.example.com:443")
+			require.Len(t, findings, 1)
+			assert.Equal(t, "ssl-robot", findings[0].FindingType)
+			assert.Equal(t, "critical", findings[0].Severity)
+		})
+	}
+}
+
 // ─── ruleCCSInjection (vuln + not-vuln) ──────────────────────────────
 
 func TestRuleCCSInjection_Vulnerable(t *testing.T) {

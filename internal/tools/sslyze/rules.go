@@ -68,12 +68,22 @@ func ruleHeartbleed(p map[string]any, target string) []events.RawFinding {
 	}}
 }
 
+// robotNotVulnerablePrefix marks every SSLyze robot_result that asserts
+// the server is NOT vulnerable. SSLyze emits several such values —
+// NOT_VULNERABLE_NO_ORACLE and NOT_VULNERABLE_RSA_NOT_SUPPORTED — and
+// only NO_ORACLE was originally excluded. RSA_NOT_SUPPORTED therefore
+// synthesized a CRITICAL finding whose own title read "ROBOT attack
+// vulnerability (NOT_VULNERABLE_RSA_NOT_SUPPORTED)": a clean-result
+// reported as the highest-severity item in the report. Match on the
+// prefix so future NOT_VULNERABLE_* values stay excluded by default.
+const robotNotVulnerablePrefix = "NOT_VULNERABLE"
+
 func ruleRobot(p map[string]any, target string) []events.RawFinding {
 	result := jsonx.ExtractMap(p, "result")
 	rr := jsonx.ExtractString(result, "robot_result")
-	// Any robot_result other than NOT_VULNERABLE_NO_ORACLE indicates
-	// some form of vulnerability or weak oracle behavior.
-	if rr == "" || rr == "NOT_VULNERABLE_NO_ORACLE" {
+	// Only emit for results that ASSERT vulnerability. Every
+	// NOT_VULNERABLE_* value is a clean result, not a finding.
+	if rr == "" || strings.HasPrefix(rr, robotNotVulnerablePrefix) {
 		return nil
 	}
 	return []events.RawFinding{{
