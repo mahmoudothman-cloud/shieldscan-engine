@@ -53,7 +53,7 @@ go build -o bin/worker ./cmd/worker/
 
 # Run locally (requires Redis at localhost:6379 — see .env.example)
 cp .env.example .env  # edit values
-SHIELDSCAN_REDIS_URL=redis://localhost:6379/0 ./bin/worker
+SHIELDSCAN_REDIS_URL=redis://:<password>@localhost:6379/0 ./bin/worker
 ```
 
 ## Contributing

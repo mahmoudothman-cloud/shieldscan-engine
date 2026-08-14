@@ -14,6 +14,7 @@ import (
 	"errors"
 	"os"
 	"os/signal"
+	"regexp"
 	"syscall"
 	"time"
 
@@ -23,6 +24,19 @@ import (
 
 	"github.com/odyssey/shieldscan-engine/internal/config"
 )
+
+// redisCredentialRe matches the password segment of a redis:// or rediss://
+// URL, including the shape the API and worker use (empty username, leading
+// colon: redis://:<password>@host:port/db).
+var redisCredentialRe = regexp.MustCompile(`(rediss?://[^:@/\s"]*:)[^@\s"]*(@)`)
+
+// redactRedisCredential replaces the password in any Redis URL appearing in s.
+// Applied to error strings before logging — go-redis's ParseURL wraps
+// url.Parse errors that quote the full URL, so the error text itself can carry
+// the credential even when the URL is never logged directly.
+func redactRedisCredential(s string) string {
+	return redisCredentialRe.ReplaceAllString(s, "${1}***${2}")
+}
 
 func main() {
 	cfg, err := config.Load()
@@ -40,7 +54,14 @@ func main() {
 
 	redisOpts, err := redis.ParseURL(cfg.RedisURL)
 	if err != nil {
-		log.Fatal().Err(err).Str("url", cfg.RedisURL).Msg("invalid SHIELDSCAN_REDIS_URL")
+		// Never log cfg.RedisURL, and never the raw error: the URL carries
+		// the Redis password (redis://:<password>@host), and ParseURL
+		// surfaces url.Parse errors that quote the offending URL verbatim.
+		// A parse failure is exactly the case where the credential would
+		// otherwise land in stdout and in the worker log file.
+		log.Fatal().
+			Str("error", redactRedisCredential(err.Error())).
+			Msg("invalid SHIELDSCAN_REDIS_URL")
 	}
 	redisClient := redis.NewClient(redisOpts)
 	defer func() { _ = redisClient.Close() }()
