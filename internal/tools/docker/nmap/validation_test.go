@@ -162,6 +162,75 @@ func TestStripPort(t *testing.T) {
 	}
 }
 
+func TestStripPath(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"example.com/app", "example.com"},
+		{"example.com:443/app", "example.com:443"},
+		{"example.com/", "example.com"},
+		{"example.com", "example.com"},
+		{"[2001:db8::1]:8443/app", "[2001:db8::1]:8443"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			assert.Equal(t, tc.want, stripPath(tc.input))
+		})
+	}
+}
+
+func TestNormalizeTarget(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"https://example.com", "example.com"},
+		{"https://example.com/app", "example.com"},
+		{"https://example.com:443/app", "example.com"},
+		{"https://[2001:db8::1]:8443/app", "2001:db8::1"},
+		{"example.com", "example.com"},
+		// stripScheme must run before stripPath, else the scheme's own
+		// "//" truncates the whole address to "https:".
+		{"https://192.168.1.1", "192.168.1.1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			assert.Equal(t, tc.want, normalizeTarget(tc.input))
+		})
+	}
+}
+
+// TestValidateTarget_PathDoesNotBypassIPClassification pins a validation
+// bypass: before normalizeTarget, validateTarget stripped only scheme and
+// port, so "https://192.168.1.1/app" left "192.168.1.1/app" — which
+// net.ParseIP cannot parse, so it fell through to the permissive hostname
+// path and returned nil. Every IP-based control (RFC1918, loopback, and
+// the cloud-metadata link-local check) was bypassable by appending a path.
+//
+// It was latent only because buildArgs passed the un-normalized URL to
+// nmap, which failed to resolve it; normalizing argv without normalizing
+// validation would have made it live.
+func TestValidateTarget_PathDoesNotBypassIPClassification(t *testing.T) {
+	cases := []struct {
+		name       string
+		url        string
+		wantErrSub string
+	}{
+		{"rfc1918 with path", "https://192.168.1.1/app", "RFC1918"},
+		{"loopback with path", "https://127.0.0.1/app", "loopback"},
+		{"cloud metadata with path", "https://169.254.169.254/latest/meta-data", "link-local"},
+		{"rfc1918 with port and path", "https://10.0.0.5:8443/app", "RFC1918"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateTarget(tools.Target{URL: tc.url}, tools.ScanConfig{})
+			require.Error(t, err, "a path must not bypass IP classification")
+			assert.Contains(t, err.Error(), tc.wantErrSub)
+		})
+	}
+}
+
 func TestValidateTarget_RejectsEmptyURL(t *testing.T) {
 	target := tools.Target{URL: ""}
 	cfg := tools.ScanConfig{}

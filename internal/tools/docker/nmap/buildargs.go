@@ -35,6 +35,13 @@ func buildArgs(target tools.Target, cfg tools.ScanConfig) ([]string, error) {
 		return nil, errors.New("nmap: target URL required")
 	}
 
+	// Nmap takes a bare host/IP: a scheme, path, or :port on the command
+	// line makes it fail to resolve, exit in ~200ms with zero hosts, and
+	// report no error — 14 jobs completed that way with finding_count=0.
+	// Same helper validateTarget classifies with, so argv and the security
+	// checks can never see different strings.
+	addr = normalizeTarget(addr)
+
 	args := []string{
 		"nmap",
 		"-sT",

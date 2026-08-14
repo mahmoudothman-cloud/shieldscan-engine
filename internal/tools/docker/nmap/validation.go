@@ -23,11 +23,11 @@ func validateTarget(target tools.Target, cfg tools.ScanConfig) error {
 		return errors.New("target URL is empty")
 	}
 
-	// Strip protocol prefix if present (Nmap accepts bare host/IP)
-	addr = stripScheme(addr)
-
-	// Strip port if present (Nmap port spec is via -p flag, not in target)
-	addr = stripPort(addr)
+	// Normalize to the bare host so IP classification below sees the same
+	// string buildArgs puts on the command line. MUST stay identical to
+	// buildArgs' normalization: if validation classifies a different string
+	// than the one nmap receives, the checks below can be bypassed.
+	addr = normalizeTarget(addr)
 
 	if ip := net.ParseIP(addr); ip != nil {
 		return validateIPTarget(ip, cfg)
@@ -112,6 +112,38 @@ func isShieldScanInfra(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// normalizeTarget reduces a target URL to the bare host/IP that Nmap
+// accepts on the command line: scheme, path, and :port removed.
+//
+// Single source of truth for BOTH validateTarget (which classifies the
+// result against the rejection categories) and buildArgs (which puts the
+// result in argv). Keeping one helper is load-bearing, not tidiness: the
+// original bug was validateTarget normalizing a local copy that buildArgs
+// never saw, so `nmap https://host` reached argv, failed to resolve, and
+// exited with zero hosts and no error. A second, subtler consequence of
+// divergence is a validation bypass — see the ordering note below.
+//
+// Order matters:
+//   - stripScheme first: stripPath would otherwise truncate "https://host"
+//     at the scheme's own "//" and yield "https:".
+//   - stripPath before stripPort: stripPort requires an all-digit suffix,
+//     so "host:443/app" leaves afterColon="443/app" and the port survives.
+func normalizeTarget(addr string) string {
+	addr = stripScheme(addr)
+	addr = stripPath(addr)
+	addr = stripPort(addr)
+	return addr
+}
+
+// stripPath removes a URL path suffix (everything from the first '/').
+// Call only after stripScheme — see normalizeTarget's ordering note.
+func stripPath(addr string) string {
+	if idx := strings.Index(addr, "/"); idx != -1 {
+		return addr[:idx]
+	}
+	return addr
 }
 
 // stripScheme removes URL scheme prefix (http://, https://, tcp://) if present.

@@ -105,6 +105,39 @@ func TestBuildArgs_OXSendsToStdout(t *testing.T) {
 	assert.Equal(t, "-", args[oxIdx+1], "-oX value must be - (stdout)")
 }
 
+// TestBuildArgs_NormalizesProductionTargetShapes pins the fix for the
+// silent zero-finding bug: buildArgs passed target.URL straight to argv,
+// so `nmap https://host` failed to resolve and exited in ~200ms with zero
+// hosts and no error (14 jobs completed with finding_count=0). Every other
+// buildargs test passes a bare "example.com" — the shape production never
+// sends — which is why this survived those runs.
+func TestBuildArgs_NormalizesProductionTargetShapes(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"scheme only", "https://example.com", "example.com"},
+		{"http scheme", "http://example.com", "example.com"},
+		{"scheme and path", "https://example.com/app", "example.com"},
+		{"scheme and trailing slash", "https://example.com/", "example.com"},
+		// stripPort alone cannot handle this: afterColon is "443/app",
+		// which fails allDigits, so the port survives without stripPath.
+		{"scheme, port and path", "https://example.com:443/app", "example.com"},
+		{"scheme and port", "https://example.com:8443", "example.com"},
+		{"bare host unchanged", "example.com", "example.com"},
+		{"bracketed IPv6 with port", "https://[2001:db8::1]:8443/app", "2001:db8::1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args, err := buildArgs(tools.Target{URL: tc.url}, tools.ScanConfig{})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, args[len(args)-1],
+				"target must reach argv as a bare host nmap can resolve")
+		})
+	}
+}
+
 func TestBuildArgs_RejectsInvalidTarget(t *testing.T) {
 	target := tools.Target{URL: "127.0.0.1"}
 	cfg := tools.ScanConfig{}
