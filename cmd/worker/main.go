@@ -38,7 +38,42 @@ func redactRedisCredential(s string) string {
 	return redisCredentialRe.ReplaceAllString(s, "${1}***${2}")
 }
 
+// installSIGPIPEGuard stops a dead stdout/stderr reader from killing the
+// worker mid-shutdown.
+//
+// Go's runtime treats SIGPIPE specially: a write to a broken pipe on fd 1 or
+// 2 terminates the process, while the same write on any other fd merely
+// returns EPIPE. The worker is launched as `./bin/worker 2>&1 | tee ...`, so
+// fd 1 and 2 ARE a pipe. Ctrl-C in the pane signals the whole foreground
+// process group; `tee` has no handler and dies immediately; the worker
+// catches SIGINT and its very first act is a log line (run.go's "shutdown
+// signal received; draining in-flight jobs") — a write into a pipe with no
+// reader. The process died there, so the drain never ran and
+// WarmPool.Shutdown never reaped its containers.
+//
+// os/signal documents the escape: once SIGPIPE is registered via Notify, the
+// signal is delivered to the channel instead of being fatal, and the write
+// returns EPIPE like any other fd. Verified on go1.26.5 — without this,
+// exit status is 141 (128+SIGPIPE) and cleanup never runs; with it, exit is
+// 0 and cleanup completes. Pinned by TestSIGPIPEGuard* in sigpipe_test.go.
+//
+// The channel is buffered and deliberately never read: package signal sends
+// non-blocking, so a full buffer simply drops later SIGPIPEs. Only the
+// registration matters, and a reader goroutine would be one more thing to
+// shut down (ADR-021 Rule 2) for no benefit.
+//
+// Note this makes log output best-effort once the reader is gone — writes
+// fail silently rather than killing us. That is the correct trade: losing
+// shutdown log lines is strictly better than losing the shutdown itself.
+func installSIGPIPEGuard() {
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
+}
+
 func main() {
+	// FIRST, before anything can write to stdout/stderr — the whole point is
+	// to survive a reader that has already gone away.
+	installSIGPIPEGuard()
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal().Err(err).Msg("config load failed")

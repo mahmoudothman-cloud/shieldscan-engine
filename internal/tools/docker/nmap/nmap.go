@@ -35,13 +35,14 @@ const RunnerTimeout = 30 * time.Minute
 // Accepts a *client.Client (the real Docker SDK client) and internally
 // adapts via docker.NewProductionClient. Tests use newPoolWithClient
 // (file-local) with a stub-backed dockerClient for unit-test isolation.
-func NewPool(cli *dockerclient.Client, log zerolog.Logger) (*docker.WarmPool, error) {
+func NewPool(cli *dockerclient.Client, workerID string, log zerolog.Logger) (*docker.WarmPool, error) {
 	if cli == nil {
 		return nil, errors.New("nmap: docker client required")
 	}
 	pool, err := docker.New(docker.Config{
 		Image:       Image,
 		MaxSize:     PoolMaxSize,
+		Labels:      docker.PoolLabels(workerID, "nmap"),
 		Cleanup:     docker.NoCleanup,
 		HealthCheck: nil,
 	}, docker.NewProductionClient(cli), log)

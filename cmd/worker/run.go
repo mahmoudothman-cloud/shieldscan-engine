@@ -64,16 +64,28 @@ func runMain(ctx context.Context, deps runMainDeps) int {
 		return 1
 	}
 
+	// Worker identity. Generated BEFORE the docker registry because every
+	// warm-pool container is labelled with it at create time, and the
+	// heartbeat below publishes the same id — orphan reaping joins the two
+	// (container label vs live heartbeat set) to tell a dead worker's
+	// containers from a live peer's.
+	workerID := generateWorkerID()
+
 	// Build the M7 DockerRunner registry per ADR-026 + Task 7.2 D4.
 	// Parallel to buildRegistry; constructs WarmPool-backed runners
 	// for CLI-shaped Docker tools (Nmap at Task 7.2; Trivy + SQLMap
 	// future). Pools list flows through Startup (Phase 3 logging) +
 	// runMain shutdown orchestration (drain path below).
-	dockerRunners, pools, err := buildDockerRegistry(log)
+	dockerRunners, pools, err := buildDockerRegistry(workerID, log)
 	if err != nil {
 		log.Error().Err(err).Msg("docker registry wiring failed")
 		return 1
 	}
+
+	// Reap containers orphaned by previous workers, before this process
+	// creates any of its own. Non-fatal: an untidy host is not a reason to
+	// refuse to boot.
+	reapOrphanContainers(ctx, client, workerID, log)
 
 	// Merge native + docker runner maps. Registry is frozen-at-
 	// construction (per registry.go docstring) so a single NewRegistry
@@ -97,8 +109,7 @@ func runMain(ctx context.Context, deps runMainDeps) int {
 		Logger:      log,
 	})
 
-	// Worker identity + heartbeat.
-	workerID := generateWorkerID()
+	// Heartbeat over the identity generated above.
 	hostname, _ := os.Hostname()
 	if hostname == "" {
 		hostname = "unknown"

@@ -64,6 +64,7 @@ type fakeClient struct {
 	removeCalls    atomic.Int32
 	lastRemoveOpts container.RemoveOptions
 	lastHostConfig *container.HostConfig // Task 7.5e: capture HostConfig (incl. Mounts) for Mounts plumbing assertion
+	lastConfig     *container.Config     // orphan-reaping: capture Config (incl. Labels) for label plumbing assertion
 }
 
 func (f *fakeClient) ImagePull(ctx context.Context, refStr string, options image.PullOptions) (io.ReadCloser, error) {
@@ -87,6 +88,7 @@ func (f *fakeClient) ContainerCreate(
 ) (container.CreateResponse, error) {
 	f.createCalls.Add(1)
 	f.lastHostConfig = hostCfg
+	f.lastConfig = cfg
 	return f.createResp, f.createErr
 }
 
@@ -140,7 +142,7 @@ func TestContainer_NewContainer_PullsImageIfMissing(t *testing.T) {
 		createResp: container.CreateResponse{ID: "abc123def456789"},
 	}
 
-	c, err := newContainer(context.Background(), fc, "trivy:latest", nil, noopLog())
+	c, err := newContainer(context.Background(), fc, "trivy:latest", nil, nil, noopLog())
 	require.NoError(t, err)
 	require.NotNil(t, c)
 
@@ -162,7 +164,7 @@ func TestContainer_NewContainer_StartFailureCleansUp(t *testing.T) {
 		startErr:   errors.New("daemon refused start"),
 	}
 
-	c, err := newContainer(context.Background(), fc, "trivy:latest", nil, noopLog())
+	c, err := newContainer(context.Background(), fc, "trivy:latest", nil, nil, noopLog())
 	require.Error(t, err)
 	assert.Nil(t, c)
 

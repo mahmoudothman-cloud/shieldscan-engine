@@ -89,7 +89,7 @@ func TestIntegration_TrivyContainer_Alpine(t *testing.T) {
 		dockerclient.WithAPIVersionNegotiation(),
 	)
 	require.NoError(t, err)
-	pool, err := NewPool(cli, zerolog.Nop())
+	pool, err := NewPool(cli, "test-worker", zerolog.Nop())
 	require.NoError(t, err)
 	defer func() { _ = pool.Shutdown(context.Background()) }()
 
@@ -131,7 +131,7 @@ func TestIntegration_TrivyFs_TestData(t *testing.T) {
 		dockerclient.WithAPIVersionNegotiation(),
 	)
 	require.NoError(t, err)
-	pool, err := NewPool(cli, zerolog.Nop())
+	pool, err := NewPool(cli, "test-worker", zerolog.Nop())
 	require.NoError(t, err)
 	defer func() { _ = pool.Shutdown(context.Background()) }()
 
@@ -170,7 +170,7 @@ func TestIntegration_TrivyContainer_RegistrationShape(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	pool, err := NewPool(cli, zerolog.Nop())
+	pool, err := NewPool(cli, "test-worker", zerolog.Nop())
 	require.NoError(t, err)
 	require.NotNil(t, pool)
 	defer func() { _ = pool.Shutdown(context.Background()) }()

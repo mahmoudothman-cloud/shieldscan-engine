@@ -25,7 +25,7 @@ func TestRunnerTimeout_FrameworkDefault(t *testing.T) {
 }
 
 func TestNewPool_RequiresClient(t *testing.T) {
-	_, err := NewPool(nil, zerolog.Nop())
+	_, err := NewPool(nil, "test-worker", zerolog.Nop())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "docker client required")
 }

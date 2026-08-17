@@ -23,6 +23,12 @@ import (
 // Returns runners map (keyed by tool name) + pools list (for shutdown
 // lifecycle registration in run.go drain path).
 //
+// workerID is stamped onto every container each pool creates (see
+// docker.PoolLabels) so containers this process leaves behind on a
+// SIGKILL can be identified and reaped by the NEXT worker's startup
+// sweep. It must therefore be the same id the heartbeat publishes —
+// reaping compares container labels against the live heartbeat set.
+//
 // Per Task 7.2 D4 brainstorming lock: separate function preserves
 // buildRegistry's binary-resolution loop purpose; DockerRunner
 // consumers genuinely diverge in shape (no native binary; warm pool
@@ -34,7 +40,7 @@ import (
 //
 // Caller (runMain) treats failure as exit 1 (startup failure) — same
 // posture as buildRegistry.
-func buildDockerRegistry(log zerolog.Logger) (map[string]tools.ToolRunner, []*docker.WarmPool, error) {
+func buildDockerRegistry(workerID string, log zerolog.Logger) (map[string]tools.ToolRunner, []*docker.WarmPool, error) {
 	cli, err := dockerclient.NewClientWithOpts(
 		dockerclient.FromEnv,
 		dockerclient.WithAPIVersionNegotiation(),
@@ -43,7 +49,7 @@ func buildDockerRegistry(log zerolog.Logger) (map[string]tools.ToolRunner, []*do
 		return nil, nil, fmt.Errorf("worker: docker client init: %w", err)
 	}
 
-	nmapPool, err := nmap.NewPool(cli, log)
+	nmapPool, err := nmap.NewPool(cli, workerID, log)
 	if err != nil {
 		return nil, nil, fmt.Errorf("worker: nmap pool init: %w", err)
 	}
@@ -52,7 +58,7 @@ func buildDockerRegistry(log zerolog.Logger) (map[string]tools.ToolRunner, []*do
 	// registrations per Q2 dual-registration lock (implementation plan
 	// §3.5). NewContainerRunner + NewFsRunner exec different argv per
 	// scan but share image + warm pool lifecycle.
-	trivyPool, err := trivy.NewPool(cli, log)
+	trivyPool, err := trivy.NewPool(cli, workerID, log)
 	if err != nil {
 		return nil, nil, fmt.Errorf("worker: trivy pool init: %w", err)
 	}
@@ -61,7 +67,7 @@ func buildDockerRegistry(log zerolog.Logger) (map[string]tools.ToolRunner, []*do
 	// NOT Trivy dual-Name). DockerRunner exec-shape; Q1 (a) stdout-
 	// parsing — NO Mounts capability used (NewPool sets Config.Mounts
 	// nil; framework routes to DefaultContainerFactory).
-	sqlmapPool, err := sqlmap.NewPool(cli, log)
+	sqlmapPool, err := sqlmap.NewPool(cli, workerID, log)
 	if err != nil {
 		return nil, nil, fmt.Errorf("worker: sqlmap pool init: %w", err)
 	}

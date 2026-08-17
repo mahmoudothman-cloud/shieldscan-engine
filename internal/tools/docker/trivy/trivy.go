@@ -71,7 +71,7 @@ const RunnerTimeout = 30 * time.Minute
 // adapts via docker.NewProductionClient. Mirrors Task 7.2 Nmap
 // precedent shape (internal/tools/docker/nmap/nmap.go) extended with
 // Task 7.5e Mounts capability.
-func NewPool(cli *dockerclient.Client, log zerolog.Logger) (*docker.WarmPool, error) {
+func NewPool(cli *dockerclient.Client, workerID string, log zerolog.Logger) (*docker.WarmPool, error) {
 	if cli == nil {
 		return nil, errors.New("trivy: docker client required")
 	}
@@ -92,6 +92,7 @@ func NewPool(cli *dockerclient.Client, log zerolog.Logger) (*docker.WarmPool, er
 	pool, err := docker.New(docker.Config{
 		Image:       Image,
 		MaxSize:     PoolMaxSize,
+		Labels:      docker.PoolLabels(workerID, "trivy"),
 		Mounts:      mounts,
 		Cleanup:     docker.NoCleanup,
 		HealthCheck: nil,

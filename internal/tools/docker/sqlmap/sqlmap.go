@@ -48,13 +48,14 @@ const RunnerTimeout = 30 * time.Minute
 // []string{} in container.Config) covers parrotsec/sqlmap's
 // ENTRYPOINT=[sqlmap] automatically; argv[0]="sqlmap" in buildArgs
 // re-establishes binary invocation cleanly post-override.
-func NewPool(cli *dockerclient.Client, log zerolog.Logger) (*docker.WarmPool, error) {
+func NewPool(cli *dockerclient.Client, workerID string, log zerolog.Logger) (*docker.WarmPool, error) {
 	if cli == nil {
 		return nil, errors.New("sqlmap: docker client required")
 	}
 	pool, err := docker.New(docker.Config{
 		Image:       Image,
 		MaxSize:     PoolMaxSize,
+		Labels:      docker.PoolLabels(workerID, "sqlmap"),
 		Cleanup:     docker.NoCleanup,
 		HealthCheck: nil,
 	}, docker.NewProductionClient(cli), log)

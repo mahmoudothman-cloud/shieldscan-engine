@@ -78,7 +78,7 @@ func TestIntegration_SQLMap_DVWA_EndToEnd(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	// 2. SQLMap pool + runner
-	pool, err := NewPool(cli, zerolog.Nop())
+	pool, err := NewPool(cli, "test-worker", zerolog.Nop())
 	require.NoError(t, err)
 	defer func() { _ = pool.Shutdown(context.Background()) }()
 

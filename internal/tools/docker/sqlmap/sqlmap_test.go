@@ -33,7 +33,7 @@ func TestRunnerTimeout_30Min(t *testing.T) {
 // TestNewPool_RequiresClient verifies nil client error per framework
 // contract (mirrors Nmap + Trivy precedent).
 func TestNewPool_RequiresClient(t *testing.T) {
-	_, err := NewPool(nil, zerolog.Nop())
+	_, err := NewPool(nil, "test-worker", zerolog.Nop())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "docker client required")
 }

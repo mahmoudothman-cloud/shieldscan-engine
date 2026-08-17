@@ -11,9 +11,18 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// workerKeyPrefix is the Redis key namespace for worker registration.
+// WorkerKeyPrefix is the Redis key namespace for worker registration.
 // Format: shieldscan:workers:{worker_id}.
-const workerKeyPrefix = "shieldscan:workers:"
+//
+// Exported because orphan-container reaping (cmd/worker/reap_wiring.go) scans
+// this namespace to learn which workers are still alive before deleting any
+// container labelled with a worker id. Sharing the constant keeps the two
+// readers of this keyspace from drifting apart.
+const WorkerKeyPrefix = "shieldscan:workers:"
+
+// workerKeyPrefix is the original package-private spelling, retained so the
+// in-package call sites below read unchanged.
+const workerKeyPrefix = WorkerKeyPrefix
 
 // DefaultHeartbeatTTL is the worker-key TTL refreshed on each
 // Heartbeat tick. 60s gives orchestrator-side detection a clear

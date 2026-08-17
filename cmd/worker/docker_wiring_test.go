@@ -15,7 +15,7 @@ import (
 // SDK client + warm pools are lazy), so this runs without Docker.
 func TestBuildDockerRegistry_IncludesZap(t *testing.T) {
 	t.Setenv("SHIELDSCAN_ZAP_API_KEY", "test-key")
-	runners, _, err := buildDockerRegistry(zerolog.Nop())
+	runners, _, err := buildDockerRegistry("test-worker", zerolog.Nop())
 	require.NoError(t, err)
 
 	zapRunner, ok := runners["zap"]
@@ -32,7 +32,7 @@ func TestBuildDockerRegistry_IncludesZap(t *testing.T) {
 // "zap: APIKey required" error.
 func TestBuildDockerRegistry_ZapRegistersWithoutAPIKey(t *testing.T) {
 	t.Setenv("SHIELDSCAN_ZAP_API_KEY", "")
-	runners, _, err := buildDockerRegistry(zerolog.Nop())
+	runners, _, err := buildDockerRegistry("test-worker", zerolog.Nop())
 	require.NoError(t, err)
 
 	_, ok := runners["zap"]

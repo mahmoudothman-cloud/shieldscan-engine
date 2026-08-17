@@ -166,7 +166,15 @@ func NewServiceContainer(id, imageRef, baseURL string, cli DockerClient, log zer
 // access; matches Task 7.2 Nmap consumer expectation). DefaultContainerFactory
 // passes nil for backward-compat; WarmPool internal closure (when
 // cfg.Mounts non-empty + cfg.ContainerFactory nil) passes cfg.Mounts.
-func newContainer(ctx context.Context, cli dockerClient, image string, mounts []mount.Mount, log zerolog.Logger) (*Container, error) {
+// Per the orphan-reaping extension: labels is the optional set of Docker
+// labels stamped onto the container at create. WarmPool populates it from
+// Config.Labels (owning worker id + pool name) so a later worker can
+// identify containers a dead worker left behind. Nil labels are legal and
+// mean "unlabelled" — but note that an unlabelled container is invisible to
+// ReapOrphans by construction, which is the point: reaping keys on OUR label,
+// never on the image, so a container a human started from the same image is
+// never touched.
+func newContainer(ctx context.Context, cli dockerClient, image string, mounts []mount.Mount, labels map[string]string, log zerolog.Logger) (*Container, error) {
 	scopedLog := log.With().Str("image", image).Logger()
 
 	// 1. Pull image. SDK returns an io.ReadCloser carrying pull
@@ -202,6 +210,7 @@ func newContainer(ctx context.Context, cli dockerClient, image string, mounts []
 			Entrypoint: []string{},
 			Cmd:        []string{"sleep", "infinity"},
 			Tty:        false,
+			Labels:     labels,
 		},
 		&container.HostConfig{
 			Resources: container.Resources{

@@ -96,10 +96,12 @@ type ContainerFactoryFunc func(ctx context.Context, cli dockerClient, image stri
 // or equivalent.
 func DefaultContainerFactory(ctx context.Context, cli dockerClient, image string, log zerolog.Logger) (*Container, error) {
 	// Signature-stable per Q1 α.ii lock: passes nil mounts (no host
-	// filesystem access). Consumers needing host bind-mounts populate
-	// Config.Mounts instead; WarmPool.New() constructs an internal
-	// closure that threads cfg.Mounts → newContainer.
-	return newContainer(ctx, cli, image, nil, log)
+	// filesystem access) and nil labels. Consumers needing host bind-mounts
+	// or reap labels populate Config.Mounts / Config.Labels instead;
+	// WarmPool.New() constructs an internal closure that threads both into
+	// newContainer. Retained for out-of-package callers that set
+	// Config.ContainerFactory explicitly; New() no longer routes through it.
+	return newContainer(ctx, cli, image, nil, nil, log)
 }
 
 // Config configures a WarmPool. Image is required; MaxSize defaults
@@ -112,6 +114,11 @@ func DefaultContainerFactory(ctx context.Context, cli dockerClient, image string
 // preserves ContainerFactoryFunc + DefaultContainerFactory signature
 // stability; service-shape consumers via custom ContainerFactory
 // unaffected).
+// Labels (orphan-reaping extension) are stamped on every container this pool
+// creates — see PoolLabels / ReapOrphans in reap.go. Threaded the same way as
+// Mounts (internal closure over newContainer) rather than through
+// ContainerFactoryFunc, whose signature is deliberately stable. A pool with
+// no Labels still works; its containers are simply invisible to reaping.
 type Config struct {
 	Image            string
 	MaxSize          int
@@ -119,6 +126,7 @@ type Config struct {
 	HealthCheck      HealthCheckFunc
 	ContainerFactory ContainerFactoryFunc
 	Mounts           []mount.Mount
+	Labels           map[string]string
 }
 
 // New creates a WarmPool. Pool is empty; lazy spin-up on first
@@ -143,25 +151,26 @@ func New(cfg Config, cli dockerClient, log zerolog.Logger) (*WarmPool, error) {
 	if maxSize < 0 {
 		return nil, errors.New("warmpool: MaxSize must be non-negative")
 	}
-	// Per Task 7.5e Q1 α.ii lock — three-branch decision tree
-	// preserves ContainerFactoryFunc + DefaultContainerFactory signature
-	// stability while threading cfg.Mounts to HostConfig via internal
-	// closure:
-	//   (1) ContainerFactory != nil          → custom factory used as-is
+	// Per Task 7.5e Q1 α.ii lock — ContainerFactoryFunc and
+	// DefaultContainerFactory keep their signatures; per-pool extras
+	// (Mounts, and now Labels) reach newContainer through an internal
+	// closure instead:
+	//   (1) ContainerFactory != nil → custom factory used as-is
 	//       (service-shape ServiceContainerFactory unaffected)
-	//   (2) ContainerFactory nil + Mounts != nil → internal closure
-	//       wrapping newContainer with cfg.Mounts
-	//   (3) ContainerFactory nil + Mounts nil  → DefaultContainerFactory
-	//       (pre-7.5e behavior; nil mounts → no HostConfig.Mounts)
+	//   (2) ContainerFactory nil    → internal closure threading
+	//       cfg.Mounts + cfg.Labels
+	//
+	// This collapses the former three-branch tree: the old third branch
+	// (nil Mounts → DefaultContainerFactory) is behaviourally identical to
+	// the closure with nil mounts, and keeping it would have silently
+	// dropped Labels for every pool that declares no Mounts — which is all
+	// of them except trivy-fs.
 	factory := cfg.ContainerFactory
 	if factory == nil {
-		if len(cfg.Mounts) > 0 {
-			mounts := cfg.Mounts // closure capture — slice header by value
-			factory = func(ctx context.Context, cli dockerClient, image string, log zerolog.Logger) (*Container, error) {
-				return newContainer(ctx, cli, image, mounts, log)
-			}
-		} else {
-			factory = DefaultContainerFactory
+		mounts := cfg.Mounts // closure capture — slice header by value
+		labels := cfg.Labels
+		factory = func(ctx context.Context, cli dockerClient, image string, log zerolog.Logger) (*Container, error) {
+			return newContainer(ctx, cli, image, mounts, labels, log)
 		}
 	}
 	return &WarmPool{
