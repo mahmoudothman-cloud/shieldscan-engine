@@ -8,6 +8,58 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-08-16 — Drift #69: A job in flight when the worker dies is lost permanently — no reclaim exists, 13 jobs already stranded — Cumulative Drift Count 68 → 69
+
+**The drift.** Nothing recovers a job whose worker died while holding it. This is worse than the usual "stuck in `running`" shape, because **`running` is never set at all**: no handler on either side of the wire flips a `ScanJob` out of `queued` until a terminal completion event arrives, so a job whose worker vanished stays **`queued` forever** — indistinguishable, by status alone, from one that was never dispatched.
+
+**Mechanism — three independent properties, each individually reasonable.**
+
+1. **`JobConsumer.Pop` is BRPOP** (`internal/redis/queue.go`) — a destructive pop with no processing list and no visibility timeout. The instant a job is popped it exists only in that worker's memory. There is no reliable-queue pattern (`BLMOVE`/`RPOPLPUSH` to an in-flight list) to reclaim from.
+2. **Nothing ever writes `running`.** The api's completions consumer handles `job_completed` / `partial_findings` / `attack_surface`; there is no `job_started` event and no handler for one. `scan_jobs.status` goes `queued` → `completed`/`failed`/`canceled`, so a lost job leaves no state distinguishing "in flight when the worker died" from "never picked up".
+3. **The idempotency claim is taken BEFORE processing** — `SETNX shieldscan:idem:{key}` with a 24h TTL (`internal/redis/idem.go`, SPEC §7.5). It is a duplicate-suppression primitive, not a lease: it is never released on failure and its expiry triggers no redelivery. Nothing re-dispatches the job.
+
+**The janitor was named three times and never built.** All three sites defer recovery to the same component, in language that reads as though it exists:
+
+- `internal/redis/queue.go`: *"the malformed job is silently lost from the customer's perspective. Recovery via M5+ ghost-queued janitor (Task 4.2 carry-forward)."*
+- `shieldscan-api/.../scan_queue.py`: *"a missed publish surfaces as a ghost-canceled scan if workers are running, recoverable via M5+ janitor"*.
+- `shieldscan-api/.../orchestrator.py`: *"we have ghost-queued DB rows; M5+ retry janitor will surface and recover them. Visible failure > silent failure."*
+
+Same class as Drift #68's root: **a comment asserting a safety net that nothing implements.** The last quote is the sharpest — it justifies a design choice by appeal to a recovery path that does not exist, so the "visible failure" it claims to prefer is in fact silent.
+
+**Fossil record (measured 2026-08-16, production).** Not hypothetical:
+
+- **13 `scan_jobs` stranded at `queued`**, while **all four Redis priority queues are empty** — `LLEN` 0 on critical/high/normal/low, and no `shieldscan:queue:*` keys exist at all. The payloads are gone; these rows are unreachable by any worker.
+- **6** are from 2026-08-02 with `0/N` siblings completed — plausibly never dispatched.
+- **7** are from 2026-08-11 → 08-13 with **5–6 of 7 siblings completed** — partially-processed scans, each stranded on one or two jobs. **6 of those 7 are `zap`**, the slowest engine and therefore the one most often in flight when a worker is stopped.
+- **10 scans sit at `QUEUED`** and can never reach a terminal state: the api's `_maybe_complete_scan` requires ALL sibling jobs terminal before it will aggregate.
+
+Customer-visible: a scan that never finishes, with no error and no explanation.
+
+**What landed this session (`bec0ff6`) and what it does NOT cover.** The same investigation found the worker had never completed a graceful shutdown — launched as `./bin/worker 2>&1 | tee ...`, it died of SIGPIPE on its first shutdown log line whenever the pane's `tee` had already exited, skipping both the drain and `WarmPool.Shutdown`. `bec0ff6` registers SIGPIPE via `signal.Notify` (making the write return EPIPE instead of being fatal) and adds container labelling plus startup orphan reaping.
+
+That **removes the most common cause of stranding and recovers none of it**:
+
+- Jobs already stranded stay stranded. The fix is forward-only.
+- SIGKILL, a panic, and an unhandled signal still kill a worker mid-job with no drain.
+- Even the graceful path only drains what is in flight; it does not restore a job whose process is already gone.
+
+So the shutdown fix narrows the window. It does not close the class, and no component owns closing it.
+
+**Deliberately not fixed here.** Scoped as recon-first follow-up rather than patched in-session: the fork is a **reliable queue** (`BLMOVE` to a per-worker processing list + a reclaimer) versus a **heartbeat-timeout janitor** that fails jobs whose worker stopped heartbeating. The heartbeat infrastructure already exists and is now load-bearing — `shieldscan:workers:{id}`, SETEX 60s TTL (`internal/worker/heartbeat.go`), consumed by M10.D tool-health and, as of `bec0ff6`, by orphan-container reaping. Disposition of the 13 existing rows (fail with a reason vs. leave and fix forward) is part of that scoping, not assumed.
+
+**Process note — truncated reads produced false claims twice in one session.** Both times a `tail`/`grep` window excluded the evidence and the conclusion drawn was wrong, and both times it was caught only by re-running the same command wider:
+
+1. A `| tail` on a test run hid ongoing progress and produced a reported "hang" that did not exist.
+2. `tail -12 /tmp/worker.log` landed inside two startup blocks and cut off three lines above the shutdown sequence, producing a reported "loose end" — an unexplained container removal — that was fully explained by lines 13–15 of the same file.
+
+The general shape: **absence of evidence inside a truncated window was treated as evidence of absence.** Cheap discipline — when a claim rests on something *not* appearing in output, re-run without the truncation before asserting it. Related: `tee` without `-a` had been destroying the worker log on every restart, so half of case (2)'s evidence had genuinely been erased on earlier runs; the `-a` fix is what made the lines available to be missed.
+
+**Counters.** Cumulative drift count **68 → 69** (shared catalogue; #67 + #68 are api-side — see `shieldscan-api/DRIFT-LOG.md`). First engine-side catalogue increment since **#66** (M9.A C1 ORM-vs-DB).
+
+Cross-references: `bec0ff6` (SIGPIPE guard + container labelling + orphan reaping); `internal/redis/queue.go` (BRPOP), `internal/redis/idem.go` (SETNX claim), `internal/worker/heartbeat.go` (liveness signal); `cmd/worker/sigpipe_test.go`, `internal/tools/docker/reap.go`; shieldscan-api `DRIFT-LOG.md` Drift #68 (the logging-configuration defect found in the same arc) + `services/completions_consumer.py` (no `job_started` handler) + `services/scan_queue.py` + `services/orchestrator.py` (the two api-side janitor references); SPEC §7.5 idempotency, ADR-016 raw-Redis queue protocol.
+
+---
+
 ## 2026-07-31 — M10.D Sub-Milestone CLOSED + 🏁 M10 REPORT ARCHITECTURE ENTIRELY CLOSED cross-reference (Tool Health; Task 10.6; fourth + final M10 sub-milestone; no catalogue increment)
 
 **Engine-side note — M10.D READS an engine-produced signal but made NO engine changes.** Distinct from M10.A/B/C (which had zero engine scope): M10.D's tool-health endpoint consumes the **heartbeat goroutine's** `shieldscan:workers:*` SETEX keys (`internal/worker/heartbeat.go`), read api-side via `redis.scan_iter`. The heartbeat **pre-existed M10.D and was untouched** — read-only consumption, no engine edit. Logged here to preserve the api+engine DRIFT-LOG sync convention per the M8.1β.2 V-CC reconciliation precedent.
