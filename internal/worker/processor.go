@@ -39,6 +39,27 @@ type idempotencyClaim interface {
 	Claim(ctx context.Context, key string) (bool, error)
 }
 
+// publishMarker abstracts the "this job has published something"
+// record the reclaimer reads. Production wires *redis.PublishGuard.
+type publishMarker interface {
+	MarkPublished(ctx context.Context, idempotencyKey string) error
+}
+
+// ErrJobNotTerminal marks a Process failure that left the job WITHOUT a
+// published terminal completion event — a Redis error on the
+// idempotency claim, or a publish that did not land.
+//
+// The worker loop uses it to decide whether to acknowledge the delivery
+// (Drift #70). Acking removes the job from the processing list, which is
+// correct for every outcome the customer can observe — completed,
+// failed, canceled, duplicate-dropped — and wrong here, because a job
+// that reported nothing is exactly what the reclaimer exists to recover.
+//
+// Note that an ordinary tool failure is NOT this error: emitFailure
+// publishes job_completed(status=failed) and then returns the tool's
+// error, which is terminal and must be acked.
+var ErrJobNotTerminal = errors.New("job did not reach a terminal completion event")
+
 // ProcessorDeps wires the processor's external dependencies.
 //
 // ProgressPublisherFn and CancelSubscriberFn are factories invoked
@@ -51,7 +72,13 @@ type ProcessorDeps struct {
 	ProgressPublisherFn  func(scanID string) progressPublisher
 	CancelSubscriberFn   func(ctx context.Context, scanID string) (cancelSubscriber, error)
 	CompletionsPublisher completionsPublisher
-	Logger               zerolog.Logger
+	// PublishMarker records that a completion event for a job is about
+	// to reach Redis, so the reclaimer can tell "died before publishing
+	// anything" (safe to retry) from "died after publishing findings"
+	// (must not retry). Optional: nil disables the record, which makes
+	// the reclaimer retry more than it should.
+	PublishMarker publishMarker
+	Logger        zerolog.Logger
 
 	// Concrete recon publishers per ADR-028 Phase-1 + Drift #62
 	// Sub-Decision 1 (B). The engine="recon" dispatch case invokes
@@ -84,6 +111,7 @@ type Processor struct {
 	progressPubFn       func(string) progressPublisher
 	cancelSubFn         func(context.Context, string) (cancelSubscriber, error)
 	completionsPub      completionsPublisher
+	marker              publishMarker
 	log                 zerolog.Logger
 	reconProgressPubFn  func(string) *rdsh.ProgressPublisher
 	reconCompletionsPub *rdsh.CompletionsPublisher
@@ -111,6 +139,7 @@ func NewProcessorFromRedis(registry *Registry, client *goredis.Client, log zerol
 			return rdsh.NewCancelSubscriber(ctx, client, scanID)
 		},
 		CompletionsPublisher: rdsh.NewCompletionsPublisher(client),
+		PublishMarker:        rdsh.NewPublishGuard(client),
 		Logger:               log,
 		// Concrete recon publishers per ADR-028 Phase-1 + Drift #62 (B).
 		ReconProgressPubFn:  func(scanID string) *rdsh.ProgressPublisher { return rdsh.NewProgressPublisher(client, scanID) },
@@ -139,6 +168,7 @@ func NewProcessor(deps ProcessorDeps) *Processor {
 		progressPubFn:       deps.ProgressPublisherFn,
 		cancelSubFn:         deps.CancelSubscriberFn,
 		completionsPub:      deps.CompletionsPublisher,
+		marker:              deps.PublishMarker,
 		log:                 deps.Logger,
 		reconProgressPubFn:  deps.ReconProgressPubFn,
 		reconCompletionsPub: deps.ReconCompletionsPub,
@@ -190,7 +220,9 @@ func (p *Processor) Process(ctx context.Context, job *events.JobDispatch) error 
 	// Step 1: Idempotency claim.
 	claimed, err := p.idem.Claim(ctx, job.IdempotencyKey)
 	if err != nil {
-		return fmt.Errorf("idempotency claim failed: %w", err)
+		// Nothing has been emitted and nothing has run: leave the
+		// delivery in the processing list for the reclaimer.
+		return fmt.Errorf("%w: idempotency claim failed: %v", ErrJobNotTerminal, err)
 	}
 	if !claimed {
 		p.log.Info().
@@ -293,13 +325,16 @@ func (p *Processor) Process(ctx context.Context, job *events.JobDispatch) error 
 	// Step 11: Publish each completion event.
 	//
 	// On first publish error we return immediately; subsequent events
-	// are not attempted. Same crash-recovery concern as ADR-017's
-	// accumulator failure mode — partial sequence on the wire is
-	// recoverable via M5+ ghost-queued janitor (Task 4.2 carry-forward).
+	// are not attempted, and the error is marked ErrJobNotTerminal so
+	// the delivery stays in the processing list. Recovery is the
+	// reclaimer's (Drift #70): because publishCompletion sets the
+	// publish marker BEFORE the first event goes out, a half-published
+	// sequence is reported failed rather than retried — a retry would
+	// duplicate the findings that did land.
 	for i, ev := range completionEvents {
-		if err := p.completionsPub.Publish(ctx, ev); err != nil {
-			return fmt.Errorf("publish completion event %d/%d: %w",
-				i+1, len(completionEvents), err)
+		if err := p.publishCompletion(ctx, ev); err != nil {
+			return fmt.Errorf("%w: publish completion event %d/%d: %v",
+				ErrJobNotTerminal, i+1, len(completionEvents), err)
 		}
 	}
 
@@ -392,8 +427,8 @@ func (p *Processor) dispatchRecon(
 		Timestamp:      time.Now().UTC().Format(time.RFC3339),
 		EventSeq:       events.EventSeq{Index: 1, Total: 1},
 	}
-	if err := p.completionsPub.Publish(ctx, completion); err != nil {
-		return fmt.Errorf("publish recon completion event: %w", err)
+	if err := p.publishCompletion(ctx, completion); err != nil {
+		return fmt.Errorf("%w: publish recon completion event: %v", ErrJobNotTerminal, err)
 	}
 
 	p.emitProgress(ctx, progressPub, events.EventJobCompleted, events.ProgressEvent{
@@ -501,10 +536,12 @@ func (p *Processor) emitFailure(ctx context.Context, pub progressPublisher, job 
 		EventSeq:       events.EventSeq{Index: 1, Total: 1},
 		ErrorMessage:   jobErr.Error(),
 	}
-	if err := p.completionsPub.Publish(ctx, completion); err != nil {
-		// Failed-event publish failed; best-effort. Return the
-		// original error wrapped with both contexts.
-		return fmt.Errorf("%w (and failed to publish failure event: %v)", jobErr, err)
+	if err := p.publishCompletion(ctx, completion); err != nil {
+		// The job failed AND nobody was told. Mark it not-terminal so
+		// the delivery survives for the reclaimer; the original error
+		// stays in the message because it is the more useful of the two.
+		return fmt.Errorf("%w (%v, and failed to publish the failure event: %v)",
+			ErrJobNotTerminal, jobErr, err)
 	}
 	return jobErr
 }
@@ -537,10 +574,35 @@ func (p *Processor) emitCancellation(ctx context.Context, pub progressPublisher,
 		Timestamp:      time.Now().UTC().Format(time.RFC3339),
 		EventSeq:       events.EventSeq{Index: 1, Total: 1},
 	}
-	if err := p.completionsPub.Publish(ctx, completion); err != nil {
-		return fmt.Errorf("publish cancellation event: %w", err)
+	if err := p.publishCompletion(ctx, completion); err != nil {
+		return fmt.Errorf("%w: publish cancellation event: %v", ErrJobNotTerminal, err)
 	}
 	return nil
+}
+
+// publishCompletion is the single exit for every completion event.
+//
+// It records the publish marker FIRST. The ordering is the whole point:
+// a crash between the marker and the PUBLISH leaves the job looking like
+// it might have published, which costs a wasted re-run at worst, whereas
+// the reverse ordering would let a job that did publish come back as a
+// retry and duplicate its findings.
+//
+// A marker failure is logged, not returned. Refusing to publish a
+// completion because a bookkeeping key would not write would trade a
+// small risk of a duplicate for a certain stranded job.
+func (p *Processor) publishCompletion(ctx context.Context, ev events.JobCompletedEvent) error {
+	if p.marker != nil {
+		if err := p.marker.MarkPublished(ctx, ev.IdempotencyKey); err != nil {
+			p.log.Warn().
+				Err(err).
+				Str("job_id", ev.JobID).
+				Str("idempotency_key", ev.IdempotencyKey).
+				Msg("publish marker not recorded; a reclaim of this job could retry it " +
+					"instead of failing it")
+		}
+	}
+	return p.completionsPub.Publish(ctx, ev)
 }
 
 // newProgressPub returns a progress publisher for the given scan_id.

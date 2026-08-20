@@ -105,6 +105,7 @@ func processorFixture(t *testing.T, runner *testRunner) (*Processor, *goredis.Cl
 		ProgressPublisherFn:  progressFn,
 		CancelSubscriberFn:   cancelFn,
 		CompletionsPublisher: completionsPub,
+		PublishMarker:        rdsh.NewPublishGuard(client),
 		Logger:               zerolog.Nop(),
 		// Concrete recon publishers per ADR-028 Phase-1 + Drift #62 (B);
 		// miniredis-backed per Sub-Decision 2 (B.i). Harmless for
@@ -664,4 +665,102 @@ func TestProcessor_ReconDispatch_NoWiringFailsLoud(t *testing.T) {
 	ev := recvCompletion(t, completionsCh, 2*time.Second)
 	assert.Equal(t, "failed", ev.Status, "recon dispatch with no wiring fails loud")
 	assert.Equal(t, "recon", ev.Engine)
+}
+
+// ---------------------------------------------------------------------
+// Publish marking and terminal classification (Drift #70)
+//
+// The reclaimer's retry-versus-fail decision is only as good as these
+// two signals. The marker tells it whether findings may already have
+// landed; ErrJobNotTerminal tells the worker loop whether the job was
+// reported at all.
+// ---------------------------------------------------------------------
+
+// publishedMarkerSet reports whether the reclaimer would see this job as
+// having published something.
+func publishedMarkerSet(t *testing.T, client *goredis.Client, idempotencyKey string) bool {
+	t.Helper()
+	n, err := client.Exists(t.Context(), "shieldscan:published:"+idempotencyKey).Result()
+	require.NoError(t, err)
+	return n > 0
+}
+
+// A completed job is marked. Without this a reclaim that lost a race
+// with the Ack would retry a job whose findings already landed.
+func TestProcessor_MarksPublishOnCompletion(t *testing.T) {
+	runner := &testRunner{name: "nuclei", category: "dast"}
+	p, client, _ := processorFixture(t, runner)
+
+	job := makeJob("nuclei", "s1", "idem_s1_nuclei")
+	require.NoError(t, p.Process(t.Context(), job))
+
+	assert.True(t, publishedMarkerSet(t, client, job.IdempotencyKey),
+		"a completed job left no publish marker; a reclaim would retry it")
+}
+
+// The failure path publishes too — a failed job has reported itself, and
+// re-running it after a worker death would re-run the tool for nothing.
+func TestProcessor_MarksPublishOnFailure(t *testing.T) {
+	runner := &testRunner{name: "nuclei", category: "dast", err: errors.New("boom")}
+	p, client, _ := processorFixture(t, runner)
+
+	job := makeJob("nuclei", "s1", "idem_s1_nuclei")
+	require.Error(t, p.Process(t.Context(), job))
+
+	assert.True(t, publishedMarkerSet(t, client, job.IdempotencyKey))
+}
+
+// A job that never got as far as publishing must leave no marker, or the
+// reclaimer would fail it instead of retrying it — turning a recoverable
+// scan into a reported failure.
+func TestProcessor_LeavesNoMarkerWhenNothingWasPublished(t *testing.T) {
+	runner := &testRunner{name: "nuclei", category: "dast"}
+	p, client, mr := processorFixture(t, runner)
+
+	job := makeJob("nuclei", "s1", "idem_s1_nuclei")
+	// Claim taken, then Redis goes away before any publish.
+	mr.Close()
+
+	err := p.Process(t.Context(), job)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrJobNotTerminal),
+		"a job that could not publish anything must be classified not-terminal "+
+			"so the worker leaves it in the processing list; got %v", err)
+	_ = client
+}
+
+// A tool failure is terminal: emitFailure published job_completed. The
+// worker must ack it, so it must NOT carry ErrJobNotTerminal.
+func TestProcessor_ToolFailureIsTerminal(t *testing.T) {
+	runner := &testRunner{name: "nuclei", category: "dast", err: errors.New("nuclei exited 1")}
+	p, _, _ := processorFixture(t, runner)
+
+	err := p.Process(t.Context(), makeJob("nuclei", "s1", "idem_s1_nuclei"))
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, ErrJobNotTerminal),
+		"a published tool failure was classified not-terminal; the reclaimer "+
+			"would fail the same job a second time")
+}
+
+// An unregistered engine is a failure the customer sees, published the
+// same way — also terminal.
+func TestProcessor_UnknownEngineIsTerminal(t *testing.T) {
+	runner := &testRunner{name: "nuclei", category: "dast"}
+	p, _, _ := processorFixture(t, runner)
+
+	err := p.Process(t.Context(), makeJob("nosuchtool", "s1", "idem_s1_unknown"))
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, ErrJobNotTerminal))
+}
+
+// A duplicate is dropped with no error, so the worker acks it and the
+// payload leaves the processing list. Leaving duplicates behind would
+// have every reclaim sweep re-examine them.
+func TestProcessor_DuplicateIsTerminal(t *testing.T) {
+	runner := &testRunner{name: "nuclei", category: "dast"}
+	p, _, _ := processorFixture(t, runner)
+
+	job := makeJob("nuclei", "s1", "idem_s1_nuclei")
+	require.NoError(t, p.Process(t.Context(), job))
+	assert.NoError(t, p.Process(t.Context(), job), "duplicate drop is not an error")
 }

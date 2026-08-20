@@ -101,7 +101,7 @@ func runMain(ctx context.Context, deps runMainDeps) int {
 
 	// Build Processor + Worker via convenience constructor.
 	processor := worker.NewProcessorFromRedis(registry, client, log)
-	consumer := rdsh.NewJobConsumer(client)
+	consumer := rdsh.NewJobConsumer(client, workerID)
 	workerInst := worker.NewWorker(worker.WorkerDeps{
 		Consumer:    consumer,
 		Processor:   processor,
@@ -144,6 +144,11 @@ func runMain(ctx context.Context, deps runMainDeps) int {
 	// Spawn heartbeat refresh loop (worker-lifetime per ADR-021 Rule 3).
 	heartbeatDone := make(chan error, 1)
 	go func() { heartbeatDone <- heartbeat.Run(ctx) }()
+
+	// Recover the in-flight jobs of workers that died (Drift #70).
+	// Started AFTER the heartbeat so this worker is already publishing
+	// liveness before any peer's sweep can consider it dead.
+	reclaimDone := runReclaimLoop(ctx, client, workerID, log)
 
 	// Spawn Worker.Run.
 	runDone := make(chan error, 1)
@@ -188,6 +193,15 @@ func runMain(ctx context.Context, deps runMainDeps) int {
 	case <-heartbeatDone:
 	case <-time.After(2 * time.Second):
 		log.Warn().Msg("heartbeat did not exit cleanly within 2s")
+	}
+
+	// Same for the reclaim loop. A sweep in progress can hold this for up
+	// to reclaimTimeout; the bound below is generous enough to let one
+	// finish and short enough that shutdown never hangs on it.
+	select {
+	case <-reclaimDone:
+	case <-time.After(reclaimTimeout + 2*time.Second):
+		log.Warn().Msg("job reclaim loop did not exit cleanly")
 	}
 
 	// Shutdown warm pools (Task 7.2 D4) — runs AFTER worker drain so

@@ -8,6 +8,54 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-08-20 — Drift #70: Reliable queue + reclaim — closing the job-loss class named in #69 — Cumulative Drift Count 69 → 70
+
+**What shipped.** The fix for the class Drift #69 catalogued. Jobs are no longer destroyed when a worker dies, and the fifteen already stranded are recoverable.
+
+**The change, in one sentence:** checkout stopped being destructive. `BRPOP` popped a payload out of Redis and into the worker's memory, so the process holding it *was* the only record that the job existed; `LMOVE` into `shieldscan:processing:{worker_id}:{priority}` makes "in flight" a fact recorded in Redis instead of an inference drawn from a PostgreSQL status plus a Redis absence.
+
+**Why this fork and not the janitor.** The alternative was a heartbeat-timeout janitor that fails jobs whose worker stopped heartbeating. Three things decided it:
+
+1. **It deletes the discriminator problem rather than paying it.** A janitor has to infer "in flight" by joining two systems on every sweep — `queued` in PostgreSQL AND payload absent from Redis — and that inference is wrong for as long as a legitimate queue backlog exists. A processing list simply records what each worker holds.
+2. **It can retry.** A janitor can only fail. For a 340s nuclei scan killed at second 30, failing is the wrong answer when re-running is available.
+3. **ADR-013 constrains the janitor harder than it looks.** Python is the sole writer, so a Go-side janitor cannot mark anything failed — it would have to publish an event anyway, which is most of the reliable-queue machinery with none of its benefits. (Recovery does publish such an event; see the failure fallback below.)
+
+**Liveness is reused, not invented.** The sweep keys on the same `shieldscan:workers:{id}` heartbeat (SETEX, 60s TTL) that orphan-container reaping has used since `bec0ff6` and that was verified end to end against real Docker. One liveness concept, two consumers, no new infrastructure.
+
+**Retry versus fail — the guard, and why it is currently unreachable.** A reclaimed job is requeued only if it demonstrably published nothing; otherwise it is reported failed. ADR-017 sequencing splits >1000 findings across several completion events, so a job can publish findings and *then* die, and retrying it would duplicate rows that already landed in `raw_findings`. `shieldscan:published:{idempotency_key}` is set immediately BEFORE the first publish — the conservative ordering, since a wrongly-failed job costs a visible re-run and a wrongly-retried one silently duplicates data.
+
+Today findings are all-or-nothing per job: `SplitForCompletion` emits one event under 1000 findings and no scan has exceeded that (zap's 608 is the high-water mark), so the branch never fires. It was built anyway. It costs nothing now and activates exactly when the property stops holding, which one larger target does.
+
+**The failure fallback.** Recovery publishes an ordinary `job_completed` with `status=failed` and a reason string, on the normal completions channel. Python stays the sole writer, there is no janitor, and the event carries diagnostics — which is why `scan_jobs.error_message` is now persisted (api side, same change): the column had existed since the first scans migration and was NULL for all 198 rows, so the reclaimer's entire diagnostic payload would otherwise have survived only in a log line.
+
+**Retry bound: 1.** A job that killed its worker once is likelier poison than unlucky, and the second death costs another full tool runtime to learn nothing. `shieldscan:reclaims:{idempotency_key}` counts; above 1 the sweep fails the job instead. The bound is also what guarantees the sweep terminates.
+
+**The idempotency claim is released, not re-minted.** The claim is taken before processing and never released on the normal path, so it outlives the worker that took it for the full 24h TTL. A requeued job whose claim still stood would be popped and dropped as a duplicate — the same job lost a second time, silently, by the mechanism meant to save it. Re-minting the key was rejected: it is a cross-repo identifier (SPEC §7.5) and a UNIQUE column on `scan_jobs`, so a new one changes the contract and breaks duplicate suppression for everything else keyed on it.
+
+Releasing does not reopen a duplicate-delivery window. A duplicate dispatch is dropped at checkout by whichever claimer won and is acknowledged off the processing list as it goes; and the sweep de-duplicates by `idempotency_key`, so two payloads for one job in a dead worker's list are acted on once. Without that de-duplication the second copy would bump the reclaim counter past the bound and fail a job the first copy had just requeued — a bug found by reasoning through the case, not by a test, and now pinned by one.
+
+**Acknowledgement is the other half, and the sharp edge.** The processing list only helps if the worker is precise about what leaves it, and the rule is not "did `Process` succeed" but **"did anyone get told"**. A tool failure is terminal — `emitFailure` published `job_completed(status=failed)` — and must be acknowledged even though `Process` returns an error. Only `ErrJobNotTerminal` (claim failure, publish failure) means the job vanished silently. Two specific edges:
+
+- **The Ack runs on a detached context.** On the drain path the worker ctx is already canceled when a job finishes; an Ack inheriting it would fail, leaving a *completed* job in the processing list for the next sweep to report failed. `context.WithoutCancel` + a 5s bound. This is cleanup that must outlive the cancel, not work that should survive it.
+- **Python refuses to move a terminal job.** The short-circuit in `_persist` used to require the incoming status to *match*; it now fires on any terminal status. A reclaim that loses a race with an Ack publishes `failed` for a job that completed, and under the old rule that event would have overwritten an ingested, aggregated scan. Safe by construction rather than by timing.
+
+**Two gaps closed that were not in the original scope, both found by writing the thing:**
+
+1. **A startup-only sweep would have left a real hole.** Worker ids are generated per process, so a worker that crashes and restarts inside the 60s TTL still looks alive to its own successor: nothing is reclaimed on that boot, and with a single-worker deployment nothing reclaims it later either. The sweep repeats every 60s.
+2. **A malformed payload used to be lost silently; now it is lost loudly.** It still cannot be recovered — it never decoded — but it is removed from the processing list rather than retried forever, and logged at ERROR with the payload.
+
+**Named, not fixed.** Terminal emission still uses the worker's canceled root context during drain, so a job that *finishes cleanly* while shutting down fails to publish and is recovered as a retry on the next sweep. Correct, but wasteful: the work was done and is re-run. Publishing terminal events on a detached context would avoid it. Left alone deliberately — it changes cancellation semantics in a path governed by the discrimination table in `processor.go`, and recovery already makes it correct.
+
+**The backfill is recovery, not tidying.** The fifteen stranded jobs block twelve parent scans from aggregating, and `_maybe_complete_scan` is what dispatches the AI pipeline. **1,422 raw findings** already collected, already paid for in compute, have never been analysed because a sibling job never reported. Failing the stranded jobs releases all of it. The framing matters: the cost of stranding was never "a wrong status", it was discarded work. `scripts/backfill_stranded_jobs.py` is dry-run by default, re-derives the stranded set on every run (never from a snapshot — a captured list goes stale the moment a worker picks something up), and marks jobs with a distinct `error_message` so they stay separable from genuine tool failures.
+
+**ADR-013 corrected.** Its consequence list claimed a worker outage leaves jobs `queued`/`running` "until events resume". That was false for four months: a worker that *stopped* resumes, a worker that *died* does not, and there was nothing left to resume from. Same defect class as `dbdccfd` and as Drift #69's own root — **a document asserting a safety net that nothing implements** — and the reason it went unexamined is that it reads like a description of a recoverable state. The clause is now true rather than deleted, and a scope note distinguishes the recovery sweep (Redis-only, event-publishing) from the "periodic reconciliation" anti-pattern immediately below it.
+
+**Counters.** Cumulative drift count **69 → 70** (shared catalogue with `shieldscan-api`).
+
+Cross-references: `internal/redis/queue.go` (LMOVE checkout + Ack), `internal/redis/reclaim.go` (the sweep), `internal/redis/idem.go` (`Release`), `internal/worker/worker.go` (`finish`, the ack decision), `internal/worker/processor.go` (`ErrJobNotTerminal`, `publishCompletion`), `cmd/worker/reclaim_wiring.go`; shieldscan-api `services/stranded_jobs.py`, `scripts/backfill_stranded_jobs.py`, `services/completions_consumer.py` (`apply_event`, terminal guard, `error_message` persistence — closes `task_c7113785`); SPEC §7.1 checkout contract + §7.5 claim release + ADR-013 correction; Drift #69 (the catalogue entry this closes), Drift #68 (logging configuration, same arc).
+
+---
+
 ## 2026-08-16 — Drift #69: A job in flight when the worker dies is lost permanently — no reclaim exists, 13 jobs already stranded — Cumulative Drift Count 68 → 69
 
 **The drift.** Nothing recovers a job whose worker died while holding it. This is worse than the usual "stuck in `running`" shape, because **`running` is never set at all**: no handler on either side of the wire flips a `ScanJob` out of `queued` until a terminal completion event arrives, so a job whose worker vanished stays **`queued` forever** — indistinguishable, by status alone, from one that was never dispatched.

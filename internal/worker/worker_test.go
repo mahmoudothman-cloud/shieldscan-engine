@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,23 +14,53 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/odyssey/shieldscan-engine/internal/events"
+	rdsh "github.com/odyssey/shieldscan-engine/internal/redis"
 )
 
 // fakeConsumer is an in-memory JobConsumer for Worker tests. Avoids
-// miniredis BRPOP-ctx-cancel limitation (5.4 DRIFT-LOG) by
-// implementing ctx-aware Pop directly.
+// miniredis's ctx-cancel limitations (5.4 DRIFT-LOG) by implementing
+// ctx-aware Pop directly, and records Acks so tests can pin which
+// deliveries leave the processing list.
 type fakeConsumer struct {
-	mu       sync.Mutex
-	queue    []*events.JobDispatch
-	popError error
-	popCalls atomic.Int32
+	mu        sync.Mutex
+	queue     []*rdsh.Delivery
+	acked     []string
+	ackCtxErr []error
+	ackErr    error
+	popError  error
+	popCalls  atomic.Int32
 }
 
-// push appends a job to the queue.
+// push appends a job to the queue, wrapped as a delivery.
 func (f *fakeConsumer) push(job *events.JobDispatch) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.queue = append(f.queue, job)
+	f.queue = append(f.queue, &rdsh.Delivery{
+		Job:      job,
+		Payload:  `{"id":"` + job.ID + `"}`,
+		Priority: "normal",
+	})
+}
+
+// Ack records the delivery as acknowledged.
+func (f *fakeConsumer) Ack(ctx context.Context, d *rdsh.Delivery) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ackErr != nil {
+		return f.ackErr
+	}
+	f.acked = append(f.acked, d.Job.ID)
+	// Recorded so a test can pin that Ack runs on a context detached
+	// from the worker's, rather than one already poisoned by shutdown.
+	f.ackCtxErr = append(f.ackCtxErr, ctx.Err())
+	return nil
+}
+
+// ackedIDs returns the job ids acknowledged so far.
+func (f *fakeConsumer) ackedIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.acked...)
 }
 
 // setError configures Pop to return err on next call (then clears).
@@ -42,7 +73,7 @@ func (f *fakeConsumer) setError(err error) {
 // Pop dequeues the next job; returns (nil, nil) on empty queue
 // after timeout; returns ctx.Err() on cancel; returns configured
 // popError once.
-func (f *fakeConsumer) Pop(ctx context.Context, timeout time.Duration) (*events.JobDispatch, error) {
+func (f *fakeConsumer) Pop(ctx context.Context, timeout time.Duration) (*rdsh.Delivery, error) {
 	f.popCalls.Add(1)
 
 	// Drain configured error first (single-shot).
@@ -54,10 +85,10 @@ func (f *fakeConsumer) Pop(ctx context.Context, timeout time.Duration) (*events.
 		return nil, err
 	}
 	if len(f.queue) > 0 {
-		job := f.queue[0]
+		d := f.queue[0]
 		f.queue = f.queue[1:]
 		f.mu.Unlock()
-		return job, nil
+		return d, nil
 	}
 	f.mu.Unlock()
 
@@ -134,7 +165,7 @@ func makeWorkerJob(id, scanID string) *events.JobDispatch {
 // tests -----------------------------------------------------------
 
 // TestWorker_RunProcessesJob pins the canonical happy path: queued
-// job → BRPOP → Process called → ctx cancel → graceful exit.
+// job → checkout → Process called → ctx cancel → graceful exit.
 func TestWorker_RunProcessesJob(t *testing.T) {
 	consumer := &fakeConsumer{}
 	processor := &fakeProcessor{}
@@ -295,7 +326,7 @@ func TestWorker_EmptyQueueLoops(t *testing.T) {
 	})
 
 	// Use a fakeConsumer with very short Pop timeout — the worker
-	// uses brpopTimeout=5s by default, but our fakeConsumer's
+	// uses popTimeout=5s by default, but our fakeConsumer's
 	// timeout is the second parameter. We can't control that directly
 	// here; instead, run for ~100ms and verify Pop was called +
 	// no jobs processed.
@@ -351,4 +382,136 @@ func TestWorker_PanicsOnInvalidConcurrency(t *testing.T) {
 			Concurrency: -1,
 		})
 	}, "Concurrency=-1 should panic")
+}
+
+// ---------------------------------------------------------------------
+// Acknowledgement (Drift #70)
+//
+// The processing list only helps if the worker is precise about what it
+// removes from it. Removing too eagerly re-creates the old bug in a new
+// place: a job that vanished without publishing anything would look
+// finished. Removing too reluctantly is worse still — a reclaim would
+// report a job failed that had in fact completed.
+// ---------------------------------------------------------------------
+
+// waitFor polls until cond holds or the deadline passes.
+func waitFor(t *testing.T, d time.Duration, cond func() bool) bool {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return cond()
+}
+
+// runWorkerUntil starts a worker, waits for cond, then shuts it down.
+func runWorkerUntil(t *testing.T, consumer *fakeConsumer, processor *fakeProcessor, cond func() bool) {
+	t.Helper()
+	w := NewWorker(WorkerDeps{
+		Consumer:    consumer,
+		Processor:   processor,
+		Concurrency: 1,
+		Logger:      zerolog.Nop(),
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	ok := waitFor(t, 2*time.Second, cond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not exit within 2s of ctx cancel")
+	}
+	require.True(t, ok, "condition never held")
+}
+
+// A finished job leaves the processing list. If it did not, the next
+// reclaim sweep would publish a failure for a job that succeeded.
+func TestWorker_AcksACompletedJob(t *testing.T) {
+	consumer := &fakeConsumer{}
+	processor := &fakeProcessor{}
+	consumer.push(makeWorkerJob("j1", "s1"))
+
+	runWorkerUntil(t, consumer, processor, func() bool {
+		return len(consumer.ackedIDs()) == 1
+	})
+	assert.Equal(t, []string{"j1"}, consumer.ackedIDs())
+}
+
+// A tool failure is a terminal outcome, not a lost job: emitFailure has
+// already published job_completed(status=failed). Leaving it in the
+// processing list would have a reclaim fail it a second time.
+func TestWorker_AcksAJobThatFailedInTheTool(t *testing.T) {
+	consumer := &fakeConsumer{}
+	processor := &fakeProcessor{processErr: errors.New("nuclei exited 1")}
+	consumer.push(makeWorkerJob("j1", "s1"))
+
+	runWorkerUntil(t, consumer, processor, func() bool {
+		return len(consumer.ackedIDs()) == 1
+	})
+	assert.Equal(t, []string{"j1"}, consumer.ackedIDs())
+}
+
+// The case the whole mechanism exists for. Nothing was published, so the
+// job must stay checked out and recoverable.
+func TestWorker_DoesNotAckAJobThatPublishedNothing(t *testing.T) {
+	consumer := &fakeConsumer{}
+	processor := &fakeProcessor{
+		processErr: fmt.Errorf("%w: publish completion event 1/1: redis down", ErrJobNotTerminal),
+	}
+	consumer.push(makeWorkerJob("j1", "s1"))
+
+	runWorkerUntil(t, consumer, processor, func() bool {
+		return processor.processCalled.Load() >= 1
+	})
+	assert.Empty(t, consumer.ackedIDs(),
+		"a job that never published a terminal event was acked; the reclaimer "+
+			"can no longer recover it")
+}
+
+// The drain path. By the time a job finishes during shutdown the
+// worker's ctx is already canceled; an Ack inheriting it would fail, and
+// a completed job would be left for a reclaim to mark failed.
+func TestWorker_AcksOnACtxThatSurvivesShutdown(t *testing.T) {
+	consumer := &fakeConsumer{}
+	processor := &fakeProcessor{delay: 150 * time.Millisecond}
+	consumer.push(makeWorkerJob("j1", "s1"))
+
+	w := NewWorker(WorkerDeps{
+		Consumer:    consumer,
+		Processor:   processor,
+		Concurrency: 1,
+		Logger:      zerolog.Nop(),
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	// Cancel while the job is still running, so the Ack happens after
+	// the worker ctx is dead.
+	require.True(t, waitFor(t, 2*time.Second, func() bool {
+		return processor.processCalled.Load() >= 1
+	}))
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not drain within 3s")
+	}
+
+	require.Equal(t, []string{"j1"}, consumer.ackedIDs(),
+		"the job finished during drain but was never acked")
+
+	consumer.mu.Lock()
+	defer consumer.mu.Unlock()
+	require.Len(t, consumer.ackCtxErr, 1)
+	assert.NoError(t, consumer.ackCtxErr[0],
+		"Ack inherited the canceled worker ctx; on real Redis the LREM would "+
+			"fail and a completed job would be reported failed by the next sweep")
 }

@@ -58,3 +58,33 @@ func (i *IdempotencyClaim) Claim(ctx context.Context, key string) (bool, error) 
 	}
 	return ok, nil
 }
+
+// Release drops the claim so the same job can be claimed again.
+//
+// Called by the Reclaimer, and only by the Reclaimer, on the requeue
+// path (Drift #70). The claim is taken BEFORE processing and is never
+// released on the normal path, so a job whose worker died mid-scan
+// would be dropped as a "duplicate" the moment it was requeued — the
+// key outlives the process that took it, for the full 24h TTL.
+//
+// Releasing rather than re-minting the idempotency_key is deliberate:
+// the key is a cross-repo identifier (SPEC §7.5; it is also a UNIQUE
+// column on scan_jobs), so minting a new one for a retry would change
+// the contract and break duplicate suppression for everything else
+// keyed on it. Releasing is local to the reclaim path and leaves the
+// key meaning exactly what it says.
+//
+// This does not reopen a duplicate-delivery window. A duplicate
+// dispatch is dropped at pop time by whichever claimer won, and is
+// Ack'd off the processing list as it goes; and the reclaim sweep
+// itself de-duplicates by idempotency_key, so two payloads for one job
+// sitting in the same dead worker's list are handled once.
+func (i *IdempotencyClaim) Release(ctx context.Context, key string) error {
+	if key == "" {
+		return fmt.Errorf("idempotency_key is empty")
+	}
+	if err := i.client.Del(ctx, idemKeyPrefix+key).Err(); err != nil {
+		return fmt.Errorf("DEL %s%s: %w", idemKeyPrefix, key, err)
+	}
+	return nil
+}
