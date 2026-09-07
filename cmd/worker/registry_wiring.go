@@ -109,7 +109,14 @@ func buildRegistry(log zerolog.Logger) (map[string]tools.ToolRunner, []worker.Na
 		"corstest": corstest.NewCORStestRunner(corstest.Config{BinaryPath: paths["corstest"]}, log),
 		"depcheck": depcheck.NewDepCheckRunner(depcheck.Config{BinaryPath: paths["depcheck"]}, log),
 		"gitleaks": gitleaks.NewGitleaksRunner(gitleaks.Config{BinaryPath: paths["gitleaks"]}, log),
-		"nikto":    nikto.NewNiktoRunner(nikto.Config{BinaryPath: paths["nikto"]}, log),
+		// TLSCapable is opt-in: apt's Nikto 2.1.5 cannot scan an HTTPS
+		// target and silently reports the server's plain-HTTP error page
+		// instead. Set SHIELDSCAN_NIKTO_TLS_CAPABLE=1 only after
+		// verifying a newer binary against a real HTTPS target.
+		"nikto": nikto.NewNiktoRunner(nikto.Config{
+			BinaryPath: paths["nikto"],
+			TLSCapable: envEnabled("SHIELDSCAN_NIKTO_TLS_CAPABLE"),
+		}, log),
 		"nuclei": nuclei.NewNucleiRunner(nuclei.Config{
 			BinaryPath:   paths["nuclei"],
 			TemplatesDir: templatesDir,

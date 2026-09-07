@@ -1,44 +1,88 @@
 <?xml version="1.0" ?>
-<niktoscan version="2.1.5" scanstart="2026-01-15 12:00:00" scanend="2026-01-15 12:01:00">
+<niktoscan hoststest="0" options="-h shop.example.com -Format xml -o /tmp/out.xml -ask no -nointeractive" version="2.1.5" scanstart="Wed Jan 15 12:00:00 2026" scanend="Thu Jan  1 00:00:00 1970" scanelapsed=" seconds" nxmlversion="1.2">
 
-<scandetails targetip="192.0.2.20" targethostname="webapp.example.com" targetport="443" sitename="https://webapp.example.com:443" hostheader="webapp.example.com" errors="0" checks="6544">
+<scandetails targetip="192.0.2.20" targethostname="shop.example.com" targetport="3000" targetbanner="" starttime="2026-01-15 12:00:00" sitename="http://shop.example.com:3000" siteip="http://192.0.2.20:3000" hostheader="shop.example.com" errors="0" checks="6544">
 
-<item id="999976" osvdbid="0" osvdblink="http://osvdb.org/0" method="GET">
-<description><![CDATA[The anti-clickjacking X-Frame-Options header is not present.]]></description>
+
+<item id="999984" osvdbid="0" osvdblink="http://osvdb.org/0" method="GET">
+<description><![CDATA[Server leaks inodes via ETags, header found with file /, fields: 0xW/124fa 0x1a0016977d3 ]]></description>
 <uri><![CDATA[/]]></uri>
-<namelink><![CDATA[https://webapp.example.com:443/]]></namelink>
-<iplink><![CDATA[https://192.0.2.20:443/]]></iplink>
+<namelink><![CDATA[http://shop.example.com:3000/]]></namelink>
+<iplink><![CDATA[http://192.0.2.20:3000/]]></iplink>
 </item>
 
 <item id="999100" osvdbid="0" osvdblink="http://osvdb.org/0" method="GET">
-<description><![CDATA[Uncommon header 'cf-ray' found, with contents: -]]></description>
+<description><![CDATA[Uncommon header 'x-frame-options' found, with contents: SAMEORIGIN]]></description>
 <uri><![CDATA[/]]></uri>
-<namelink><![CDATA[https://webapp.example.com:443/]]></namelink>
-<iplink><![CDATA[https://192.0.2.20:443/]]></iplink>
+<namelink><![CDATA[http://shop.example.com:3000/]]></namelink>
+<iplink><![CDATA[http://192.0.2.20:3000/]]></iplink>
 </item>
 
-<item id="999103" osvdbid="0" osvdblink="http://osvdb.org/0" method="GET">
-<description><![CDATA[The X-Content-Type-Options header is not set. This could allow the user agent to render the content of the site in a different fashion to the MIME type.]]></description>
+<item id="999100" osvdbid="0" osvdblink="http://osvdb.org/0" method="GET">
+<description><![CDATA[Uncommon header 'feature-policy' found, with contents: payment 'self']]></description>
 <uri><![CDATA[/]]></uri>
-<namelink><![CDATA[https://webapp.example.com:443/]]></namelink>
-<iplink><![CDATA[https://192.0.2.20:443/]]></iplink>
+<namelink><![CDATA[http://shop.example.com:3000/]]></namelink>
+<iplink><![CDATA[http://192.0.2.20:3000/]]></iplink>
 </item>
 
-<item id="999957" osvdbid="0" osvdblink="http://osvdb.org/0" method="GET">
-<description><![CDATA[Allowed HTTP Methods: GET, HEAD, POST, OPTIONS]]></description>
+<item id="999100" osvdbid="0" osvdblink="http://osvdb.org/0" method="GET">
+<description><![CDATA[Uncommon header 'x-recruiting' found, with contents: /#/jobs]]></description>
 <uri><![CDATA[/]]></uri>
-<namelink><![CDATA[https://webapp.example.com:443/]]></namelink>
-<iplink><![CDATA[https://192.0.2.20:443/]]></iplink>
+<namelink><![CDATA[http://shop.example.com:3000/]]></namelink>
+<iplink><![CDATA[http://192.0.2.20:3000/]]></iplink>
 </item>
 
-<item id="600012" osvdbid="0" osvdblink="http://osvdb.org/0" method="GET">
-<description><![CDATA[/admin/: Admin login page/section found.]]></description>
-<uri><![CDATA[/admin/]]></uri>
-<namelink><![CDATA[https://webapp.example.com:443/admin/]]></namelink>
-<iplink><![CDATA[https://192.0.2.20:443/admin/]]></iplink>
+<item id="999100" osvdbid="0" osvdblink="http://osvdb.org/0" method="GET">
+<description><![CDATA[Uncommon header 'access-control-allow-origin' found, with contents: *]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[http://shop.example.com:3000/]]></namelink>
+<iplink><![CDATA[http://192.0.2.20:3000/]]></iplink>
 </item>
 
-<statistics elapsed="60" itemsfound="5" itemstested="6544" endtime="2026-01-15 12:01:00" />
+<item id="999100" osvdbid="0" osvdblink="http://osvdb.org/0" method="GET">
+<description><![CDATA[Uncommon header 'x-content-type-options' found, with contents: nosniff]]></description>
+<uri><![CDATA[/]]></uri>
+<namelink><![CDATA[http://shop.example.com:3000/]]></namelink>
+<iplink><![CDATA[http://192.0.2.20:3000/]]></iplink>
+</item>
+
+<item id="999996" osvdbid="0" osvdblink="http://osvdb.org/0" method="GET">
+<description><![CDATA[File/dir '/ftp/' in robots.txt returned a non-forbidden or redirect HTTP code (200)]]></description>
+<uri><![CDATA[//ftp/]]></uri>
+<namelink><![CDATA[http://shop.example.com:3000//ftp/]]></namelink>
+<iplink><![CDATA[http://192.0.2.20:3000//ftp/]]></iplink>
+</item>
+
+<item id="999996" osvdbid="0" osvdblink="http://osvdb.org/0" method="GET">
+<description><![CDATA["robots.txt" contains 1 entry which should be manually viewed.]]></description>
+<uri><![CDATA[/robots.txt]]></uri>
+<namelink><![CDATA[http://shop.example.com:3000/robots.txt]]></namelink>
+<iplink><![CDATA[http://192.0.2.20:3000/robots.txt]]></iplink>
+</item>
+
+<item id="999100" osvdbid="0" osvdblink="http://osvdb.org/0" method="OPTIONS">
+<description><![CDATA[Uncommon header 'access-control-allow-methods' found, with contents: GET,HEAD,PUT,PATCH,POST,DELETE]]></description>
+<uri><![CDATA[*]]></uri>
+<namelink><![CDATA[http://shop.example.com:3000*]]></namelink>
+<iplink><![CDATA[http://192.0.2.20:3000*]]></iplink>
+</item>
+
+<item id="001675" osvdbid="3092" osvdblink="http://osvdb.org/3092" method="GET">
+<description><![CDATA[/ftp/: This might be interesting...]]></description>
+<uri><![CDATA[/ftp/]]></uri>
+<namelink><![CDATA[http://shop.example.com:3000/ftp/]]></namelink>
+<iplink><![CDATA[http://192.0.2.20:3000/ftp/]]></iplink>
+</item>
+
+<item id="001811" osvdbid="3092" osvdblink="http://osvdb.org/3092" method="GET">
+<description><![CDATA[/public/: This might be interesting...]]></description>
+<uri><![CDATA[/public/]]></uri>
+<namelink><![CDATA[http://shop.example.com:3000/public/]]></namelink>
+<iplink><![CDATA[http://192.0.2.20:3000/public/]]></iplink>
+</item>
+
+<statistics elapsed="61" itemsfound="11" itemstested="6544" endtime="2026-01-15 12:00:21" />
 </scandetails>
+
 
 </niktoscan>

@@ -38,7 +38,10 @@ func mockNiktoScript(t *testing.T) string {
 	p := filepath.Join(dir, "nikto-mock.sh")
 	// Mirrors real nikto: the XML report plugin infers format from the -o
 	// extension and refuses anything that isn't .xml (empty / unsubstituted
-	// / .out all fail with the empty-path error).
+	// / .out all fail with the empty-path error). The description and the
+	// http-on-443 sitename are copied verbatim from a real 2.1.5 run — a
+	// paraphrased message would classify differently from the real thing,
+	// which is the mistake the old fixtures made.
 	body := `#!/bin/sh
 out=""
 prev=""
@@ -54,7 +57,7 @@ case "$out" in
     ;;
 esac
 cat > "$out" <<'XML'
-<niktoscan><scandetails sitename="https://example.com:443"><item id="999976"><description>Missing X-Frame-Options header</description><uri>/</uri></item></scandetails></niktoscan>
+<niktoscan><scandetails sitename="http://example.com:443"><item id="999976"><description>The anti-clickjacking X-Frame-Options header is not present.</description><uri>/</uri></item></scandetails></niktoscan>
 XML
 `
 	require.NoError(t, os.WriteFile(p, []byte(body), 0o755))
@@ -162,34 +165,42 @@ func TestParseOutput_BasicSingleFinding(t *testing.T) {
 	require.Len(t, findings, 1)
 
 	f := findings[0]
-	assert.Equal(t, "nikto-999976", f.FindingType,
-		"FindingType is 'nikto-' prefix + item id")
+	assert.Equal(t, "nikto-missing-xfo", f.FindingType,
+		"FindingType is the derived class slug, not the raw item id")
+	assert.Equal(t, "The anti-clickjacking X-Frame-Options header is not present.", f.Title,
+		"Title comes from the message text")
 	assert.Contains(t, f.Description, "X-Frame-Options")
 	assert.Equal(t, "low", f.Severity, "Pattern 4: constant SeverityLow")
-	assert.Equal(t, "https://example.com:443/", f.TargetURL,
+	// Captured from a real run against a TLS host: Nikto 2.1.5 writes
+	// "http://" for a target on 443 because it never negotiated TLS. The
+	// fixture used to say "https://", which real Nikto never emits — the
+	// hand-written value is why nothing caught that.
+	assert.Equal(t, "http://example.com:443/", f.TargetURL,
 		"TargetURL derived from sitename + uri")
 }
 
+// TestParseOutput_MultiFindings runs the real captured output of a Nikto
+// scan against a live application. The fixture holds 11 items, six of
+// which are the "Uncommon header" class; five findings survive.
 func TestParseOutput_MultiFindings(t *testing.T) {
 	findings, err := parseOutputFile(noopLog())(fixturePath(t, "nikto_multi.xml"))
 	require.NoError(t, err)
-	require.Len(t, findings, 5)
+	require.Len(t, findings, 5,
+		"11 items minus 6 Uncommon-header observations = 5 findings")
 
-	// All have constant severity.
 	for _, f := range findings {
 		assert.Equal(t, "low", f.Severity)
+		assert.NotEqual(t, f.Title, f.FindingType,
+			"Title must be the message, not a repeat of the identifier")
 	}
 
-	// Verify diversity — at least one finding mentions admin
-	// (validates uri+sitename combination per finding).
-	adminSeen := false
+	// Per-item uri is combined with sitename, so different items on the
+	// same host get different TargetURLs.
+	var urls []string
 	for _, f := range findings {
-		if strings.Contains(f.TargetURL, "/admin/") {
-			adminSeen = true
-			break
-		}
+		urls = append(urls, f.TargetURL)
 	}
-	assert.True(t, adminSeen, "expected /admin/ finding in multi fixture")
+	assert.Contains(t, urls, "http://shop.example.com:3000/ftp/")
 }
 
 func TestParseOutput_Empty(t *testing.T) {
@@ -221,6 +232,7 @@ func TestParseOutput_MissingFieldsSkipped(t *testing.T) {
 	for _, f := range findings {
 		assert.NotEmpty(t, f.FindingType)
 		assert.NotEmpty(t, f.Description)
+		assert.NotEmpty(t, f.Title)
 	}
 }
 
@@ -237,8 +249,13 @@ func TestParseOutput_MissingFieldsSkipped(t *testing.T) {
 // exits 2 with nikto's real "open '' for write" message and Run errors.
 // Unlike the parser tests (which bypass Run), this exercises the exact
 // path that failed live.
+//
+// TLSCapable is set so the preflight does not refuse the https target
+// before the subprocess runs. This test is about placeholder
+// substitution; the TLS policy has its own tests below.
 func TestNiktoRunner_OutputFilePlaceholderSubstituted(t *testing.T) {
-	r := NewNiktoRunner(Config{BinaryPath: mockNiktoScript(t)}, noopLog())
+	r := NewNiktoRunner(
+		Config{BinaryPath: mockNiktoScript(t), TLSCapable: true}, noopLog())
 	findings, err := r.Run(
 		t.Context(),
 		tools.Target{URL: "https://example.com"},
@@ -248,7 +265,7 @@ func TestNiktoRunner_OutputFilePlaceholderSubstituted(t *testing.T) {
 		"Run must succeed: -o {{outputFile}} must be substituted to a real tempfile path")
 	require.Len(t, findings, 1,
 		"the finding proves the mock wrote to the substituted -o path and ParseOutputFile read it")
-	assert.Equal(t, "nikto-999976", findings[0].FindingType)
+	assert.Equal(t, "nikto-missing-xfo", findings[0].FindingType)
 }
 
 // ─── deriveTargetHostport helper (1) ─────────────────────────────────

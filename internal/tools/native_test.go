@@ -660,3 +660,75 @@ func listTempDir(t *testing.T) map[string]struct{} {
 	}
 	return out
 }
+
+// ─── Preflight (3) ───────────────────────────────────────────────────
+
+// Preflight exists so a tool that CANNOT handle a target says so instead
+// of running anyway and reporting whatever it sees. Nikto is the
+// motivating case: 2.1.5 cannot negotiate TLS, so it spoke plain HTTP to
+// port 443 and turned the server's "400 Bad Request" page into findings
+// on every HTTPS scan.
+
+// The refusal must reach the caller unchanged. The processor turns a
+// Run error into job_completed(status=failed) carrying the message, so
+// the wording IS the operator-visible artefact.
+func TestNativeRunner_PreflightErrorIsReturnedUnchanged(t *testing.T) {
+	sentinel := errors.New("this tool cannot do that")
+	r := &NativeRunner{
+		ToolName:    "probe",
+		BinaryPath:  "/bin/true",
+		Preflight:   func(Target, ScanConfig) error { return sentinel },
+		BuildArgs:   func(Target, ScanConfig) []string { return nil },
+		ParseOutput: func([]byte) ([]events.RawFinding, error) { return nil, nil },
+	}
+
+	findings, err := r.Run(context.Background(), Target{URL: "https://x.example.com"}, ScanConfig{})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, sentinel),
+		"the tool's own reason must survive to the caller, not be wrapped away")
+	assert.Nil(t, findings)
+}
+
+// A refusal must happen BEFORE the subprocess. Running it first and
+// discarding the output would still cost the scan its runtime, and on a
+// 15-minute tool that is the whole job.
+func TestNativeRunner_PreflightRunsBeforeTheSubprocess(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "ran")
+	script := filepath.Join(t.TempDir(), "tool.sh")
+	require.NoError(t, os.WriteFile(script,
+		[]byte("#!/bin/sh\ntouch "+marker+"\n"), 0o755))
+
+	r := &NativeRunner{
+		ToolName:    "probe",
+		BinaryPath:  script,
+		Preflight:   func(Target, ScanConfig) error { return errors.New("refused") },
+		BuildArgs:   func(Target, ScanConfig) []string { return nil },
+		ParseOutput: func([]byte) ([]events.RawFinding, error) { return nil, nil },
+	}
+	_, err := r.Run(context.Background(), Target{}, ScanConfig{})
+	require.Error(t, err)
+
+	_, statErr := os.Stat(marker)
+	assert.True(t, os.IsNotExist(statErr),
+		"the subprocess ran despite the preflight refusing the job")
+}
+
+// A nil Preflight is the default and must not change behaviour for the
+// eight tools that do not set one.
+func TestNativeRunner_NilPreflightIsANoOp(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "tool.sh")
+	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\necho ok\n"), 0o755))
+
+	r := &NativeRunner{
+		ToolName:   "probe",
+		BinaryPath: script,
+		BuildArgs:  func(Target, ScanConfig) []string { return nil },
+		ParseOutput: func(b []byte) ([]events.RawFinding, error) {
+			return []events.RawFinding{{Title: strings.TrimSpace(string(b))}}, nil
+		},
+	}
+	findings, err := r.Run(context.Background(), Target{}, ScanConfig{})
+	require.NoError(t, err)
+	require.Len(t, findings, 1)
+	assert.Equal(t, "ok", findings[0].Title)
+}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // resolveBinary applies DEVELOPMENT-PATTERNS Pattern 2 (env-var-binary)
@@ -41,4 +42,19 @@ func resolveBinary(envVar, toolName string) (string, error) {
 			toolName, envVar, toolName)
 	}
 	return path, nil
+}
+
+// envEnabled reports whether an env var is set to an affirmative value.
+//
+// Accepts the forms an operator actually types — "1", "true", "yes",
+// "on", any case — rather than only Go's strconv.ParseBool set, because
+// the failure mode of a stricter parser is a flag that silently does
+// nothing. Anything else, including unset, is false.
+func envEnabled(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }

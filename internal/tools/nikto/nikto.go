@@ -18,9 +18,13 @@
 //
 // Operational notes (OPS milestone M11):
 //
-//   - Nikto pinned at 2.5.0 in VERSIONS.md but Ubuntu apt only ships
-//     2.1.5. Either accept apt's 2.1.5 (recommended; XML parser
-//     stable across 2.x) or install from source for 2.5.0.
+//   - Nikto is pinned at 2.5.0 in VERSIONS.md but Ubuntu apt ships
+//     2.1.5. That gap is NOT cosmetic, contrary to what this comment
+//     said for the life of the deployment: 2.1.5 cannot negotiate TLS,
+//     so it produced findings describing the server's plain-HTTP error
+//     page on every HTTPS scan. TLS targets are now refused outright
+//     (see Config.TLSCapable + preflight). The pin was right; nobody
+//     checked what running behind it cost.
 //
 //   - SHIELDSCAN_NIKTO_BINARY env var (Pattern 2 from 6.5; 7th
 //     instance) or exec.LookPath("nikto") fallback.
@@ -35,8 +39,11 @@
 package nikto
 
 import (
+	"errors"
+	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/odyssey/shieldscan-engine/internal/tools"
@@ -64,6 +71,30 @@ type Config struct {
 	// Pattern 2; 7th instance) or exec.LookPath("nikto") fallback.
 	// Ubuntu apt: /usr/bin/nikto.
 	BinaryPath string
+
+	// TLSCapable declares that the resolved binary can actually scan an
+	// HTTPS target. Default false, which makes every TLS target a
+	// recorded skip (see preflight).
+	//
+	// Defaults to false because Ubuntu's packaged Nikto — 2.1.5, from
+	// 2015, which is what the deployment runs — cannot. Measured
+	// against a live TLS server with Net::SSLeay 1.94 and
+	// IO::Socket::SSL 2.085 installed, so this is not a missing
+	// dependency:
+	//
+	//	-h host:443          → speaks plain HTTP to the TLS port; the
+	//	                       server's "400 Bad Request" page is parsed
+	//	                       as the site, and its headers become
+	//	                       findings. sitename reads "http://host:443".
+	//	-h https://host/     → identical. The URL form does NOT enable
+	//	                       TLS; still "http://host:443".
+	//	-h host:443 -ssl     → "No web server found", 0 hosts tested.
+	//
+	// Set true via SHIELDSCAN_NIKTO_TLS_CAPABLE=1 once a binary that
+	// works has been verified against a real HTTPS target. It is a knob
+	// rather than a constant precisely so that verification needs no
+	// rebuild: flip it, run one scan, read the findings.
+	TLSCapable bool
 }
 
 const niktoTimeout = 15 * time.Minute // Nikto runs ~6500 checks; can be slow
@@ -100,9 +131,64 @@ func NewNiktoRunner(cfg Config, log zerolog.Logger) *tools.NativeRunner {
 		// Nikto's XML report plugin infers format from the -o extension
 		// and refuses a ".out" file — the tempfile MUST end in ".xml".
 		OutputFileExtension: ".xml",
+		Preflight:           preflight(cfg),
 		BuildArgs:           buildArgs(cfg),
 		ParseOutputFile:     parseOutputFile(log),
 	}
+}
+
+// ErrTLSUnsupported is returned for a TLS target when the configured
+// Nikto cannot negotiate TLS.
+//
+// Deliberately an error and not an empty result. Nikto ran against every
+// HTTPS target for the life of the deployment and reported the server's
+// plain-HTTP error page as findings, which was indistinguishable from a
+// clean scan in every artefact anyone looked at: the job completed, the
+// count was non-zero, the findings had titles. Failing loudly is the
+// point — the job goes terminal as job_completed(status=failed) carrying
+// this text in error_message, which is persisted on scan_jobs and
+// printed in the per-job log line.
+var ErrTLSUnsupported = errors.New("nikto: cannot scan a TLS target")
+
+// preflight refuses TLS targets unless the binary is known to handle
+// them. Returns nil for plain-HTTP targets, which Nikto scans correctly.
+func preflight(cfg Config) func(tools.Target, tools.ScanConfig) error {
+	return func(target tools.Target, _ tools.ScanConfig) error {
+		if cfg.TLSCapable || !targetUsesTLS(target.URL) {
+			return nil
+		}
+		return fmt.Errorf(
+			"%w (%s). The packaged Nikto (2.1.5) speaks plain HTTP to the TLS "+
+				"port and parses the server's error page as the site, and its "+
+				"-ssl mode fails to connect at all; either way the findings "+
+				"describe nothing real, so the scan is skipped rather than "+
+				"reported. Fix: install Nikto 2.5.0 (VERSIONS.md §2.5 already "+
+				"pins it; this host has apt's 2.1.5) and set "+
+				"SHIELDSCAN_NIKTO_TLS_CAPABLE=1 after verifying it against an "+
+				"HTTPS target",
+			ErrTLSUnsupported, target.URL)
+	}
+}
+
+// targetUsesTLS reports whether reaching the target requires TLS.
+//
+// Scheme first, since that is what the orchestrator sets. Port 443 is a
+// fallback for a scheme-less "host:port" target, which deriveTargetHostport
+// already accepts.
+func targetUsesTLS(rawURL string) bool {
+	if rawURL == "" {
+		return false
+	}
+	if u, err := url.Parse(rawURL); err == nil && u.Host != "" {
+		switch u.Scheme {
+		case "https", "wss":
+			return true
+		case "http", "ws":
+			return false
+		}
+		return u.Port() == "443"
+	}
+	return strings.HasSuffix(rawURL, ":443")
 }
 
 // buildArgs returns a closure constructing the Nikto command line.

@@ -52,6 +52,26 @@ type NativeRunner struct {
 	// at worker startup (Task 5.6).
 	BinaryPath string
 
+	// Preflight, when set, runs BEFORE the subprocess is spawned and
+	// can refuse the job. A non-nil error is returned from Run
+	// unchanged, so the processor emits job_completed(status=failed)
+	// carrying the message — the job is terminal, visible, and carries
+	// its own reason.
+	//
+	// This exists so a tool that CANNOT do something can say so loudly
+	// rather than run anyway and report whatever it happens to see.
+	// Nikto is the motivating case: the pinned 2.1.5 binary cannot
+	// negotiate TLS, and without a preflight it spoke plain HTTP to
+	// port 443 and reported the server's "400 Bad Request" error page
+	// as findings — for the life of the deployment, on every HTTPS
+	// scan, indistinguishably from a real result.
+	//
+	// Use it for "this tool cannot handle this target", not for
+	// "this target has no findings". A skip must be a decision the
+	// operator can see, which is why it is an error and not a silent
+	// empty slice.
+	Preflight func(target Target, cfg ScanConfig) error
+
 	// BuildArgs constructs the command-line arguments for a given
 	// target + scan config. The closure has full freedom to format
 	// flags however the tool expects.
@@ -190,6 +210,14 @@ func (n *NativeRunner) Run(ctx context.Context, target Target, cfg ScanConfig) (
 		}
 	} else if n.ParseOutput == nil {
 		return nil, fmt.Errorf("%s: ParseOutput is nil", n.ToolName)
+	}
+
+	// Preflight before anything is spawned: a tool that cannot handle
+	// this target must say so rather than run and report artefacts.
+	if n.Preflight != nil {
+		if err := n.Preflight(target, cfg); err != nil {
+			return nil, err
+		}
 	}
 
 	effectiveTimeout := n.effectiveTimeout(cfg)

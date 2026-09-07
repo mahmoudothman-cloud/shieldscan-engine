@@ -50,12 +50,31 @@ Every Nikto finding gets:
 
 ## Fixtures
 
-| File | Findings | Coverage |
-|---|---|---|
-| `nikto_basic.xml` | 1 | Single missing-header finding. Happy-path single-finding parse. |
-| `nikto_multi.xml` | 5 | Real-anonymized scan output: missing-headers, uncommon banner, X-Content-Type-Options, allowed methods, admin section discovered. |
-| `nikto_empty.xml` | 0 | Clean scan, no `<item>` elements (only `<statistics>`). |
-| `nikto_missing_fields.xml` | 2 valid + 2 invalid | Synthetic. Records lacking `id` or with empty `description` are skipped; valid records flow. Net: 2 findings. |
+| File | Items | Findings | Coverage |
+|---|---|---|---|
+| `nikto_basic.xml` | 1 | 1 | **Captured from a real 2.1.5 run.** Single `999976` missing-XFO finding. Note `sitename="http://example.com:443"` — see the warning below. |
+| `nikto_multi.xml` | 11 | 5 | **Captured from a real 2.1.5 run** against a live application: `999984` ETag inode leak, six `999100` uncommon-header observations (all dropped), two `999996` robots.txt messages under one id, and two `db_tests` ids (`001675`, `001811`). |
+| `nikto_empty.xml` | 0 | 0 | Clean scan, no `<item>` elements (only `<statistics>`). |
+| `nikto_missing_fields.xml` | 4 | 2 | Synthetic, and legitimately so — real Nikto never emits an item with no `id` or an empty `description`, and the required-fields gate needs both. |
+
+## ⚠ Fixtures must be captured, not written
+
+`nikto_basic.xml` and `nikto_multi.xml` were **hand-written** until
+2026-09-07 and carried `sitename="https://example.com:443"`.
+
+Real Nikto never emits that. 2.1.5 cannot negotiate TLS, so a target on
+443 is scanned over plain HTTP and the sitename reads `http://host:443`.
+The invented value hid the fact that every HTTPS scan was parsing the
+server's "400 Bad Request" error page instead of the site — for the life
+of the deployment, on every scan, with a passing test suite the whole
+time.
+
+The same shape appeared in `buildargs_test`, which only ever passed bare
+hostnames and so never exercised a scheme at all.
+
+**So: capture real output, then anonymize it.** A fixture that asserts
+what you believe the tool does is worth nothing; only one that records
+what it actually did can contradict you.
 
 ## Adding fixtures
 

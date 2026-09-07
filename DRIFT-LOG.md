@@ -8,6 +8,56 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-09-07 — Drift #71: Nikto has never spoken TLS — every finding on every HTTPS scan described nginx's 400 page — Cumulative Drift Count 70 → 71
+
+**The drift.** `nikto` is the eighth engine, and against an HTTPS target it has never scanned the site. It speaks plain HTTP to port 443, receives nginx's `400 The plain HTTP request was sent to HTTPS port`, and parses that error page as the application. Every nikto finding this deployment has ever produced on an HTTPS target describes that page.
+
+**Found by scanning a real production application** rather than juice-shop. Scan `e44a052b` against `moreofchat.com`: 19 nikto raw findings across four hosts, becoming **10 of the scan's 41 vulnerabilities**, each with an AI-written remediation.
+
+**Mechanism.** `buildArgs` called `deriveTargetHostport`, which discards the scheme and passes `-h host:443`. Measured against a live TLS server, with `Net::SSLeay 1.94` and `IO::Socket::SSL 2.085` installed — so this is not a missing Perl module:
+
+| invocation | result |
+|---|---|
+| `-h host:443` | plain HTTP; `sitename="http://host:443"`; scan "completes" in 3s |
+| `-h https://host/` | **identical** — the URL form does not enable TLS either |
+| `-h host:443 -ssl` | `No web server found`, 0 hosts tested |
+
+Nikto 2.1.5 (2015, Ubuntu apt) cannot negotiate with a modern TLS stack, and neither invocation form nor the `-ssl` flag changes that.
+
+**The proof is arithmetic.** Curling the four hosts' `http://host:443/` today returns a 400 page carrying exactly `Strict-Transport-Security`, `X-Content-Type-Options` and `Referrer-Policy`, plus `X-Frame-Options` on `api` alone. Those are precisely the reported "Uncommon header" messages, in the right per-host distribution. And the three `999976` "X-Frame-Options not present" findings land on exactly the three hosts whose 400 page lacks it, with `api` — the one host whose 400 page has it — correctly absent. Nothing about the finding set describes the customer's application.
+
+**Why nothing caught it.** The test fixtures were **hand-written** and carried `sitename="https://example.com:443"`, which real Nikto never emits. The fixture asserted what we believed the tool did. `buildargs_test` compounded it by only ever passing bare hostnames, so no test exercised a scheme at all. Same shape as Drift #69 and #70 — an artefact asserting a property nothing verified — except here the artefact was a test.
+
+**Two further defects underneath, both live-scan-visible:**
+
+1. **"Uncommon header" is not a finding.** `nikto_headers.plugin:166` emits `999100` for any response header absent from Nikto's static `db_headers` list. That list predates the modern security headers, so a correctly configured server is reported as anomalous once per header it sets: `strict-transport-security`, `x-content-type-options`, `x-frame-options: DENY`, `referrer-policy`. Sixteen of the nineteen findings, and **100% of `999100`**. Now dropped at the parser.
+
+   Audited the whole plugin, as the sslyze `NOT_VULNERABLE` fix (`3426699`) did for its siblings: `999100` is the only observation-only class. `999979` (internal IP in a header), `999984` (ETag inode leak), `999976`/`999978` (clickjacking header absent / permissive) and `999983` + `999987-9` all assert a condition. `999986` reads like an observation but its header list is chosen for disclosure — `x-powered-by`, `x-aspnet-version`, `servlet-engine` — so it stays.
+
+2. **`finding_type` was the raw Nikto id, and `Title` was the same string.** A customer saw a column of identical opaque ids. Worse, `ComputeFingerprint` hashes `FindingType` and **not** `Description`, and `999100` is a catch-all — so four different headers on one host collapsed to one fingerprint. The live scan shows it: **7 distinct fingerprints for 19 raw findings**, four groups of four.
+
+   `finding_type` is now derived from the id **plus** a marker substring, and the title comes from the message. Both were required: a distinct title over a collapsed fingerprint would be worse than the status quo — four titles competing for one identity across scans, which breaks `scan_compare`. `999996` carries two unrelated robots.txt messages under one id and is the case that makes the marker load-bearing rather than decorative.
+
+   Re-fingerprinting cost nothing because every persisted nikto finding was an artefact of the TLS defect. That window closes the moment nikto works, which is why it landed in the same pass.
+
+**The skip is loud, not silent.** `NativeRunner` gained an optional `Preflight` hook that runs before the subprocess and can refuse the job; nikto refuses TLS targets unless `SHIELDSCAN_NIKTO_TLS_CAPABLE=1`. The refusal is an **error**, so the processor emits `job_completed(status=failed)` with the reason in `error_message` — persisted since the Drift #70 pass, and printed in the per-job log line. A silent empty result is exactly the shape that let this run unnoticed; a skip nobody can see is the same defect wearing a different hat.
+
+The knob is an env var rather than a constant so the eventual 2.5.0 upgrade can be **verified without a rebuild**: install it, flip the var, run one scan, read the sitename.
+
+**The pin was already right.** VERSIONS.md §2.5 has pinned Nikto 2.5.0 since the beginning; the host has apt's 2.1.5, and the package doc comment recorded the gap as a preference ("either accept apt's 2.1.5 (recommended)"). Nobody checked what running behind the pin cost. Upgrade filed separately.
+
+**Fixtures are now captured, not written.** `nikto_basic.xml` and `nikto_multi.xml` come from real 2.1.5 runs, anonymised — 11 real items spanning five ids, including the six `999100` observations that get dropped. `nikto_missing_fields.xml` stays synthetic and says why: real Nikto never emits an item with no id.
+
+**Verification.** 27 packages green with `-race`. Seven mutations applied to the new code, seven caught — including "999100 filter removed", "marker ignored; id alone matches", "preflight not attached to the runner" and "framework never calls Preflight".
+
+**Unrelated, and a genuine product win.** The ZAP finding *Strict-Transport-Security Multiple Header Entries* on the same scan was doubted and is a **true positive**: `https://api.moreofchat.com` returns two `Strict-Transport-Security` headers, two `x-content-type-options`, and conflicting `x-frame-options` (`SAMEORIGIN` then `DENY`) and `referrer-policy` (`no-referrer` then `strict-origin-when-cross-origin`). The apex, `www` and `app` each return one, which is why a `curl -sI` against the apex showed nothing. An upstream proxy and the application both set security headers; per RFC 6797 only the first is processed. ZAP caught something a hand check did not.
+
+**Counters.** Cumulative drift count **70 → 71** (shared catalogue with `shieldscan-api`).
+
+Cross-references: `internal/tools/nikto/classify.go` (new — message classification), `internal/tools/nikto/parse.go`, `internal/tools/nikto/nikto.go` (`Config.TLSCapable`, `preflight`, `ErrTLSUnsupported`), `internal/tools/native.go` (`NativeRunner.Preflight`), `cmd/worker/registry_wiring.go` + `binary_resolution.go` (`envEnabled`), `.env.example`; `internal/tools/nikto/testdata/README.md` (why fixtures must be captured); `3426699` (the sslyze `NOT_VULNERABLE` fix this follows in shape); Drift #69 + #70 (same class — an artefact asserting a property nothing verified); VERSIONS.md §2.5.
+
+---
+
 ## 2026-08-20 — Drift #70: Reliable queue + reclaim — closing the job-loss class named in #69 — Cumulative Drift Count 69 → 70
 
 **What shipped.** The fix for the class Drift #69 catalogued. Jobs are no longer destroyed when a worker dies, and the fifteen already stranded are recoverable.

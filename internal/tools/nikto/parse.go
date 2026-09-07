@@ -52,17 +52,25 @@ type niktoItem struct {
 //
 // Per-item field map (Nikto → RawFinding):
 //
-//	item.id              → FindingType ("nikto-" prefix + id)
-//	item.id              → Title (item id is the canonical identifier)
-//	item.description     → Description
-//	item.method + item.uri (combined with scandetails.sitename)
-//	                     → TargetURL
-//	(constant)           → Severity = SeverityLow (Pattern 4)
-//	(constant)           → CWEID = "" (Nikto findings span too many
-//	                       CWE classes for a meaningful constant)
+//	item.id + item.description → FindingType (see classify.go)
+//	item.description           → Title (human-readable, capped)
+//	item.description           → Description (verbatim)
+//	item.uri (combined with scandetails.sitename)
+//	                           → TargetURL
+//	(constant)                 → Severity = SeverityLow (Pattern 4)
+//	(constant)                 → CWEID = "" (Nikto findings span too
+//	                             many CWE classes for a meaningful
+//	                             constant)
 //
 // Required fields gate: id + description non-empty. Missing either
 // → skip with WARN.
+//
+// Non-findings are dropped here (classify.go): Nikto's "Uncommon header"
+// class reports headers the site correctly sets, and reporting them cost
+// a live scan 9 of its 41 vulnerabilities plus an AI-written remediation
+// for each. Dropping at the parser rather than downstream keeps the
+// engine's output meaning "things that are wrong", which is what every
+// consumer already assumes it means.
 //
 // ParseOutput leaves these RawFinding fields EMPTY (NativeRunner.Run
 // enriches after parsing):
@@ -96,7 +104,26 @@ func parseOutputFile(log zerolog.Logger) func(string) ([]events.RawFinding, erro
 						Msg("nikto: item missing id or description; dropping")
 					continue
 				}
-				findings = append(findings, itemToFinding(it, sd))
+
+				desc := strings.TrimSpace(it.Description)
+				class, known := classify(it.ID, desc)
+				if known && class.drop {
+					log.Debug().
+						Str("item_id", it.ID).
+						Str("class", class.slug).
+						Msg("nikto: observation, not a finding; dropping")
+					continue
+				}
+				if !known {
+					// A class we have not characterised. It still becomes a
+					// finding under nikto-<id>; the log is what stops a new
+					// message shape from joining a catch-all unnoticed.
+					log.Info().
+						Str("item_id", it.ID).
+						Str("description", desc).
+						Msg("nikto: unclassified item; using the raw id as finding_type")
+				}
+				findings = append(findings, itemToFinding(it, sd, desc))
 			}
 		}
 		return findings, nil
@@ -105,16 +132,23 @@ func parseOutputFile(log zerolog.Logger) func(string) ([]events.RawFinding, erro
 
 // itemToFinding builds a RawFinding from a single Nikto <item> +
 // its parent <scandetails> context.
-func itemToFinding(it niktoItem, sd niktoScanDetails) events.RawFinding {
+//
+// desc is the already-trimmed description; the caller has it because it
+// needed it to classify the item.
+func itemToFinding(it niktoItem, sd niktoScanDetails, desc string) events.RawFinding {
 	// Combine sitename + uri → TargetURL. Nikto's sitename is like
-	// "https://example.com:443"; uri is the path like "/admin/".
+	// "http://example.com:443"; uri is the path like "/admin/".
+	//
+	// Note the scheme: Nikto 2.1.5 writes "http://" even for a target on
+	// 443, because it never established TLS. That is a symptom, not a
+	// formatting quirk — see the preflight in nikto.go.
 	targetURL := combineSiteURI(sd.SiteName, it.URI)
 
 	return events.RawFinding{
-		Title:       "nikto-" + it.ID,
-		Description: strings.TrimSpace(it.Description),
+		Title:       titleFor(desc),
+		Description: desc,
 		Severity:    SeverityLow, // Pattern 4 constant
-		FindingType: "nikto-" + it.ID,
+		FindingType: findingTypeFor(it.ID, desc),
 		TargetURL:   targetURL,
 	}
 }
