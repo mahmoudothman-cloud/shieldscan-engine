@@ -8,6 +8,43 @@ For cross-cutting decisions affecting both `shieldscan-api` and
 
 ---
 
+## 2026-09-07 — Nikto 2.5.0 installed; the eighth engine works for the first time — no catalogue increment
+
+**Not a drift entry.** The catalogue increment was Drift #71 (70 → 71), which diagnosed the defect. This records the repair, and three things found while making it that the diagnosis had wrong.
+
+**Installed from source, not apt.** `~/.local/nikto-2.5.0`, pointed at by `SHIELDSCAN_NIKTO_BINARY`; `SHIELDSCAN_NIKTO_TLS_CAPABLE=1`. apt's 2.1.5 stays on the box as a fallback that nothing points at — if the env var is ever lost, the preflight refuses TLS targets rather than silently scanning error pages again.
+
+**Verified against a live TLS host**, and the tell is the `sitename` attribute: `https://example.com:443/`, 6951 checks run, findings naming `via: 1.1 Caddy`, `/robots.txt` and `/ftp/`. Those are the reverse proxy and real paths — none of them appears on nginx's "400 The plain HTTP request was sent to HTTPS port" page, which is what every previous nikto finding described.
+
+**Three corrections to Drift #71, all found by running the thing:**
+
+1. **`-h host:443` does not enable TLS in 2.5.0 either.** Drift #71 attributed the failure to 2.1.5's age. It is not a version property — Nikto has never inferred TLS from the port. Only a URL target does it:
+
+   | | `-h host:443` | `-h https://host/` | `-h host:443 -ssl` |
+   |---|---|---|---|
+   | 2.1.5 | `http://` | `http://` | "No web server found" |
+   | 2.5.0 | `http://` | **`https://`** | `https://` |
+
+   So `buildArgs` had to change too: a TLS target is now passed as its URL. Upgrading the binary alone would have left the engine scanning error pages with a newer scanner. The URL form is chosen over `-ssl` because a flag and a target are two things that must agree, and the failure when they do not is silent.
+
+2. **2.5.0 changed the XML root element**, and the parser hard-failed on it: `expected element type <niktoscan> but have <niktoscans>`. 2.1.5 makes `<niktoscan>` the root; 2.5.0 wraps it in a plural `<niktoscans>`. Drift #71 recorded this as a 2.6.x change — it was already true in 2.5.0. `niktoScan` now omits `XMLName` and recurses through a `Nested` field, accepting either. Without this, flipping the capability flag would have turned every nikto job into a parse error.
+
+3. **2.5.0 rewords messages and prefixes descriptions with the item path.** Five classes arrived unmapped on the very first working scan — missing HSTS, missing X-Content-Type-Options, BREACH-suspect compression, and two robots.txt messages, one of which moved from id `999996` to `999997`. All five reached the classifier through the unclassified-item INFO log, which is what that log exists for.
+
+   This is the direct vindication of rejecting message-derived slugs when the classifier was written: had `finding_type` been derived from message text, every one of these would have changed identity across the upgrade and `scan_compare` would have reported the whole set as new.
+
+**Ancillary, and it bites everyone once:** the shipped `nikto.conf` sets `FAILURES=20`. Against a TLS host the SSL layer throws intermittent `ssl connect failed`, and at the default the scan gives up after ~19 seconds having run a fraction of its checks — while still writing a plausible-looking report. Raised to 200, a full run completes: `itemstested=6951`, `elapsed=29`. Recorded in VERSIONS.md §2.5 and REBUILD-RUNBOOK.md §3.2 because it is install state, not code.
+
+**Process note — I repeated a mistake this log already records.** Running `gofmt -w internal/tools/nikto/` rewrote a doc comment, converting the two apostrophes in nikto's real `open '' for write` error into a typographic close-quote. That exact corruption was caught and reverted in an earlier session, and the lesson recorded, and I did it again by formatting a directory instead of the files I had touched.
+
+The durable fix is not vigilance. Backticks do not help — gofmt's doc-comment pass converts the sequence regardless. The comments no longer contain it: they describe the message instead of quoting it, and the one place the literal is load-bearing is a Go string literal in the mock, which gofmt does not touch. `internal/tools/nikto/` is now gofmt-stable, verified by reformatting and diffing. A comment above the mock says why, where the next person will hit it.
+
+**Not adopted: 2.6.1** (upstream latest, 2026-07-31). It rewrote the XML plugin around `XML::Writer`, a Perl module not installed here, so it is a parser change and a new dependency rather than a version bump. Filed separately with the caution that its document shape must be read from real output, not inferred.
+
+Cross-references: `internal/tools/nikto/nikto.go` (`buildTargetArg`, `Config.TLSCapable`), `internal/tools/nikto/parse.go` (root-agnostic envelope, `trimRootPathPrefix`), `internal/tools/nikto/classify.go` (five new classes), `internal/tools/nikto/testdata/nikto_250_tls.xml` (captured from the first working scan); shieldscan-api `services/orchestrator.py` (nikto re-added to `SCAN_TYPE_TOOLS`); VERSIONS.md §2.5, REBUILD-RUNBOOK.md §3.2 + §8.2; Drift #71.
+
+---
+
 ## 2026-09-07 — Drift #71: Nikto has never spoken TLS — every finding on every HTTPS scan described nginx's 400 page — Cumulative Drift Count 70 → 71
 
 **The drift.** `nikto` is the eighth engine, and against an HTTPS target it has never scanned the site. It speaks plain HTTP to port 443, receives nginx's `400 The plain HTTP request was sent to HTTPS port`, and parses that error page as the application. Every nikto finding this deployment has ever produced on an HTTPS target describes that page.

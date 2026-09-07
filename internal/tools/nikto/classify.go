@@ -65,7 +65,11 @@ const uncommonHeaderMarker = "Uncommon header '"
 
 // classifications is consulted in order; the first match wins.
 //
-// Only classes actually observed in Nikto 2.x output are listed. An
+// Only classes actually observed in Nikto 2.x output are listed, across
+// both 2.1.5 and 2.5.0 — the two versions word several messages
+// differently, and 2.5.0 prefixes every description with the item's own
+// uri (stripped in parse.go before classification). Markers are matched
+// with Contains rather than HasPrefix for exactly that reason. An
 // unrecognised item keeps "nikto-"+id as its FindingType — no worse than
 // the previous behaviour — and is logged, so a new class surfaces as a
 // signal instead of silently joining a catch-all.
@@ -89,9 +93,21 @@ var classifications = []classification{
 	{id: "999986", marker: "Retrieved ", slug: "disclosed-header"},
 
 	// 999996 carries at least two unrelated messages, which is why the
-	// marker is load-bearing here rather than decorative.
+	// marker is load-bearing here rather than decorative. 2.1.5 and
+	// 2.5.0 word them differently and 2.5.0 moved the listed-path
+	// message to its own id, so both spellings are listed.
 	{id: "999996", marker: "in robots.txt returned a non-forbidden", slug: "robots-listed-path"},
-	{id: "999996", marker: `"robots.txt" contains`, slug: "robots-entries"},
+	{id: "999997", marker: "is returned a non-forbidden", slug: "robots-listed-path"},
+	{id: "999996", marker: "which should be manually viewed", slug: "robots-entries"},
+
+	// Added after installing Nikto 2.5.0 (task_74dc91dd). Every one of
+	// these appeared on the FIRST real scan a working Nikto performed —
+	// they were unreachable before, because 2.1.5 never got past the
+	// server's error page. They arrived via the unclassified-item INFO
+	// log, which is what that log is for.
+	{id: "999970", marker: "Strict-Transport-Security HTTP header is not defined", slug: "missing-hsts"},
+	{id: "999103", marker: "X-Content-Type-Options header is not set", slug: "missing-content-type-options"},
+	{id: "999966", marker: "Content-Encoding header is set to", slug: "compression-enabled"},
 }
 
 // classify returns the matching class for an item, and whether one was

@@ -10,11 +10,36 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// niktoScan is the top-level XML envelope (Nikto 2.x).
+// niktoScan is the XML envelope, and it is deliberately root-agnostic.
+//
+// Nikto changed its root element between versions, which a fixture
+// written by hand could never have revealed:
+//
+//	2.1.5   <niktoscan> ... <scandetails>
+//	2.5.0+  <niktoscans> <niktoscan> ... <scandetails>
+//
+// Omitting XMLName lets Unmarshal accept either root. `Nested` then
+// picks up the inner <niktoscan> elements the plural form introduces;
+// `ScanDetails` picks up the direct children the singular form has.
+// scanDetails() flattens the two.
+//
+// Pinning XMLName to "niktoscan" cost a hard parse failure —
+// `expected element type <niktoscan> but have <niktoscans>` — on every
+// scan the moment a working Nikto was installed.
 type niktoScan struct {
-	XMLName     xml.Name           `xml:"niktoscan"`
 	Version     string             `xml:"version,attr"`
 	ScanDetails []niktoScanDetails `xml:"scandetails"`
+	Nested      []niktoScan        `xml:"niktoscan"`
+}
+
+// scanDetails flattens the envelope into the per-host sections,
+// whichever nesting the emitting Nikto used.
+func (n niktoScan) scanDetails() []niktoScanDetails {
+	out := append([]niktoScanDetails(nil), n.ScanDetails...)
+	for _, inner := range n.Nested {
+		out = append(out, inner.scanDetails()...)
+	}
+	return out
 }
 
 // niktoScanDetails is the per-server scan section. Multi-host scans
@@ -46,7 +71,8 @@ type niktoItem struct {
 // Nikto 2.1.5+ XML format. Stable across 2.x. File-output mode: Nikto's
 // XML report plugin (nikto_report_xml.plugin) writes to the -o path and
 // does NOT stream to stdout — `-Format xml` without `-o` makes it open an
-// empty filename and die ("Unable to open ” for write"). NativeRunner
+// empty filename and die with an "Unable to open ... for write" error
+// naming an empty path. NativeRunner
 // mints the tempfile, substitutes it for the -o placeholder, and hands
 // this closure the populated path.
 //
@@ -93,7 +119,7 @@ func parseOutputFile(log zerolog.Logger) func(string) ([]events.RawFinding, erro
 			return nil, fmt.Errorf("nikto: parse XML: %w", err)
 		}
 
-		for sdIdx, sd := range doc.ScanDetails {
+		for sdIdx, sd := range doc.scanDetails() {
 			for itemIdx, it := range sd.Items {
 				// Required-fields gate.
 				if it.ID == "" || it.Description == "" {
@@ -105,7 +131,7 @@ func parseOutputFile(log zerolog.Logger) func(string) ([]events.RawFinding, erro
 					continue
 				}
 
-				desc := strings.TrimSpace(it.Description)
+				desc := trimRootPathPrefix(strings.TrimSpace(it.Description))
 				class, known := classify(it.ID, desc)
 				if known && class.drop {
 					log.Debug().
@@ -151,6 +177,32 @@ func itemToFinding(it niktoItem, sd niktoScanDetails, desc string) events.RawFin
 		FindingType: findingTypeFor(it.ID, desc),
 		TargetURL:   targetURL,
 	}
+}
+
+// rootPathPrefixes are the description prefixes Nikto 2.5.0+ adds that
+// carry no information. Both spell "the site itself"; Nikto uses "." for
+// checks it runs against the server rather than a path.
+var rootPathPrefixes = []string{"/: ", ".: "}
+
+// trimRootPathPrefix removes the leading "/: " Nikto 2.5.0+ prepends to
+// descriptions for findings on the site root.
+//
+//	2.1.5   The anti-clickjacking X-Frame-Options header is not present.
+//	2.5.0   /: The anti-clickjacking X-Frame-Options header is not present.
+//
+// Only the site-root prefixes are stripped, and deliberately so. A prefix naming
+// a real path is context the title should keep — "/robots.txt: Entry
+// '/ftp/' is returned a non-forbidden..." reads correctly, whereas
+// stripping it by matching the item's own uri leaves "contains 1 entry
+// which should be manually viewed", a sentence with no subject. "/" is
+// the only prefix that adds nothing TargetURL does not already say.
+func trimRootPathPrefix(desc string) string {
+	for _, p := range rootPathPrefixes {
+		if trimmed, ok := strings.CutPrefix(desc, p); ok {
+			return trimmed
+		}
+	}
+	return desc
 }
 
 // combineSiteURI merges sitename ("https://host:port") with a uri

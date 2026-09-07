@@ -36,6 +36,13 @@ func mockNiktoScript(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	p := filepath.Join(dir, "nikto-mock.sh")
+	// NOTE: the empty-quote sequence in the message below lives in a Go
+	// string literal, which gofmt leaves alone. Do NOT paste it into a
+	// doc comment: gofmt's doc-comment pass rewrites two apostrophes into
+	// a typographic close-quote, silently corrupting the quoted error.
+	// That has now happened twice in this file. Describe the message in
+	// comments; quote it only in code.
+	//
 	// Mirrors real nikto: the XML report plugin infers format from the -o
 	// extension and refuses anything that isn't .xml (empty / unsubstituted
 	// / .out all fail with the empty-path error). The description and the
@@ -115,7 +122,8 @@ func TestBuildArgs_HasAllRequiredFlags(t *testing.T) {
 
 // TestBuildArgs_HasNonEmptyOutputPath is the regression guard for the
 // live full_web finding: `-Format xml` WITHOUT `-o` made Nikto open an
-// empty filename ("Unable to open ” for write") and exit 2. buildArgs
+// empty filename, reporting "Unable to open ... for write" against an
+// empty path, and exit 2. buildArgs
 // MUST pass a non-empty output-path argument immediately after -o.
 func TestBuildArgs_HasNonEmptyOutputPath(t *testing.T) {
 	args := buildArgs(testConfig())(
@@ -147,14 +155,23 @@ func TestBuildArgs_NoTextFormat(t *testing.T) {
 		"-Format txt deprecated at M6.6; XML parser invariant")
 }
 
+// TestBuildArgs_TargetIsHostport pins the PLAIN-HTTP form.
+//
+// This test used to pass an https:// URL and assert the hostport form,
+// which is precisely the Drift #71 mechanism written down as an
+// expectation: Nikto does not infer TLS from the port, so "-h
+// host:8443" scans plain HTTP and, against a TLS-only server, reports
+// on the error page. The assertion was true of the code and wrong about
+// the world. It now covers the case the hostport form is actually
+// correct for; the TLS case is TestBuildArgs_TLSTargetIsPassedAsAURL.
 func TestBuildArgs_TargetIsHostport(t *testing.T) {
 	args := buildArgs(testConfig())(
-		tools.Target{URL: "https://app.example.com:8443/path"},
+		tools.Target{URL: "http://app.example.com:8443/path"},
 		tools.ScanConfig{},
 	)
 	joined := strings.Join(args, " ")
 	assert.Contains(t, joined, "-h app.example.com:8443",
-		"target derived as hostname:port from URL")
+		"a plain-HTTP target is derived as hostname:port from the URL")
 }
 
 // ─── ParseOutput (5) ─────────────────────────────────────────────────
@@ -239,14 +256,15 @@ func TestParseOutput_MissingFieldsSkipped(t *testing.T) {
 // ─── OutputFile substitution end-to-end (1) ──────────────────────────
 
 // TestNiktoRunner_OutputFilePlaceholderSubstituted is the end-to-end
-// regression guard for the live full_web finding (nikto -o ”). It drives
+// regression guard for the live full_web finding (nikto -o with an empty
+// path). It drives
 // the REAL NewNiktoRunner().Run() with a mock nikto that writes XML only
 // when its -o path ends in .xml (mirroring nikto's XML plugin, which
 // infers format from the extension). It passes only if the runner both
 // substitutes {{outputFile}} for a real tempfile AND mints it with the
 // .xml extension (OutputFileExtension). If the placeholder were left
 // literal, OR the tempfile kept the framework-default .out, the mock
-// exits 2 with nikto's real "open '' for write" message and Run errors.
+// exits 2 with nikto's real empty-path open error and Run errors.
 // Unlike the parser tests (which bypass Run), this exercises the exact
 // path that failed live.
 //

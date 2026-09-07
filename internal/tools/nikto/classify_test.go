@@ -187,3 +187,123 @@ func TestNewNiktoRunner_AttachesPreflight(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrTLSUnsupported),
 		"Run must refuse before spawning the subprocess")
 }
+
+// ─── Nikto 2.5.0 (task_74dc91dd) ─────────────────────────────────────
+//
+// Captured from the first scan a WORKING Nikto ever performed here.
+// Everything below was unreachable before: 2.1.5 never got past the
+// server's plain-HTTP error page, so none of these messages could
+// occur. They arrived through the unclassified-item INFO log, which is
+// what that log exists for.
+
+// The parser must accept BOTH root elements. 2.1.5 makes <niktoscan>
+// the root; 2.5.0 wraps it in a plural <niktoscans>. Pinning XMLName
+// to the singular cost a hard parse failure —
+// "expected element type <niktoscan> but have <niktoscans>" — on every
+// scan the moment a working binary was installed, which no hand-written
+// fixture could have revealed.
+func TestParseOutput_AcceptsBothRootElements(t *testing.T) {
+	singular, err := parseOutputFile(noopLog())(fixturePath(t, "nikto_basic.xml"))
+	require.NoError(t, err, "2.1.5 <niktoscan> root")
+	require.Len(t, singular, 1)
+
+	plural, err := parseOutputFile(noopLog())(fixturePath(t, "nikto_250_tls.xml"))
+	require.NoError(t, err, "2.5.0 <niktoscans> root")
+	require.NotEmpty(t, plural, "the plural root must not parse to zero findings")
+}
+
+// The whole point of the upgrade: findings that describe the site.
+func TestParseOutput_Nikto250OverTLS(t *testing.T) {
+	findings, err := parseOutputFile(noopLog())(fixturePath(t, "nikto_250_tls.xml"))
+	require.NoError(t, err)
+	require.Len(t, findings, 8, "9 items minus 1 uncommon-header observation")
+
+	byType := map[string][]string{}
+	for _, f := range findings {
+		byType[f.FindingType] = append(byType[f.FindingType], f.Title)
+	}
+	allTitles := strings.Join(func() (out []string) {
+		for _, f := range findings {
+			out = append(out, f.Title)
+		}
+		return
+	}(), " | ")
+
+	// Every class 2.5.0 emitted here is mapped. nikto-011799 is a
+	// db_tests id, which IS a stable discriminator and correctly keeps
+	// the raw form.
+	for _, want := range []string{
+		"nikto-disclosed-header",
+		"nikto-missing-hsts",
+		"nikto-robots-listed-path",
+		"nikto-robots-entries",
+		"nikto-missing-content-type-options",
+		"nikto-compression-enabled",
+		"nikto-011799",
+	} {
+		assert.Contains(t, byType, want)
+	}
+	assert.NotContains(t, byType, "nikto-uncommon-header")
+	assert.NotContains(t, byType, "nikto-999100")
+
+	// It read the real site, not an error page: Caddy is the reverse
+	// proxy and /robots.txt is a real path. Neither appears on nginx's
+	// "400 The plain HTTP request was sent to HTTPS port".
+	assert.Contains(t, allTitles, "Caddy",
+		"the reverse proxy's own header — absent from the 400 error page")
+	assert.Contains(t, allTitles, "/robots.txt",
+		"a real path — the error page has no paths at all")
+}
+
+// 2.5.0 prefixes descriptions with the item's path. "/" and "." mean
+// "the site itself" and duplicate TargetURL; a real path is context the
+// title should keep.
+func TestTrimRootPathPrefix(t *testing.T) {
+	assert.Equal(t, "Retrieved via header: 1.1 Caddy.",
+		trimRootPathPrefix("/: Retrieved via header: 1.1 Caddy."))
+	assert.Equal(t, "The X-Content-Type-Options header is not set.",
+		trimRootPathPrefix(".: The X-Content-Type-Options header is not set."))
+	assert.Equal(t,
+		"/robots.txt: contains 1 entry which should be manually viewed.",
+		trimRootPathPrefix("/robots.txt: contains 1 entry which should be manually viewed."),
+		"a real path is context, not noise — stripping it leaves a sentence with no subject")
+	assert.Equal(t, "No prefix at all.", trimRootPathPrefix("No prefix at all."))
+}
+
+// The two versions word the same finding differently, and 2.5.0 moved
+// the robots listed-path message to its own id. Both spellings must
+// classify to the same identity or a scan comparison across an upgrade
+// reports every finding as new.
+func TestClassify_BothVersionSpellingsAgree(t *testing.T) {
+	cases := []struct{ id, desc, want string }{
+		{"999996", "File/dir '/ftp/' in robots.txt returned a non-forbidden or redirect HTTP code (200)", "nikto-robots-listed-path"},
+		{"999997", "/robots.txt: Entry '/ftp/' is returned a non-forbidden or redirect HTTP code (200).", "nikto-robots-listed-path"},
+		{"999996", `"robots.txt" contains 1 entry which should be manually viewed.`, "nikto-robots-entries"},
+		{"999996", "/robots.txt: contains 1 entry which should be manually viewed.", "nikto-robots-entries"},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.want, findingTypeFor(c.id, c.desc), "%s: %s", c.id, c.desc)
+	}
+}
+
+// buildArgs must pass a URL for a TLS target. Nikto does not infer TLS
+// from the port: "-h host:443" is plain HTTP on 2.1.5 AND 2.5.0, and
+// against a TLS-only server that yields the error page this whole arc
+// is about.
+func TestBuildArgs_TLSTargetIsPassedAsAURL(t *testing.T) {
+	args := buildArgs(Config{})(
+		tools.Target{URL: "https://example.com/"}, tools.ScanConfig{})
+	joined := strings.Join(args, " ")
+
+	assert.Contains(t, joined, "-h https://example.com/",
+		"a TLS target must keep its scheme; a bare host:443 scans plain HTTP")
+	assert.NotContains(t, joined, "-h example.com:443",
+		"the hostport form is exactly the Drift #71 mechanism")
+}
+
+// Plain HTTP keeps the hostport form it has always used.
+func TestBuildArgs_PlainHTTPKeepsTheHostportForm(t *testing.T) {
+	args := buildArgs(Config{})(
+		tools.Target{URL: "http://example.com:8080/x"}, tools.ScanConfig{})
+	assert.Contains(t, strings.Join(args, " "), "-h example.com:8080")
+}

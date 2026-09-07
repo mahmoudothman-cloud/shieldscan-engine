@@ -18,13 +18,11 @@
 //
 // Operational notes (OPS milestone M11):
 //
-//   - Nikto is pinned at 2.5.0 in VERSIONS.md but Ubuntu apt ships
-//     2.1.5. That gap is NOT cosmetic, contrary to what this comment
-//     said for the life of the deployment: 2.1.5 cannot negotiate TLS,
-//     so it produced findings describing the server's plain-HTTP error
-//     page on every HTTPS scan. TLS targets are now refused outright
-//     (see Config.TLSCapable + preflight). The pin was right; nobody
-//     checked what running behind it cost.
+//   - Nikto 2.5.0 is required for HTTPS and is NOT available from apt,
+//     which ships 2.1.5. That gap was never cosmetic: 2.1.5 cannot
+//     negotiate TLS, so for the life of the deployment it produced
+//     findings describing the server's plain-HTTP error page on every
+//     HTTPS scan. Installed from source; see Config.TLSCapable.
 //
 //   - SHIELDSCAN_NIKTO_BINARY env var (Pattern 2 from 6.5; 7th
 //     instance) or exec.LookPath("nikto") fallback.
@@ -76,24 +74,22 @@ type Config struct {
 	// HTTPS target. Default false, which makes every TLS target a
 	// recorded skip (see preflight).
 	//
-	// Defaults to false because Ubuntu's packaged Nikto — 2.1.5, from
-	// 2015, which is what the deployment runs — cannot. Measured
-	// against a live TLS server with Net::SSLeay 1.94 and
-	// IO::Socket::SSL 2.085 installed, so this is not a missing
-	// dependency:
+	// It defaults to false because the DEFAULT binary cannot: Ubuntu apt
+	// ships Nikto 2.1.5 (2015), and no invocation of it reaches a TLS
+	// server. Measured with Net::SSLeay 1.94 and IO::Socket::SSL 2.085
+	// installed, so this was never a missing Perl module — the full
+	// matrix is in buildTargetArg.
 	//
-	//	-h host:443          → speaks plain HTTP to the TLS port; the
-	//	                       server's "400 Bad Request" page is parsed
-	//	                       as the site, and its headers become
-	//	                       findings. sitename reads "http://host:443".
-	//	-h https://host/     → identical. The URL form does NOT enable
-	//	                       TLS; still "http://host:443".
-	//	-h host:443 -ssl     → "No web server found", 0 hosts tested.
+	// Nikto 2.5.0, installed from source, DOES work, and the deployment
+	// sets SHIELDSCAN_NIKTO_TLS_CAPABLE=1 against it. Verified against a
+	// live TLS host: sitename "https://host:443/", 6951 checks run, and
+	// findings naming the reverse proxy and real paths rather than the
+	// error page.
 	//
-	// Set true via SHIELDSCAN_NIKTO_TLS_CAPABLE=1 once a binary that
-	// works has been verified against a real HTTPS target. It is a knob
-	// rather than a constant precisely so that verification needs no
-	// rebuild: flip it, run one scan, read the findings.
+	// It stays a knob rather than a constant so that verifying a binary
+	// needs no rebuild — flip it, run one scan, read the sitename — and
+	// so the guard still fires if a host is ever rebuilt onto apt's
+	// nikto, which REBUILD-RUNBOOK §3.2 installs by default.
 	TLSCapable bool
 }
 
@@ -158,14 +154,14 @@ func preflight(cfg Config) func(tools.Target, tools.ScanConfig) error {
 			return nil
 		}
 		return fmt.Errorf(
-			"%w (%s). The packaged Nikto (2.1.5) speaks plain HTTP to the TLS "+
-				"port and parses the server's error page as the site, and its "+
-				"-ssl mode fails to connect at all; either way the findings "+
+			"%w (%s). This worker's Nikto is not declared TLS-capable. Ubuntu "+
+				"apt ships 2.1.5, which speaks plain HTTP to the TLS port and "+
+				"parses the server's error page as the site, while its -ssl "+
+				"mode fails to connect at all; either way the findings "+
 				"describe nothing real, so the scan is skipped rather than "+
-				"reported. Fix: install Nikto 2.5.0 (VERSIONS.md §2.5 already "+
-				"pins it; this host has apt's 2.1.5) and set "+
-				"SHIELDSCAN_NIKTO_TLS_CAPABLE=1 after verifying it against an "+
-				"HTTPS target",
+				"reported. Fix: install Nikto 2.5.0 from source (VERSIONS.md "+
+				"§2.5) and set SHIELDSCAN_NIKTO_TLS_CAPABLE=1 after confirming "+
+				"the XML sitename reads https:// and not http://",
 			ErrTLSUnsupported, target.URL)
 	}
 }
@@ -198,15 +194,18 @@ func targetUsesTLS(rawURL string) bool {
 //	nikto -h <hostname:port> -Format xml -o {{outputFile}} -ask no -nointeractive
 //
 // Per-flag rationale:
-//   - -h <target>: target hostname (with port). Derived from
-//     target.URL via deriveTargetHostport (similar to 6.4 SSLyze).
+//   - -h <target>: a bare "host:port" for plain HTTP, but the FULL URL
+//     for a TLS target — see buildTargetArg. Nikto has no auto-detect:
+//     "-h host:443" is plain HTTP on every version tested, including
+//     2.5.0. The scheme in a URL is what turns TLS on.
 //   - -Format xml: XML output. Stable across Nikto 2.1.5 and 2.5.0.
 //     NOT -Format txt (deprecated parser shape; XML is structured).
 //   - -o {{outputFile}}: ADR-023 OutputFile placeholder. REQUIRED —
 //     Nikto's XML report plugin (nikto_report_xml.plugin) writes to a
 //     file and does NOT stream to stdout; `-Format xml` WITHOUT `-o`
 //     makes it open an empty filename and exit 2 with
-//     "Unable to open ” for write" (found on live full_web bring-up).
+//     an "Unable to open ... for write" error naming an empty path
+//     (found on live full_web bring-up).
 //     The M6.6 "XML to stdout" assumption was wrong; corrected to
 //     OutputFile mode (3rd ADR-023 consumer, after Dep-Check + Wapiti).
 //   - -ask no: never prompt for user input (CI safety).
@@ -217,13 +216,45 @@ func targetUsesTLS(rawURL string) bool {
 func buildArgs(_ Config) func(tools.Target, tools.ScanConfig) []string {
 	return func(target tools.Target, _ tools.ScanConfig) []string {
 		return []string{
-			"-h", deriveTargetHostport(target.URL),
+			"-h", buildTargetArg(target.URL),
 			"-Format", "xml",
 			"-o", outputFilePlaceholder,
 			"-ask", "no",
 			"-nointeractive",
 		}
 	}
+}
+
+// buildTargetArg renders the -h value.
+//
+// Nikto does not infer TLS from the port. "-h host:443" speaks plain
+// HTTP on every version measured — 2.1.5 and 2.5.0 both — and against a
+// TLS-only server that yields the "400 The plain HTTP request was sent
+// to HTTPS port" page, which Nikto then reports on as if it were the
+// site. That is engine Drift #71, and passing a hostport was the whole
+// mechanism.
+//
+// A URL target is what enables TLS. Measured against a live server:
+//
+//	2.1.5  -h host:443            → sitename "http://host:443"   (broken)
+//	2.1.5  -h https://host/       → sitename "http://host:443"   (broken)
+//	2.1.5  -h host:443 -ssl       → "No web server found"        (broken)
+//	2.5.0  -h host:443            → sitename "http://host:443"   (broken)
+//	2.5.0  -h https://host/       → sitename "https://host:443"  (WORKS)
+//	2.5.0  -h host:443 -ssl       → sitename "https://host:443"  (works)
+//
+// The URL form is chosen over -ssl because the flag and the target are
+// two things that have to agree, and the failure mode when they do not
+// is silent: you get a scan of an error page that looks like a scan. A
+// URL carries its own scheme, so there is nothing to keep in sync.
+//
+// Plain-HTTP targets keep the hostport form, which they have always
+// used and which works.
+func buildTargetArg(rawURL string) string {
+	if targetUsesTLS(rawURL) {
+		return rawURL
+	}
+	return deriveTargetHostport(rawURL)
 }
 
 // deriveTargetHostport converts target.URL into Nikto's expected
