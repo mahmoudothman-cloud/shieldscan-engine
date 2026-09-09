@@ -27,6 +27,11 @@
 //   - SHIELDSCAN_NIKTO_BINARY env var (Pattern 2 from 6.5; 7th
 //     instance) or exec.LookPath("nikto") fallback.
 //
+//   - Nikto 2.5.0 EXITS NON-ZERO WHENEVER IT REPORTS ANYTHING, which
+//     inverts the meaning of a successful scan — see ExitCodeLenient in
+//     NewNiktoRunner. This is the single most important thing to know
+//     about running this tool from a program.
+//
 // What this package does NOT do at M6.6:
 //   - Register the runner with worker.Registry (deferred to M6.8).
 //   - Apply ScanConfig.Depth (Nikto has no quick/standard/deep knob
@@ -40,6 +45,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -93,7 +99,50 @@ type Config struct {
 	TLSCapable bool
 }
 
-const niktoTimeout = 15 * time.Minute // Nikto runs ~6500 checks; can be slow
+// niktoTimeout bounds a single-target scan. Nikto runs ~6950 checks.
+//
+// Measured: a complete scan of a live TLS host (Caddy-fronted, small
+// site) takes 460s — 8266 requests — so one target sits comfortably
+// inside 15 minutes. Note this is PER TARGET and the runner is invoked
+// per target: a full_web scan of four subdomains is ~4x460s of wall
+// clock spread across four runs, each with its own 15-minute budget.
+// That is a scan-duration consideration for the orchestrator, not a
+// timeout problem here; left as-is deliberately.
+const niktoTimeout = 15 * time.Minute
+
+// niktoFailureLimit is the value passed as `-Option FAILURES=`, which
+// overrides the FAILURES setting in the installed nikto.conf.
+//
+// Nikto aborts a host once it accumulates this many request errors.
+// Upstream ships FAILURES=20, and against any TLS vhost that number is
+// reached during normal operation, killing the scan a fifth of the way
+// in: two plugins deliberately connect to the target BY IP —
+// nikto_headers' IIS internal-IP check (18 URIs) and nikto_sitefiles,
+// which tries every path twice, once with the Host header and once
+// "requested by IP address". LW2 derives the TLS SNI from the same
+// field it connects to, so those probes present an IP literal as the
+// SNI name, and any name-based vhost (Caddy, nginx server_name) answers
+// with a TLS alert. Measured against a live host: 884 connects, of
+// which 400 were by-IP and ALL 400 failed, for 214 counted errors.
+//
+// So ~214 errors is a floor for a perfectly healthy target, not a
+// symptom — the by-IP probes cannot succeed against an SNI-requiring
+// server and there is no flag to disable just that half (the
+// with-Host-header half of nikto_sitefiles is real coverage worth
+// keeping). The limit therefore has to clear the floor with margin
+// for a larger sitefiles database, which 1000 does at ~4.5x.
+//
+// It is deliberately not 0 ("disable entirely"). A genuinely dead or
+// blackholed host should still abort rather than burn the full
+// 15-minute timeout; at the observed ~5 errors/sec, 1000 aborts such a
+// host in ~3 minutes.
+//
+// This lives here, in the args, and NOT in nikto.conf on the host. A
+// setting that exists only in the deployed nikto.conf is invisible to
+// the repo and does not survive REBUILD-RUNBOOK §3.2 — which is
+// exactly how it was first "fixed", and exactly why the scan that
+// found this regressed the moment the box was considered rebuildable.
+const niktoFailureLimit = 1000
 
 // outputFilePlaceholder matches the Wapiti / Dep-Check convention
 // (ADR-023 OutputFile mode).
@@ -106,13 +155,42 @@ const outputFilePlaceholder = "{{outputFile}}"
 //   - ToolName="nikto", ToolCategory="infrastructure"
 //   - Timeout=15m
 //   - MaxStdoutBytes=tools.DefaultMaxStdoutBytes (50 MiB)
-//   - ExitCodeLenient=false (naturally-clean; 4th instance)
-//   - Env=nil (Perl tool; no Python warnings)
+//   - ExitCodeLenient=true — Nikto 2.5.0 exits 1 on ANY finding (see below)
+//   - Env pins PWD (see niktoEnv; EXECDIR resolution)
 //   - OutputFile=true (ADR-023; Nikto's XML plugin REQUIRES -o, it does
 //     not stream XML to stdout — see buildArgs)
 //   - OutputFilePlaceholder="{{outputFile}}"; ParseOutputFile set
 //   - OutputFileExtension=".xml" (Nikto's XML plugin infers format from
 //     the -o extension and rejects the framework-default ".out")
+//
+// ExitCodeLenient is true because Nikto 2.5.0's exit status is inverted
+// relative to every other tool in the engine. nikto.pl:189 does:
+//
+//	if ($mark->{'total_errors'} > 0 || $mark->{'total_vulns'} > 0) {
+//	    $is_failure = 1;
+//	}
+//	...
+//	exit $is_failure;
+//
+// so the tool exits 1 precisely when it has something to report. 2.1.5
+// ended in a bare `exit;` and always returned 0, which is why the
+// runner was built strict and why nothing caught this until 2.5.0 was
+// installed. Measured on one target (OWASP Juice Shop, plain HTTP,
+// identical flags): 2.1.5 → exit 0; 2.5.0 → exit 1 with 7932 requests,
+// 158 items and 2 errors — a completely successful scan. Under
+// ExitCodeLenient=false the framework discards the report before
+// parsing it, so the ONLY nikto scan that could reach the database was
+// one that found nothing. A tool that fails whenever it succeeds.
+//
+// Leniency is safe here because the parse is the real gate, and it is
+// a strict one: ParseOutputFile errors on an unreadable file, on an
+// empty file, and on malformed XML, so a nikto that dies mid-write or
+// never runs still fails the job (TestNiktoRunner_LenientExitDoesNot
+// SwallowCrash). What leniency gives up is the ability to distinguish
+// a complete scan from one Nikto aborted on its error limit — both
+// write well-formed XML with a <statistics> element. That is why
+// niktoFailureLimit is set high enough that the abort means a real
+// outage rather than routine SNI mismatches.
 func NewNiktoRunner(cfg Config, log zerolog.Logger) *tools.NativeRunner {
 	return &tools.NativeRunner{
 		ToolName:              "nikto",
@@ -120,8 +198,8 @@ func NewNiktoRunner(cfg Config, log zerolog.Logger) *tools.NativeRunner {
 		BinaryPath:            cfg.BinaryPath,
 		Timeout:               niktoTimeout,
 		MaxStdoutBytes:        tools.DefaultMaxStdoutBytes,
-		ExitCodeLenient:       false,
-		Env:                   nil,
+		ExitCodeLenient:       true,
+		Env:                   niktoEnv(cfg),
 		OutputFile:            true,
 		OutputFilePlaceholder: outputFilePlaceholder,
 		// Nikto's XML report plugin infers format from the -o extension
@@ -131,6 +209,48 @@ func NewNiktoRunner(cfg Config, log zerolog.Logger) *tools.NativeRunner {
 		BuildArgs:           buildArgs(cfg),
 		ParseOutputFile:     parseOutputFile(log),
 	}
+}
+
+// niktoEnv pins PWD to the directory holding the nikto script, which
+// makes Nikto's plugin/database resolution independent of wherever the
+// worker process happens to have been launched from.
+//
+// This is a guard against a live landmine. nikto.pl's setup_dirs
+// resolves EXECDIR — the root for plugins/, databases/, templates/ and
+// docs/ — in this order (nikto.pl:345):
+//
+//	unless (defined $CONFIGFILE{'EXECDIR'}) {
+//	    if    (-d "$ENV{'PWD'}/plugins")   { ... = $ENV{'PWD'} }
+//	    elsif (-d "$CURRENTDIR/plugins")   { ... = $CURRENTDIR }
+//
+// The environment's PWD wins over the script's own location, and the
+// shipped nikto.conf leaves EXECDIR commented out, so that first branch
+// is live. Go's exec passes the parent's environment through, and
+// setting cmd.Dir does NOT rewrite PWD — so the value Nikto reads is
+// whatever directory the worker's shell was in at launch. Today that is
+// the engine checkout, which has no plugins/ subdirectory, so it falls
+// through and everything works. The day anyone adds one — a Go package
+// named plugins, a vendored tool tree — Nikto would silently load
+// plugins and vulnerability databases from the engine repo instead of
+// from its own install, with no error and no log line.
+//
+// Pointing PWD at the binary's own directory makes both branches agree
+// and removes the coupling. It is also correct for the fallback case:
+// if BinaryPath is apt's /usr/bin/nikto, /usr/bin/plugins does not
+// exist, so resolution falls through to the script directory exactly as
+// it does today.
+//
+// Returns nil when BinaryPath is empty (exec.LookPath fallback), which
+// leaves the inherited environment untouched.
+func niktoEnv(cfg Config) []string {
+	if cfg.BinaryPath == "" {
+		return nil
+	}
+	dir, err := filepath.Abs(filepath.Dir(cfg.BinaryPath))
+	if err != nil {
+		return nil
+	}
+	return []string{"PWD=" + dir}
 }
 
 // ErrTLSUnsupported is returned for a TLS target when the configured
@@ -191,7 +311,8 @@ func targetUsesTLS(rawURL string) bool {
 //
 // Invocation:
 //
-//	nikto -h <hostname:port> -Format xml -o {{outputFile}} -ask no -nointeractive
+//	nikto -h <target> -Format xml -o {{outputFile}} -ask no \
+//	      -nointeractive -Option FAILURES=1000
 //
 // Per-flag rationale:
 //   - -h <target>: a bare "host:port" for plain HTTP, but the FULL URL
@@ -210,6 +331,17 @@ func targetUsesTLS(rawURL string) bool {
 //     OutputFile mode (3rd ADR-023 consumer, after Dep-Check + Wapiti).
 //   - -ask no: never prompt for user input (CI safety).
 //   - -nointeractive: no terminal interaction.
+//   - -Option FAILURES=<n>: raises the per-host error limit above the
+//     ~214 errors an SNI-requiring vhost produces intrinsically — see
+//     niktoFailureLimit for the mechanism and the measurement.
+//     -Option is Nikto 2.5.0's general "override any nikto.conf
+//     setting from the command line" flag; it is what lets this be a
+//     property of the engine rather than a hand-edit on one host.
+//     Verified to win over the installed nikto.conf: with the shipped
+//     FAILURES=20 the same scan aborts at 19s ("Error limit (20)
+//     reached for host"), and with -Option FAILURES=1000 it does not.
+//     2.1.5 does not have -Option, but 2.1.5 cannot reach a TLS target
+//     at all, so it never gets far enough to need it.
 //
 // ScanConfig.Depth ignored at 6.6 (no Nikto knob with that semantic).
 // Auth: N/A (Nikto operates on HTTP-handshake-level probes).
@@ -221,6 +353,7 @@ func buildArgs(_ Config) func(tools.Target, tools.ScanConfig) []string {
 			"-o", outputFilePlaceholder,
 			"-ask", "no",
 			"-nointeractive",
+			"-Option", "FAILURES=" + strconv.Itoa(niktoFailureLimit),
 		}
 	}
 }

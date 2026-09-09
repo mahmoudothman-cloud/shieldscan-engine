@@ -110,8 +110,20 @@ func parseOutputFile(log zerolog.Logger) func(string) ([]events.RawFinding, erro
 		if err != nil {
 			return nil, fmt.Errorf("nikto: read output file: %w", err)
 		}
+		// A zero-byte report is a crash, not a clean scan, and saying so
+		// is load-bearing: the runner is ExitCodeLenient (Nikto 2.5.0
+		// exits 1 on any finding), so the parse is the only thing left
+		// that can fail the job. Nikto's XML plugin writes the envelope
+		// and the DTD line as it starts, and a scan it aborts on its own
+		// error limit still closes every tag — so an empty file means
+		// the process died before it wrote anything, or never ran. Under
+		// leniency the old "empty → zero findings, no error" would have
+		// turned exactly that into a successful scan of a clean host.
 		if len(data) == 0 {
-			return findings, nil
+			return nil, fmt.Errorf(
+				"nikto: output file %s is empty: nikto wrote no report, which "+
+					"means it died before its XML plugin ran (a scan it aborts "+
+					"itself still writes well-formed XML)", outputFilePath)
 		}
 
 		var doc niktoScan
