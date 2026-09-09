@@ -88,7 +88,7 @@ func TestWaitForReady_ProxyMode_RoutesThroughMappedPort(t *testing.T) {
 	defer proxy.Close()
 
 	err := waitForReady(context.Background(), proxy.URL, "/JSON/core/view/version/",
-		200, 2*time.Second, 10*time.Millisecond, "zap")
+		200, 2*time.Second, 10*time.Millisecond, "zap", nil)
 	require.NoError(t, err)
 	assert.Equal(t, "zap", gotHost, "readiness probe must proxy to the magic host zap")
 }

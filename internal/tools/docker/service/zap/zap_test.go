@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/odyssey/shieldscan-engine/internal/tools"
+	"github.com/odyssey/shieldscan-engine/internal/tools/docker"
 	"github.com/odyssey/shieldscan-engine/internal/tools/docker/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -163,7 +164,7 @@ func TestScanModeFor(t *testing.T) {
 func TestNewRunner_Smoke(t *testing.T) {
 	// Smoke test — verify NewRunner returns non-nil with expected fields;
 	// full lifecycle integration requires a real Docker client.
-	r := NewRunner(nil, Config{APIKey: stubAPIKey}, noopLog())
+	r := NewRunner(nil, "shie-testworker", Config{APIKey: stubAPIKey}, noopLog())
 	require.NotNil(t, r)
 	assert.Equal(t, "zap", r.ToolName)
 	assert.Equal(t, "dast", r.ToolCategory)
@@ -186,7 +187,7 @@ func TestNewRunner_Smoke(t *testing.T) {
 // test guards that the Cmd side was actually wired.
 func TestNewRunner_ApiKeyReachesBothSides(t *testing.T) {
 	const key = "K123-unique-test-key"
-	r := NewRunner(nil, Config{APIKey: key}, noopLog())
+	r := NewRunner(nil, "shie-testworker", Config{APIKey: key}, noopLog())
 
 	// (a) client side — readiness endpoint carries the key.
 	assert.Contains(t, r.ServiceConfig.ReadinessEndpoint, "apikey="+key,
@@ -197,4 +198,50 @@ func TestNewRunner_ApiKeyReachesBothSides(t *testing.T) {
 	assert.Contains(t, joined, "api.key="+key,
 		"container Cmd must launch the ZAP daemon with the matching -config api.key")
 	assert.Contains(t, joined, "-daemon", "ZAP must run in daemon mode")
+}
+
+// TestNewRunner_SilentModeMakesTheDigestPinMeanSomething guards a
+// reproducibility property, not a performance one.
+//
+// Image is pinned by digest, and then ZAP's ExtensionAutoUpdate reaches
+// the internet on every cold start and installs a fresh set of ~30
+// add-ons over the top of it. So without -silent the pin does not
+// determine what actually runs: two scans a week apart execute different
+// scan rules, and nothing we persist records which. It also puts a
+// mandatory network download on the critical path of every scan, in a
+// container that has been observed dying 34 seconds into boot.
+//
+// Measured live: -silent prints "Shh! No check-for-update - silent mode
+// enabled", downloads nothing, and listens in ~15s rather than ~21s.
+func TestNewRunner_SilentModeMakesTheDigestPinMeanSomething(t *testing.T) {
+	r := NewRunner(nil, "shie-testworker", Config{APIKey: stubAPIKey}, noopLog())
+	assert.Contains(t, r.ServiceConfig.Cmd, "-silent",
+		"without -silent the digest pin is decorative: every container "+
+			"downloads its own add-on set at runtime")
+	assert.Contains(t, r.ServiceConfig.Image, "@sha256:",
+		"-silent is only meaningful if the image is pinned by digest")
+}
+
+// TestNewRunner_LabelsMakeALeakedContainerReapable pins the other half
+// of the ZAP container-lifecycle gap.
+//
+// ReapOrphans keys on io.shieldscan.managed and nothing else, so an
+// unlabelled container can never be collected. ZAP's containers are
+// ephemeral and created outside the warm pool, which is the path that
+// threads labels — so a ZAP container surviving a SIGKILL sat on the
+// host forever, holding its memory, invisible to every later worker.
+func TestNewRunner_LabelsMakeALeakedContainerReapable(t *testing.T) {
+	r := NewRunner(nil, "shie-19d7fe03", Config{APIKey: stubAPIKey}, noopLog())
+	assert.Equal(t, map[string]string{
+		docker.LabelManaged:  "true",
+		docker.LabelWorkerID: "shie-19d7fe03",
+		docker.LabelPool:     "zap",
+	}, r.ServiceConfig.Labels)
+
+	// An empty worker id means unlabelled, deliberately: stamping an
+	// empty owner would make the container look managed while belonging
+	// to no worker, which reaping would then treat as a dead worker's
+	// orphan and remove out from under a running scan.
+	bare := NewRunner(nil, "", Config{APIKey: stubAPIKey}, noopLog())
+	assert.Nil(t, bare.ServiceConfig.Labels)
 }

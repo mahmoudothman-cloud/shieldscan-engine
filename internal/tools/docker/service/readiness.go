@@ -7,6 +7,18 @@ import (
 	"time"
 )
 
+// aliveCheck reports whether the thing being probed is still capable of
+// becoming ready. A nil error means "keep waiting" — including the
+// inconclusive case, where the check itself could not determine
+// anything; a non-nil error is terminal and aborts the wait.
+//
+// It is a callback rather than a *docker.Container so this file stays
+// what it has always been — an HTTP poll with no Docker SDK in it —
+// while the caller that owns the container supplies the knowledge of
+// how to tell whether it is still alive (see containerAliveCheck in
+// spinup.go).
+type aliveCheck func(context.Context) error
+
 // waitForReady polls baseURL+endpoint until the response status code
 // matches expectedStatus (default 200) within the timeout window,
 // using a fixed pollInterval. Returns nil on ready; descriptive
@@ -30,7 +42,11 @@ import (
 // Fixed pollInterval (not exponential) — readiness is short-window
 // probing; exponential backoff would unnecessarily delay detection
 // of services that come up slowly-but-uniformly.
-func waitForReady(ctx context.Context, baseURL, endpoint string, expectedStatus int, timeout, pollInterval time.Duration, apiProxyHost string) error {
+//
+// alive is consulted after every failed probe and is what stops this
+// from being a pure HTTP poll — see aliveCheck. Nil disables the check,
+// which is what the HTTP-only tests use.
+func waitForReady(ctx context.Context, baseURL, endpoint string, expectedStatus int, timeout, pollInterval time.Duration, apiProxyHost string, alive aliveCheck) error {
 	if expectedStatus == 0 {
 		expectedStatus = http.StatusOK
 	}
@@ -76,6 +92,20 @@ func waitForReady(ctx context.Context, baseURL, endpoint string, expectedStatus 
 				return nil
 			}
 			lastErr = fmt.Errorf("status %d (expected %d)", status, expectedStatus)
+		}
+
+		// The probe failed. Before waiting another interval, ask whether
+		// there is still anything there to become ready — otherwise we
+		// spend the entire timeout knocking on a port whose process is
+		// gone. This is not hypothetical: a ZAP container died 34 seconds
+		// into boot and the probe went on reporting "connection refused"
+		// against its mapped port for a further three and a half minutes,
+		// then blamed the timeout.
+		if alive != nil {
+			if deadErr := alive(ctx); deadErr != nil {
+				return fmt.Errorf(
+					"readiness: %w (last probe of %s: %v)", deadErr, url, lastErr)
+			}
 		}
 
 		select {

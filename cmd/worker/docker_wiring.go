@@ -114,7 +114,7 @@ func buildDockerRegistry(workerID string, log zerolog.Logger) (map[string]tools.
 		"trivy-container": trivy.NewContainerRunner(trivyPool, log),
 		"trivy-fs":        trivyFsRunner,
 		"sqlmap":          sqlmap.NewRunner(sqlmapPool, log),
-		"zap":             zap.NewRunner(docker.NewProductionClient(cli), zap.Config{APIKey: zapAPIKey}, log),
+		"zap":             zap.NewRunner(docker.NewProductionClient(cli), workerID, zap.Config{APIKey: zapAPIKey}, log),
 	}
 	pools := []*docker.WarmPool{nmapPool, trivyPool, sqlmapPool}
 

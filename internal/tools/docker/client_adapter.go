@@ -85,3 +85,16 @@ func (p *productionClient) ContainerStop(ctx context.Context, containerID string
 func (p *productionClient) ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error {
 	return p.cli.ContainerRemove(ctx, containerID, options)
 }
+
+// ContainerLogs satisfies ContainerLogReader (reap.go), the narrow
+// capability CaptureLogs type-asserts for. It is deliberately NOT part
+// of dockerClient — see that interface's docstring for why widening it
+// is expensive — so this compile-time assertion is what guarantees the
+// production path keeps the capability. Delete the method and the
+// package stops building rather than silently losing container logs at
+// the one moment they matter.
+var _ ContainerLogReader = (*productionClient)(nil)
+
+func (p *productionClient) ContainerLogs(ctx context.Context, containerID string, options container.LogsOptions) (io.ReadCloser, error) {
+	return p.cli.ContainerLogs(ctx, containerID, options)
+}

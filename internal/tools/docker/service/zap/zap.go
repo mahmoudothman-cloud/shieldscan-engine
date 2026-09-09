@@ -173,8 +173,17 @@ func scanModeFor(depth string) ScanMode {
 // NewRunner constructs the DockerServiceRunner consumer wiring per
 // Task 7.5b framework + Task 7.3 Q1-Q9 locks + V4 ephemeral default.
 // Symmetric with internal/tools/docker/nmap.NewRunner pattern.
-func NewRunner(cli docker.DockerClient, cfg Config, log zerolog.Logger) *service.DockerServiceRunner {
+// workerID is stamped onto the ephemeral container so a ZAP container
+// this process leaves behind on a SIGKILL is reapable by the next
+// worker's startup sweep — reaping keys on the label and nothing else,
+// so an unlabelled container leaks permanently. Empty is legal and means
+// unlabelled (the pre-existing behaviour), which the tests use.
+func NewRunner(cli docker.DockerClient, workerID string, cfg Config, log zerolog.Logger) *service.DockerServiceRunner {
 	zapLog := log.With().Str("tool", "zap").Logger()
+	var labels map[string]string
+	if workerID != "" {
+		labels = docker.PoolLabels(workerID, "zap")
+	}
 	return &service.DockerServiceRunner{
 		ToolName:     "zap",
 		ToolCategory: "dast",
@@ -182,6 +191,7 @@ func NewRunner(cli docker.DockerClient, cfg Config, log zerolog.Logger) *service
 		ServiceConfig: service.ServiceConfig{
 			Image:              Image,
 			ContainerPort:      ContainerPort,
+			Labels:             labels,
 			EphemeralContainer: true, // V4 Option γ default
 			ReadinessEndpoint:  "/JSON/core/view/version/?apikey=" + cfg.APIKey,
 			AuthFunc:           zapQueryParamAuth(cfg.APIKey),
@@ -192,10 +202,12 @@ func NewRunner(cli docker.DockerClient, cfg Config, log zerolog.Logger) *service
 			// host "zap" — see serviceAddressing. Verified live against ZAP
 			// 2.17.0 (direct 502 vs proxied 200).
 			APIProxyHost: "zap",
-			// Cold boot (fresh config + Flyway DB migration + ~50 add-ons)
-			// took ~45-60s+ to answer in live testing; with correct
-			// addressing readiness passes well under this, but give margin
-			// over the 120s framework default.
+			// Cold boot took ~45-60s+ to answer in early live testing, so
+			// this was set well over the 120s framework default. With
+			// -silent (below) a cold start is ~15s; the margin is left
+			// generous because the readiness poll now aborts as soon as the
+			// container dies rather than sitting out the full window, so a
+			// long timeout no longer costs four minutes to learn nothing.
 			ReadinessTimeout: 240 * time.Second,
 			// Launch the ZAP daemon with the SAME api.key the client uses, so
 			// the control-API handshake succeeds. api.addrs.* opens the API to
@@ -203,8 +215,27 @@ func NewRunner(cli docker.DockerClient, cfg Config, log zerolog.Logger) *service
 			// ZAP); safe because spinup binds the host port to 127.0.0.1 only.
 			// Exact daemon flags are verified live (see the wiring plan's
 			// reality-check); the api.key here is the load-bearing part.
+			//
+			// -silent disables ZAP's check-for-update on startup, and it
+			// is a reproducibility fix, not a tuning knob. Image is pinned
+			// by digest — and then every cold start reaches the internet
+			// and installs a fresh set of ~30 add-ons over the top of it
+			// (observed: "Installing new addon ascanrules v83.0.0" followed
+			// by 30 "Add-on downloaded to:" lines). So the digest pin does
+			// not determine what actually runs: two scans a week apart
+			// execute different rules, and a rule set changing under us is
+			// invisible in every artefact we keep. It also puts a
+			// mandatory, network-dependent download on the critical path of
+			// every single scan, which is the leading suspect for the ZAP
+			// container that died 34s into boot. Measured: -silent prints
+			// "Shh! No check-for-update - silent mode enabled", downloads
+			// nothing, and is listening in ~15s instead of ~21s.
+			//
+			// The consequence to accept: add-on currency now requires a
+			// deliberate image bump rather than happening by itself. That
+			// is the intended trade — see VERSIONS.md for the pin.
 			Cmd: []string{
-				"zap.sh", "-daemon",
+				"zap.sh", "-daemon", "-silent",
 				"-host", "0.0.0.0",
 				"-port", fmt.Sprintf("%d", ContainerPort),
 				"-config", "api.key=" + cfg.APIKey,

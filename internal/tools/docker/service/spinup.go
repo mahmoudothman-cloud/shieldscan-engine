@@ -40,6 +40,20 @@ type ServiceContainerOpts struct {
 	// required because ZAP's API shares the proxy port and 502s a direct
 	// probe.
 	APIProxyHost string
+
+	// Labels are stamped on the container at create, and exist for the
+	// same reason WarmPool.Config.Labels does: ReapOrphans keys on
+	// io.shieldscan.managed and NOTHING else, so an unlabelled container
+	// is invisible to it by construction.
+	//
+	// Ephemeral service containers were unlabelled from the day this
+	// factory was written. The warm-pool path threads labels through and
+	// this one never did, so a ZAP or MobSF container surviving a SIGKILL
+	// — precisely the case orphan reaping exists for — would sit on the
+	// host forever, holding its memory, with no worker willing to touch
+	// it. Nil is still legal and still means unlabelled; it just now
+	// means someone chose that.
+	Labels map[string]string
 }
 
 // ServiceContainerFactory returns a docker.ContainerFactoryFunc
@@ -90,6 +104,7 @@ func ServiceContainerFactory(opts ServiceContainerOpts) docker.ContainerFactoryF
 		cfg := &container.Config{
 			Image:        imageRef,
 			ExposedPorts: nat.PortSet{portKey: struct{}{}},
+			Labels:       opts.Labels,
 		}
 		// Optional launch-command override (empty → image default entrypoint).
 		if len(opts.Cmd) > 0 {
@@ -133,15 +148,86 @@ func ServiceContainerFactory(opts ServiceContainerOpts) docker.ContainerFactoryF
 
 		// 6. Readiness probe.
 		if opts.ReadinessEndpoint != "" {
-			if err := waitForReady(ctx, baseURL, opts.ReadinessEndpoint, opts.ReadinessExpectedStatus, opts.ReadinessTimeout, opts.ReadinessPollInterval, opts.APIProxyHost); err != nil {
+			if err := waitForReady(ctx, baseURL, opts.ReadinessEndpoint, opts.ReadinessExpectedStatus,
+				opts.ReadinessTimeout, opts.ReadinessPollInterval, opts.APIProxyHost,
+				containerAliveCheck(cli, createResp.ID)); err != nil {
+				// Read the evidence BEFORE destroying it. This used to stop
+				// and remove the container first and report only the HTTP
+				// symptom, which is why three separate ZAP readiness failures
+				// produced nothing anyone could diagnose: the error handler
+				// deleted the logs, the exit code and the OOMKilled flag of
+				// the very container it was complaining about.
+				state, logs := postMortem(ctx, cli, createResp.ID)
+				scopedLog.Error().
+					Str("container_id", createResp.ID).
+					Str("container_state", state).
+					Str("container_logs", logs).
+					Err(err).
+					Msg("service container failed readiness; captured state and logs before removal")
+
 				_ = cli.ContainerStop(ctx, createResp.ID, container.StopOptions{})
 				_ = cli.ContainerRemove(ctx, createResp.ID, container.RemoveOptions{Force: true})
+				if state != "" {
+					return nil, fmt.Errorf("service container factory: readiness: %w (container %s)", err, state)
+				}
 				return nil, fmt.Errorf("service container factory: readiness: %w", err)
 			}
 		}
 
 		return docker.NewServiceContainer(createResp.ID, imageRef, baseURL, cli, scopedLog), nil
 	}
+}
+
+// maxCapturedLogBytes bounds the container output copied into a log
+// line on a readiness failure. A boot failure explains itself in its
+// last few KiB; more than this and the diagnostic becomes the incident.
+const maxCapturedLogBytes = 16 * 1024
+
+// containerAliveCheck adapts a container's Docker state to the
+// aliveCheck the readiness poll consults.
+//
+// The readiness probe is an HTTP poll and, on its own, cannot tell "not
+// listening yet" from "exited 90 seconds ago" — both are connection
+// refused. Measured: a ZAP container started at 16:14:18 and its task
+// was deleted at 16:14:52, while the probe kept polling the now-dead
+// mapped port until 16:18:18 and then reported a four-minute timeout
+// with a proxy error. Three and a half of those four minutes were spent
+// waiting on a container that no longer existed, and the operator-facing
+// error named the proxy rather than the death.
+//
+// ContainerInspect is already on the client interface, so this costs one
+// local daemon round-trip per failed poll and turns that timeout into an
+// immediate, correctly-attributed failure.
+//
+// Inconclusive results deliberately return nil (keep waiting): an
+// inspect error may be a transient daemon hiccup, and a probe that gives
+// up because it could not read the state would be a worse failure than
+// the one being fixed.
+func containerAliveCheck(cli docker.DockerClient, containerID string) aliveCheck {
+	return func(ctx context.Context) error {
+		insp, err := cli.ContainerInspect(ctx, containerID)
+		// InspectResponse embeds *ContainerJSONBase, so insp.State panics
+		// rather than reading nil when the base is absent — check the base
+		// before the field.
+		if err != nil || insp.ContainerJSONBase == nil || insp.State == nil {
+			return nil // inconclusive — keep waiting
+		}
+		if insp.State.Running {
+			return nil
+		}
+		return fmt.Errorf("container is no longer running: %s", docker.DescribeState(insp))
+	}
+}
+
+// postMortem gathers what a container has to say for itself, for the
+// caller to record before removing it. Both halves are best-effort and
+// return descriptive strings rather than errors — the caller is already
+// carrying the error that matters.
+func postMortem(ctx context.Context, cli docker.DockerClient, containerID string) (state, logs string) {
+	if insp, err := cli.ContainerInspect(ctx, containerID); err == nil {
+		state = docker.DescribeState(insp)
+	}
+	return state, docker.CaptureLogs(ctx, cli, containerID, maxCapturedLogBytes)
 }
 
 // dynamicHostPort extracts the dynamically-allocated host port for

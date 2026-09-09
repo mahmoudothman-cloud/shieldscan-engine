@@ -153,8 +153,16 @@ func NewBuildScan(cfg Config) func(context.Context, tools.Target, tools.ScanConf
 // NewRunner constructs the DockerServiceRunner consumer wiring for
 // MobSF per Task 7.4 + Task 7.5b framework + Q5 Option β ephemeral
 // default. Symmetric with zap.NewRunner pattern.
-func NewRunner(cli docker.DockerClient, cfg Config, log zerolog.Logger) *service.DockerServiceRunner {
+// workerID is stamped onto the ephemeral container so one left behind
+// by a SIGKILL is reapable by the next worker — see zap.NewRunner for
+// the reasoning; MobSF has the same shape and the same gap. Empty is
+// legal and means unlabelled.
+func NewRunner(cli docker.DockerClient, workerID string, cfg Config, log zerolog.Logger) *service.DockerServiceRunner {
 	mobsfLog := log.With().Str("tool", "mobsf").Logger()
+	var labels map[string]string
+	if workerID != "" {
+		labels = docker.PoolLabels(workerID, "mobsf")
+	}
 	return &service.DockerServiceRunner{
 		ToolName:     "mobsf",
 		ToolCategory: "mast",
@@ -162,6 +170,7 @@ func NewRunner(cli docker.DockerClient, cfg Config, log zerolog.Logger) *service
 		ServiceConfig: service.ServiceConfig{
 			Image:              Image,
 			ContainerPort:      ContainerPort,
+			Labels:             labels,
 			EphemeralContainer: true, // Q5 Option β v1 default (Task 7.5d analogue verification)
 			ReadinessEndpoint:  "/",
 			AuthFunc:           service.WithAPIKeyHeader(APIKeyHeader, cfg.APIKey),

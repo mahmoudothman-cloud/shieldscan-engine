@@ -61,6 +61,13 @@ type ServiceConfig struct {
 	// Cleanup (Q5; closure may capture consumer state per V5 MobSF md5-tracking)
 	// Unused when EphemeralContainer = true (V4 ZAP default).
 	CleanupFunc docker.CleanupFunc
+
+	// Labels are stamped on containers created by the EphemeralContainer
+	// path so that a container this worker leaves behind is reapable by
+	// the next one — see ServiceContainerOpts.Labels. Populate with
+	// docker.PoolLabels(workerID, toolName). Unused in warm-pool mode,
+	// where WarmPool.Config.Labels does the same job.
+	Labels map[string]string
 }
 
 // DockerServiceRunner is the M7 framework type for HTTP-API-shaped
@@ -198,6 +205,7 @@ func (r *DockerServiceRunner) acquireEphemeral(ctx context.Context) (*docker.Con
 		ReadinessPollInterval:   r.ServiceConfig.ReadinessPollInterval,
 		Cmd:                     r.ServiceConfig.Cmd,
 		APIProxyHost:            r.ServiceConfig.APIProxyHost,
+		Labels:                  r.ServiceConfig.Labels,
 	})
 	c, err := factory(ctx, r.Cli, r.ServiceConfig.Image, r.Log)
 	if err != nil {

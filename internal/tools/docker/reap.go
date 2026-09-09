@@ -1,11 +1,15 @@
 package docker
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/rs/zerolog"
 )
 
@@ -60,6 +64,99 @@ func PoolLabels(workerID, pool string) map[string]string {
 type ContainerLister interface {
 	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
 	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
+}
+
+// ContainerLogReader is the narrow Docker capability needed to read a
+// container's output before removing it.
+//
+// Same shape and same reasoning as ContainerLister above: folding
+// ContainerLogs into dockerClient would force six test stubs across four
+// packages to grow a method almost none of them exercise. *client.Client
+// satisfies this naturally, and productionClient is asserted against it
+// below so the production path can never silently lose the capability.
+type ContainerLogReader interface {
+	ContainerLogs(ctx context.Context, containerID string, options container.LogsOptions) (io.ReadCloser, error)
+}
+
+// CaptureLogs returns up to maxBytes of a container's combined
+// stdout+stderr, for the diagnosis of a container that is about to be
+// destroyed.
+//
+// It exists because the readiness path used to stop and remove a
+// container the instant it failed to come up, taking the logs, the exit
+// code and the OOMKilled flag with it. ZAP's readiness failed three
+// times over two months and each occurrence left literally nothing to
+// read; the container's own output was deleted by the error handler
+// reporting that something was wrong with it.
+//
+// Best-effort by construction: every failure returns a string describing
+// why there are no logs rather than an error, because the caller is
+// already handling a more important one and must not be derailed by
+// this. A cli that does not implement ContainerLogReader (test stubs)
+// yields a short note saying so.
+//
+// Docker multiplexes stdout and stderr into a single framed stream for
+// non-TTY containers, so the payload is demultiplexed via stdcopy;
+// both streams are interleaved into the result because for a failed
+// boot the ordering between them is the useful part.
+func CaptureLogs(ctx context.Context, cli DockerClient, containerID string, maxBytes int) string {
+	reader, ok := cli.(ContainerLogReader)
+	if !ok {
+		return "(logs unavailable: docker client does not support log reading)"
+	}
+	rc, err := reader.ContainerLogs(ctx, containerID, container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       "all",
+	})
+	if err != nil {
+		return fmt.Sprintf("(logs unavailable: %v)", err)
+	}
+	defer func() { _ = rc.Close() }()
+
+	var out, errOut bytes.Buffer
+	if _, copyErr := stdcopy.StdCopy(&out, &errOut, rc); copyErr != nil && !errors.Is(copyErr, io.EOF) {
+		// Keep whatever was demultiplexed before the error; a partial log
+		// is the whole point of this function.
+		fmt.Fprintf(&out, "\n(log stream error: %v)", copyErr)
+	}
+	out.Write(errOut.Bytes())
+
+	if out.Len() == 0 {
+		return "(container produced no output)"
+	}
+	// Keep the TAIL: a container that dies during boot says why at the end.
+	b := out.Bytes()
+	if maxBytes > 0 && len(b) > maxBytes {
+		return "...(truncated)...\n" + string(b[len(b)-maxBytes:])
+	}
+	return string(b)
+}
+
+// DescribeState renders a container's terminal state for an error
+// message: whether it is running, how it exited, and whether the kernel
+// killed it. Returns "" when the state cannot be determined, so callers
+// can append it conditionally.
+//
+// Note the double nil check. InspectResponse embeds *ContainerJSONBase
+// as a POINTER, so reading insp.State panics outright when the base is
+// absent — which is the shape any hand-built InspectResponse has,
+// including every test fixture in this repo. A real daemon always
+// populates it; a nil-base response is the case that would have turned
+// a diagnostic into a worker crash.
+func DescribeState(insp container.InspectResponse) string {
+	if insp.ContainerJSONBase == nil || insp.State == nil {
+		return ""
+	}
+	s := insp.State
+	desc := fmt.Sprintf("status=%s exit_code=%d", s.Status, s.ExitCode)
+	if s.OOMKilled {
+		desc += " oom_killed=true"
+	}
+	if s.Error != "" {
+		desc += " error=" + s.Error
+	}
+	return desc
 }
 
 // ReapPolicy decides which managed containers are orphans.
