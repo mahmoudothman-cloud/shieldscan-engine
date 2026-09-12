@@ -106,7 +106,10 @@ var classifications = []classification{
 	{id: "999978", marker: "X-Frame-Options header is set to allow framing from", slug: "permissive-xfo"},
 	{id: "999979", marker: "IP address found in the", slug: "internal-ip-in-header"},
 	{id: "999984", marker: "Server leaks inodes via ETags", slug: "etag-inode-leak"},
-	{id: "999986", marker: "Retrieved ", slug: "disclosed-header"},
+
+	// 999986 is NOT here. It reports a different header on each firing
+	// and a single marker gave them all one identity — see
+	// disclosedHeaders below.
 
 	// 999996 carries at least two unrelated messages, which is why the
 	// marker is load-bearing here rather than decorative. 2.1.5 and
@@ -135,6 +138,89 @@ func classify(id, description string) (classification, bool) {
 		}
 	}
 	return classification{}, false
+}
+
+// disclosedHeaderID is the item id nikto_headers.plugin uses for every
+// "Retrieved <header> header: <value>" finding.
+const disclosedHeaderID = "999986"
+
+// disclosedHeaderMarker builds the anchored substring that identifies
+// one header's message.
+//
+// Anchoring on BOTH sides is what makes the set unambiguous. Several
+// entries below are substrings of others — server-name / x-server-name,
+// x-ip / x-real-ip / x-clientip — and a bare header-name match would
+// classify "Retrieved x-server-name header" as server-name depending on
+// list order. With the "Retrieved " prefix and the " header" suffix, no
+// entry's marker occurs inside another's; verified against the full
+// list rather than assumed.
+func disclosedHeaderMarker(header string) string {
+	return "Retrieved " + header + " header"
+}
+
+// disclosedHeaders is the header list nikto_headers.plugin reports
+// under id 999986 — its @interesting_headers qw// list
+// (nikto_headers.plugin:468), transcribed verbatim and in its order.
+//
+// WHY EACH HEADER IS ITS OWN CLASS. This id previously had one curated
+// entry, `{id: "999986", marker: "Retrieved ", slug: "disclosed-header"}`,
+// and that reproduced the exact defect the 999100 work was meant to
+// end. ComputeFingerprint hashes FindingType and TargetURL but NOT
+// Description, and these findings are all reported against the same
+// uri — the site root — so every disclosed header on a host collapsed
+// into a single identity. Measured on a live scan: "Retrieved via
+// header: 1.1 Caddy" and "Retrieved access-control-allow-origin header:
+// *" both produced fingerprint 81ce4b48d135. Two distinct facts about
+// the server, one row.
+//
+// That is the same shape as the four headers that shared one
+// fingerprint under 999100, and it survived the fix for that because
+// the marker here was generic enough to look like a class while
+// behaving like a catch-all. The lesson is in the id-is-not-a-
+// discriminator note at the top of this file, and the test to run
+// before widening any FindingType is whether two findings that differ
+// only in Description can share a TargetURL.
+//
+// The slug is "disclosed-header-<name>", so the class set stays
+// enumerated HERE rather than being folded out of message text at
+// runtime. That distinction is the point: the header names are ours,
+// copied from Nikto's source, not taken from whatever a scanned server
+// chose to send — a slug derived from server-supplied bytes would let a
+// target mint unbounded finding types.
+//
+// A header Nikto ADDS to its list arrives as an unclassified item: raw
+// nikto-999986 plus the INFO log, which is the visible signal to extend
+// this list. Deliberately not a silent catch-all.
+var disclosedHeaders = []string{
+	"commerce-server-software", "daap-server", "dasl", "datacenter",
+	"dav", "generator", "hosted-by", "hosted-with",
+	"microsoftofficewebserver", "microsoftsharepointteamservices", "ms-author-via", "powered-by",
+	"server-name", "serverid", "servlet-engine", "via",
+	"x-aspnet-version", "x-blackboard-product", "x-cocoon-version", "x-compressed-by",
+	"x-dmuser", "x-gallery-version", "x-hosted-at", "x-hostname",
+	"x-isp", "x-powered-by", "x-responding-server", "x-served-by",
+	"x-server", "x-server-name", "x-webserver", "x-owa-version",
+	"access-control-allow-origin", "x-application-context", "cneonction", "nncoection",
+	"xxx-real-ip", "bae-env-addr-sql-ip", "bae-env-addr-sql-port", "cf-connecting-ip",
+	"fastly-client-ip", "incap-client-ip", "real-ip", "rlnclientipaddr",
+	"true-client-ip", "x-clientip", "x-client-ip", "x-cluster-client-ip",
+	"x-ip", "x-nokia-ipaddress", "x-real-ip", "x-wap-network-client-ip",
+	"reason-code",
+}
+
+// classifyDisclosedHeader resolves a 999986 item to the specific header
+// it reports. Returns false for any other id, and for a 999986 whose
+// header is not in the list above.
+func classifyDisclosedHeader(id, description string) (string, bool) {
+	if id != disclosedHeaderID {
+		return "", false
+	}
+	for _, h := range disclosedHeaders {
+		if strings.Contains(description, disclosedHeaderMarker(h)) {
+			return "disclosed-header-" + h, true
+		}
+	}
+	return "", false
 }
 
 //go:generate go run gen_tuning.go -db $SHIELDSCAN_NIKTO_DB -version $SHIELDSCAN_NIKTO_VERSION -out tuning_table.go
@@ -221,6 +307,9 @@ type itemClass struct {
 func resolveItem(id, description string) itemClass {
 	if c, ok := classify(id, description); ok {
 		return itemClass{slug: c.slug, drop: c.drop, source: "curated"}
+	}
+	if slug, ok := classifyDisclosedHeader(id, description); ok {
+		return itemClass{slug: slug, source: "curated"}
 	}
 	if tuning, ok := dbTestTuning[id]; ok {
 		if slug, named := tuningClassSlug[tuning]; named {

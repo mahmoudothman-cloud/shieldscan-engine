@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/odyssey/shieldscan-engine/internal/events"
 	"github.com/odyssey/shieldscan-engine/internal/tools"
 )
 
@@ -51,19 +52,25 @@ func TestClassify_DropIsAnchoredToTheMessageNotTheID(t *testing.T) {
 }
 
 // The classes that DO assert a condition must survive. Audited against
-// nikto_headers.plugin in full; 999100 is the only observation-only one.
+// nikto_headers.plugin in full; 999100 and 011799 are the only
+// observation-only ones.
+//
+// Driven through resolveItem rather than classify, because classify is
+// now only the first of three resolution steps and asserting on it
+// alone would stop covering the path production takes. 999986 is the
+// case in point: it no longer has an entry in `classifications` at all.
 func TestClassify_RealFindingsAreKept(t *testing.T) {
 	cases := []struct{ id, desc, want string }{
 		{"999976", "The anti-clickjacking X-Frame-Options header is not present.", "nikto-missing-xfo"},
 		{"999978", "X-Frame-Options header is set to allow framing from example.com.", "nikto-permissive-xfo"},
 		{"999979", `RFC-1918 IP address found in the 'location' header. The IP is "10.0.0.1".`, "nikto-internal-ip-in-header"},
 		{"999984", "Server leaks inodes via ETags, header found with file /, fields: 0xW/124fa 0x1a0016977d3", "nikto-etag-inode-leak"},
-		{"999986", "Retrieved x-powered-by header: Express", "nikto-disclosed-header"},
+		{"999986", "Retrieved x-powered-by header: Express", "nikto-disclosed-header-x-powered-by"},
 	}
 	for _, c := range cases {
 		t.Run(c.want, func(t *testing.T) {
-			cl, ok := classify(c.id, c.desc)
-			require.True(t, ok)
+			cl := resolveItem(c.id, c.desc)
+			require.NotEmpty(t, cl.slug, "%s must resolve", c.id)
 			assert.False(t, cl.drop, "%s asserts a real condition", c.id)
 			assert.Equal(t, c.want, findingTypeFor(c.id, c.desc))
 		})
@@ -105,6 +112,99 @@ func TestFindingTypeFor_UnknownItemKeepsTheRawID(t *testing.T) {
 
 	assert.Equal(t, "nikto-"+unmapped,
 		findingTypeFor(unmapped, "Some message Nikto has not shown us before."))
+}
+
+// ─── 999986 disclosed headers ────────────────────────────────────────
+
+// TestDisclosedHeaders_DoNotShareAFingerprint is the regression guard
+// for a live defect, and it is deliberately written as a FINGERPRINT
+// assertion rather than a FindingType one.
+//
+// 999986 had a single curated class with the marker "Retrieved ", which
+// matched every header the plugin reports. ComputeFingerprint hashes
+// FindingType and TargetURL but not Description, and these findings all
+// carry the site root as their uri — so every disclosed header on a
+// host collapsed into one row. Measured on a live scan: "Retrieved via
+// header: 1.1 Caddy" and "Retrieved access-control-allow-origin header:
+// *" both hashed to 81ce4b48d135.
+//
+// Asserting on FindingType alone would have passed against the old
+// code's intent and missed the point. The property that matters is that
+// two findings differing only in their message end up as two findings.
+func TestDisclosedHeaders_DoNotShareAFingerprint(t *testing.T) {
+	const site = "https://example.com:443"
+	mk := func(desc string) events.RawFinding {
+		f := itemToFinding(
+			niktoItem{ID: disclosedHeaderID, Description: desc, URI: "/"},
+			niktoScanDetails{SiteName: site},
+			trimRootPathPrefix(desc))
+		f.ToolName = "nikto"
+		f.Fingerprint = tools.ComputeFingerprint(f)
+		return f
+	}
+
+	via := mk("/: Retrieved via header: 1.1 Caddy.")
+	cors := mk("/: Retrieved access-control-allow-origin header: *.")
+
+	assert.Equal(t, "nikto-disclosed-header-via", via.FindingType)
+	assert.Equal(t, "nikto-disclosed-header-access-control-allow-origin", cors.FindingType)
+	assert.Equal(t, via.TargetURL, cors.TargetURL, "both are reported against the site root")
+	assert.NotEqual(t, via.Fingerprint, cors.Fingerprint,
+		"two different disclosed headers on one URL must be two findings")
+}
+
+// TestDisclosedHeaders_MarkersAreUnambiguous guards the anchoring.
+// Several header names are substrings of others (server-name inside
+// x-server-name, x-ip inside x-real-ip), so a bare name match would
+// make classification depend on list order. The "Retrieved "/" header"
+// anchors are what prevent that, and this asserts the property over the
+// whole list rather than over the two examples above.
+func TestDisclosedHeaders_MarkersAreUnambiguous(t *testing.T) {
+	for _, h := range disclosedHeaders {
+		desc := "/: " + disclosedHeaderMarker(h) + ": some-value"
+		slug, ok := classifyDisclosedHeader(disclosedHeaderID, desc)
+		require.True(t, ok, "header %q must classify", h)
+		assert.Equal(t, "disclosed-header-"+h, slug,
+			"header %q matched another entry's marker", h)
+	}
+	assert.Len(t, disclosedHeaders, 53,
+		"transcribed from nikto_headers.plugin's @interesting_headers; "+
+			"a change here should be a deliberate re-read of that list")
+}
+
+// A header Nikto adds to its list must surface as unclassified — raw id
+// plus the INFO log — rather than silently joining a catch-all. That
+// visible signal is what the old generic marker gave up.
+func TestDisclosedHeaders_UnknownHeaderFallsThrough(t *testing.T) {
+	got := resolveItem(disclosedHeaderID, "/: Retrieved x-future-header header: v")
+	assert.Empty(t, got.slug)
+	assert.Equal(t, "nikto-"+disclosedHeaderID,
+		findingTypeFor(disclosedHeaderID, "/: Retrieved x-future-header header: v"))
+}
+
+// TestCombineSiteURI_DotMeansTheSiteRoot pins the cosmetic half of the
+// same fixture.
+//
+// Nikto uses "." as the uri for checks aimed at the server itself
+// rather than at a path — the missing-X-Content-Type-Options finding is
+// one — and the naive join rendered that as "https://host:443/.", which
+// reached the customer. trimRootPathPrefix already treated ".: " and
+// "/: " as the same thing when stripping the description prefix, so the
+// two halves of the finding disagreed about what "." meant.
+func TestCombineSiteURI_DotMeansTheSiteRoot(t *testing.T) {
+	cases := []struct{ name, site, uri, want string }{
+		{"dot is the root", "https://example.com:443", ".", "https://example.com:443/"},
+		{"slash is the root", "https://example.com:443", "/", "https://example.com:443/"},
+		{"trailing slash not doubled", "https://example.com:443/", "/", "https://example.com:443/"},
+		{"a real path is untouched", "https://example.com:443", "/ftp/", "https://example.com:443/ftp/"},
+		{"a dotfile is NOT the root", "https://example.com:443", "/.htpasswd", "https://example.com:443/.htpasswd"},
+		{"relative path keeps its join", "https://example.com:443", "admin/", "https://example.com:443/admin/"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, combineSiteURI(c.site, c.uri))
+		})
+	}
 }
 
 // ─── db_tests category classification ────────────────────────────────
@@ -370,7 +470,11 @@ func TestParseOutput_Nikto250OverTLS(t *testing.T) {
 	// fact a plugin id (nikto_headers.plugin:394), one of 77, and the
 	// two families do not overlap. It is now dropped as an observation.
 	for _, want := range []string{
-		"nikto-disclosed-header",
+		// Two headers, two identities. Under the old generic "Retrieved "
+		// marker both of these were nikto-disclosed-header on the same
+		// uri, which made them one row.
+		"nikto-disclosed-header-via",
+		"nikto-disclosed-header-access-control-allow-origin",
 		"nikto-missing-hsts",
 		"nikto-robots-listed-path",
 		"nikto-robots-entries",
@@ -384,6 +488,26 @@ func TestParseOutput_Nikto250OverTLS(t *testing.T) {
 	for ft := range byType {
 		assert.NotRegexp(t, `^nikto-\d+$`, ft,
 			"no finding may keep a raw numeric id: %s", ft)
+	}
+
+	// Every TargetURL must be a URL a customer would recognise. This
+	// fixture carries the "." uri Nikto uses for server-level checks,
+	// which used to render as ".../.".
+	for _, f := range findings {
+		assert.NotContains(t, f.TargetURL, ":443/.",
+			"%q: Nikto's \".\" uri means the site root", f.TargetURL)
+	}
+
+	// Distinct fingerprints, end to end from the fixture — the property
+	// the 999986 split exists for, asserted on parser output rather than
+	// on a hand-built finding.
+	fps := map[string]string{}
+	for _, f := range findings {
+		f.ToolName = "nikto"
+		fp := tools.ComputeFingerprint(f)
+		prev, dup := fps[fp]
+		assert.False(t, dup, "fingerprint collision: %q and %q", prev, f.Title)
+		fps[fp] = f.Title
 	}
 	assert.NotContains(t, byType, "nikto-999100")
 

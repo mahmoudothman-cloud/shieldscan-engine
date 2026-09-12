@@ -232,6 +232,16 @@ func combineSiteURI(siteName, uri string) string {
 	if uri == "" {
 		return siteName
 	}
+	// Nikto uses "." as the uri for checks aimed at the server itself
+	// rather than at a path, and the naive join rendered that as
+	// "https://host:443/." — customer-visible, and not a URL anyone
+	// would recognise as the site root. trimRootPathPrefix already
+	// treats ".: " and "/: " as the same thing when stripping the
+	// description prefix; this is the same equivalence applied to the
+	// URL, so the two halves of a finding agree.
+	if uri == "." {
+		uri = "/"
+	}
 	// Avoid double-slash if siteName ends with "/" and uri starts with "/".
 	site := strings.TrimSuffix(siteName, "/")
 	if !strings.HasPrefix(uri, "/") {
