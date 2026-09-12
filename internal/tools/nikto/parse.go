@@ -144,18 +144,23 @@ func parseOutputFile(log zerolog.Logger) func(string) ([]events.RawFinding, erro
 				}
 
 				desc := trimRootPathPrefix(strings.TrimSpace(it.Description))
-				class, known := classify(it.ID, desc)
-				if known && class.drop {
+				class := resolveItem(it.ID, desc)
+				if class.drop {
 					log.Debug().
 						Str("item_id", it.ID).
 						Str("class", class.slug).
 						Msg("nikto: observation, not a finding; dropping")
 					continue
 				}
-				if !known {
-					// A class we have not characterised. It still becomes a
-					// finding under nikto-<id>; the log is what stops a new
-					// message shape from joining a catch-all unnoticed.
+				if class.slug == "" {
+					// Neither a curated plugin class nor a known db_tests id.
+					// It still becomes a finding under nikto-<id>; the log is
+					// what stops a new message shape from joining a catch-all
+					// unnoticed. Since the generated table covers every test
+					// in the shipped database, this now means one of two
+					// things: a plugin class we have not characterised, or a
+					// Nikto whose db_tests is newer than tuning_table.go —
+					// the signal to regenerate.
 					log.Info().
 						Str("item_id", it.ID).
 						Str("description", desc).

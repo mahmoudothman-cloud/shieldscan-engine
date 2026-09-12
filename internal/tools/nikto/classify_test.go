@@ -92,9 +92,143 @@ func TestFindingTypeFor_OneIDWithTwoMeaningsGetsTwoIdentities(t *testing.T) {
 // precision here: a slug derived from message text would move whenever
 // Nikto rewords a message, and a fingerprint that moves breaks
 // scan-to-scan comparison.
+//
+// The id below is deliberately one that belongs to NEITHER family — not
+// a curated plugin class, and absent from the generated db_tests table.
+// This test used to use 001675, which was a fair example of "unknown"
+// when every db test was unknown; it is now nikto-interesting-file, and
+// TestResolveItem_DBTestIDsResolveByCategory covers that.
 func TestFindingTypeFor_UnknownItemKeepsTheRawID(t *testing.T) {
-	assert.Equal(t, "nikto-001675",
-		findingTypeFor("001675", "/ftp/: This might be interesting..."))
+	const unmapped = "999001" // plugin-id shape, no curated class
+	_, inTable := dbTestTuning[unmapped]
+	require.False(t, inTable, "fixture must be an id neither family claims")
+
+	assert.Equal(t, "nikto-"+unmapped,
+		findingTypeFor(unmapped, "Some message Nikto has not shown us before."))
+}
+
+// ─── db_tests category classification ────────────────────────────────
+
+// TestResolveItem_DBTestIDsResolveByCategory pins the three ids that
+// prompted this: they were arriving as nikto-001675, nikto-001811 and
+// nikto-002739, opaque to a customer and unmappable one at a time —
+// db_tests holds 6951 of them.
+//
+// The two "interesting file" tests share a FindingType and MUST still
+// be distinct findings. That is the property to check before widening
+// any FindingType, and it holds here because the path lives in
+// TargetURL, which the fingerprint also hashes — unlike the 999100
+// header case, where four observations shared the uri "/" and a common
+// FindingType collapsed them to one identity.
+func TestResolveItem_DBTestIDsResolveByCategory(t *testing.T) {
+	cases := []struct {
+		id, desc, wantSlug string
+	}{
+		{"001675", "/ftp/: This might be interesting.", "interesting-file"},
+		{"001811", "/public/: This might be interesting.", "interesting-file"},
+		{"002739", "/.htpasswd: Contains authorization information", "info-disclosure"},
+	}
+	for _, c := range cases {
+		t.Run(c.id, func(t *testing.T) {
+			got := resolveItem(c.id, c.desc)
+			assert.Equal(t, c.wantSlug, got.slug)
+			assert.Equal(t, "db-test", got.source)
+			assert.False(t, got.drop, "a db_tests category is never a drop")
+			assert.Equal(t, "nikto-"+c.wantSlug, findingTypeFor(c.id, c.desc))
+		})
+	}
+}
+
+// TestResolveItem_CuratedClassBeatsCategory pins the ordering. The two
+// id families are disjoint in Nikto 2.5.0, so this cannot currently
+// trigger — which is exactly why it is worth asserting: if a future
+// Nikto moves a plugin check into db_tests under the same id, the
+// hand-reviewed, message-anchored class must win over the coarse
+// category rather than the answer depending on map lookup order.
+func TestResolveItem_CuratedClassBeatsCategory(t *testing.T) {
+	for _, c := range classifications {
+		if _, collides := dbTestTuning[c.id]; collides {
+			got := resolveItem(c.id, "…"+c.marker+"…")
+			assert.Equal(t, "curated", got.source,
+				"id %s is in both families; the curated class must win", c.id)
+		}
+	}
+}
+
+// TestDBTestTuning_EveryIDResolvesToExactlyOneClass is the forcing
+// function over the generated table, and the reason the table can be
+// regenerated safely.
+//
+// Three properties, each of which has a way of silently going wrong
+// across a regeneration:
+//
+//   - Every id maps to a category character that tuningClassSlug names.
+//     The generator validates against Nikto's legend; this validates
+//     against OUR naming, so a category Nikto adds cannot reach
+//     production as an unnamed class.
+//   - The table is non-trivial. A generator that silently produced a
+//     short or empty table would otherwise pass every other test here
+//     while quietly returning thousands of items to raw-id identity —
+//     the first draft of the generator lost 8 tests exactly that way,
+//     to CSV quoting.
+//   - A map literal cannot hold a duplicate key, so uniqueness is a
+//     compile-time property; what is asserted instead is that nothing
+//     resolves ambiguously, i.e. exactly one slug per id.
+func TestDBTestTuning_EveryIDResolvesToExactlyOneClass(t *testing.T) {
+	require.Greater(t, len(dbTestTuning), 6000,
+		"the shipped table looks truncated: Nikto 2.5.0 has 6951 tests. "+
+			"Regenerate with `go generate ./internal/tools/nikto/`")
+
+	seen := map[string]string{}
+	for id, tuning := range dbTestTuning {
+		slug, named := tuningClassSlug[tuning]
+		require.True(t, named,
+			"test %s has tuning %q, which tuningClassSlug does not name; "+
+				"Nikto added a category and it must be named before the table "+
+				"is regenerated", id, string(tuning))
+		require.NotEmpty(t, slug)
+
+		got := resolveItem(id, "any description")
+		assert.Equal(t, slug, got.slug, "id %s must resolve to exactly one class", id)
+		seen[id] = slug
+	}
+	assert.Len(t, seen, len(dbTestTuning))
+}
+
+// TestTuningClassSlug_CoversNiktosLegend guards the naming map against
+// the other direction of drift: a class quietly deleted here would make
+// every test in that category fall back to a raw id, which no other
+// assertion would notice because the ids would still be in the table.
+func TestTuningClassSlug_CoversNiktosLegend(t *testing.T) {
+	// Nikto's documented tuning legend, from the header comment of
+	// databases/db_tests (2.5.0). Transcribed, not derived, so that the
+	// generated table cannot be both the source and the check.
+	legend := "0123456789abcdef"
+	for i := 0; i < len(legend); i++ {
+		assert.Contains(t, tuningClassSlug, legend[i],
+			"Nikto tuning category %q is unnamed", string(legend[i]))
+	}
+	assert.Len(t, tuningClassSlug, len(legend),
+		"tuningClassSlug must name Nikto's categories and no others")
+}
+
+// TestResolveItem_AltSvcIsDropped pins the second drop. A server
+// advertising HTTP/3 via alt-svc is current configuration, not a
+// defect, and Nikto's own h3 message is the scanner reporting that it
+// cannot test QUIC.
+func TestResolveItem_AltSvcIsDropped(t *testing.T) {
+	got := resolveItem("011799",
+		"/: An alt-svc header was found which is advertising HTTP/3. "+
+			"The endpoint is: ':443'. Nikto cannot test HTTP/3 over QUIC.")
+	assert.True(t, got.drop)
+	assert.Equal(t, "alt-svc-advertised", got.slug)
+
+	// Message-anchored: a reworded or reused 011799 must fall through to
+	// the unclassified log rather than inherit the drop. Failing toward a
+	// visible spurious finding beats failing toward a silent lost one.
+	reworded := resolveItem("011799", "/: Some entirely different future message.")
+	assert.False(t, reworded.drop, "the drop must not be keyed on the id alone")
+	assert.Empty(t, reworded.slug)
 }
 
 // Title used to be "nikto-"+id, identical to FindingType, so a customer
@@ -216,7 +350,8 @@ func TestParseOutput_AcceptsBothRootElements(t *testing.T) {
 func TestParseOutput_Nikto250OverTLS(t *testing.T) {
 	findings, err := parseOutputFile(noopLog())(fixturePath(t, "nikto_250_tls.xml"))
 	require.NoError(t, err)
-	require.Len(t, findings, 8, "9 items minus 1 uncommon-header observation")
+	require.Len(t, findings, 7,
+		"9 items minus 2 observations: uncommon-header and alt-svc")
 
 	byType := map[string][]string{}
 	for _, f := range findings {
@@ -229,9 +364,11 @@ func TestParseOutput_Nikto250OverTLS(t *testing.T) {
 		return
 	}(), " | ")
 
-	// Every class 2.5.0 emitted here is mapped. nikto-011799 is a
-	// db_tests id, which IS a stable discriminator and correctly keeps
-	// the raw form.
+	// Every class 2.5.0 emitted here is mapped, and NOTHING keeps a raw
+	// "nikto-<id>" form. The comment here previously called 011799 a
+	// db_tests id and justified leaving it raw on that basis; it is in
+	// fact a plugin id (nikto_headers.plugin:394), one of 77, and the
+	// two families do not overlap. It is now dropped as an observation.
 	for _, want := range []string{
 		"nikto-disclosed-header",
 		"nikto-missing-hsts",
@@ -239,11 +376,15 @@ func TestParseOutput_Nikto250OverTLS(t *testing.T) {
 		"nikto-robots-entries",
 		"nikto-missing-content-type-options",
 		"nikto-compression-enabled",
-		"nikto-011799",
 	} {
 		assert.Contains(t, byType, want)
 	}
 	assert.NotContains(t, byType, "nikto-uncommon-header")
+	assert.NotContains(t, byType, "nikto-alt-svc-advertised", "dropped, not reclassified")
+	for ft := range byType {
+		assert.NotRegexp(t, `^nikto-\d+$`, ft,
+			"no finding may keep a raw numeric id: %s", ft)
+	}
 	assert.NotContains(t, byType, "nikto-999100")
 
 	// It read the real site, not an error page: Caddy is the reverse

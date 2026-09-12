@@ -86,6 +86,22 @@ const uncommonHeaderMarker = "Uncommon header '"
 var classifications = []classification{
 	{id: "999100", marker: uncommonHeaderMarker, slug: "uncommon-header", drop: true},
 
+	// 011799 is the second drop, and for the same reason as 999100: it
+	// reports a normal configuration rather than a defect. It fires when
+	// a server advertises a protocol via the alt-svc header
+	// (nikto_headers.plugin:390), which for a modern site means HTTP/3 —
+	// and Nikto's own message for the h3 case is "Nikto cannot test
+	// HTTP/3 over QUIC", i.e. the finding is the scanner reporting its
+	// own limitation. Reporting that to a customer as a vulnerability
+	// tells them their up-to-date server is a problem.
+	//
+	// Anchored on the message, not the id alone, so that if 011799 is
+	// ever reworded or reused the item falls through to the
+	// unclassified-item log rather than silently inheriting the drop.
+	// That is the direction to fail in: a spurious finding is visible
+	// and fixable, a silently dropped real one is neither.
+	{id: "011799", marker: "alt-svc header was found which is advertising", slug: "alt-svc-advertised", drop: true},
+
 	{id: "999976", marker: "anti-clickjacking X-Frame-Options header is not present", slug: "missing-xfo"},
 	{id: "999978", marker: "X-Frame-Options header is set to allow framing from", slug: "permissive-xfo"},
 	{id: "999979", marker: "IP address found in the", slug: "internal-ip-in-header"},
@@ -121,16 +137,133 @@ func classify(id, description string) (classification, bool) {
 	return classification{}, false
 }
 
+//go:generate go run gen_tuning.go -db $SHIELDSCAN_NIKTO_DB -version $SHIELDSCAN_NIKTO_VERSION -out tuning_table.go
+
+// tuningClassSlug names Nikto's 16 test categories.
+//
+// This is the naming half of the db_tests classification; dbTestTuning
+// (tuning_table.go, generated) is the facts half. Keeping them in
+// separate files is the point: regenerating the table on a Nikto upgrade
+// rewrites thousands of lines of data and touches none of the naming, so
+// the diff a reviewer reads is "which tests changed category", not
+// "which classes did we rename".
+//
+// The keys are Nikto's own tuning characters, documented in the header
+// comment of databases/db_tests and matched by its -Tuning flag. The
+// values are ours, and they are deliberately descriptive rather than
+// severity-laden — see the severity note below.
+//
+// Nikto's own wording is kept where it is clear ("Interesting File /
+// Seen in logs" → interesting-file) and tightened where it is not
+// ("Remote File Retrieval - Inside Web Root" → file-retrieval-webroot).
+// Counts are from the 2.5.0 database, for a sense of what a real scan
+// can produce:
+//
+//	c 2342  1 1585  3 537  2 417  4 389  8 255  7 179  5 178
+//	b 131   d 66    a 48   0 41   9 31   e 30   6 26    f 1
+//
+// SEVERITY IS NOT DERIVED FROM THIS, deliberately. Every Nikto finding
+// is SeverityLow (Pattern 4 constant) and stays that way in this change.
+// These categories are the first principled axis the engine has ever had
+// for Nikto severity — sql-injection and command-execution plainly are
+// not interesting-file — but acting on that changes what reaches the AI
+// pipeline and what a customer is shown, so it is its own decision with
+// its own evidence, not a rider on a classification change.
+//
+// Extending this map is REQUIRED if Nikto adds a category: the generator
+// validates every tuning character against its legend and refuses to
+// write a table containing one that is unnamed here.
+var tuningClassSlug = map[byte]string{
+	'0': "file-upload",
+	'1': "interesting-file",
+	'2': "misconfiguration",
+	'3': "info-disclosure",
+	'4': "injection",
+	'5': "file-retrieval-webroot",
+	'6': "dos",
+	'7': "file-retrieval-serverwide",
+	'8': "command-execution",
+	'9': "sql-injection",
+	'a': "auth-bypass",
+	'b': "software-identification",
+	'c': "remote-source-inclusion",
+	'd': "webservice",
+	'e': "admin-console",
+	'f': "xml-injection",
+}
+
+// itemClass is the resolved identity of one Nikto item.
+//
+// slug empty means unresolved — neither a curated plugin class nor a
+// known db_tests id — and the caller keeps the raw id and logs it.
+type itemClass struct {
+	slug   string
+	drop   bool
+	source string // "curated" or "db-test"; empty when unresolved
+}
+
+// resolveItem determines how a Nikto item is identified, consulting the
+// two id families in order.
+//
+// The families are disjoint, which is what makes the ordering safe
+// rather than merely conventional: Nikto reports ids from its PLUGINS
+// (77 of them, mostly 999xxx but including 17 inside the db's numeric
+// range) and ids from its TEST DATABASE (6951). Measured across Nikto
+// 2.5.0, the two sets do not intersect. Note that they are therefore
+// NOT separable by numeric range — "id < 007326 means db test" would be
+// wrong for a third of the plugin ids — which is why membership in the
+// generated table is the discriminator.
+//
+// Curated classes are consulted first anyway. They are message-anchored
+// and hand-reviewed, so where one exists it is a better answer than a
+// category, and putting them first means a future collision between the
+// families resolves toward the specific rather than the general.
+func resolveItem(id, description string) itemClass {
+	if c, ok := classify(id, description); ok {
+		return itemClass{slug: c.slug, drop: c.drop, source: "curated"}
+	}
+	if tuning, ok := dbTestTuning[id]; ok {
+		if slug, named := tuningClassSlug[tuning]; named {
+			return itemClass{slug: slug, source: "db-test"}
+		}
+	}
+	return itemClass{}
+}
+
 // findingTypeFor returns the stable FindingType for an item.
 //
-// A recognised class gets its curated slug. Anything else keeps
-// "nikto-"+id: unchanged from the previous behaviour, and stable across
-// scans, which is what scan comparison needs. Deriving a slug from
-// arbitrary message text was rejected — Nikto rewords messages between
-// versions, and a fingerprint that moves when the wording moves is worse
-// than one that is merely coarse.
+// A resolved item gets its slug — curated for a plugin id, the test's
+// category for a db_tests id. Anything else keeps "nikto-"+id:
+// unchanged from the original behaviour, stable across scans, and
+// logged so it surfaces.
+//
+// Deriving a slug from arbitrary message text was rejected, and the
+// db_tests corpus now quantifies why. Comparing the database Nikto
+// shipped in 2012 against the one it ships in 2026, of the 6253 ids
+// present in both:
+//
+//	tuning identical   6198  (99.1%)
+//	uri identical      6150  (98.4%)
+//	message identical  2018  (32.3%)
+//
+// The category is the most durable thing Nikto knows about a test and
+// the message is among the least, so a fingerprint keyed on wording
+// would churn on every upgrade while one keyed on category holds.
+//
+// A COARSE CLASS DOES NOT COLLAPSE FINDINGS HERE, which is the thing to
+// check before widening any FindingType. ComputeFingerprint hashes
+// ToolName|FindingType|TargetURL|Parameter|CodeFile|CodeLine, and the
+// 999100 disaster happened because four different headers were all
+// observed on "/" — same TargetURL, so a shared FindingType collapsed
+// them to one identity. db_tests findings are the opposite case: 6842
+// distinct uris across 6951 tests, each becoming its own TargetURL, so
+// nikto-interesting-file at /ftp/ and at /public/ are already distinct
+// fingerprints. The residual is small and bounded: 31 uris map to more
+// than one category and 35 (uri, category) pairs are shared by more
+// than one test, all of them edge-case probe paths like "/", "//" and
+// "/JUNK(10)".
 func findingTypeFor(id, description string) string {
-	if c, ok := classify(id, description); ok {
+	if c := resolveItem(id, description); c.slug != "" {
 		return "nikto-" + c.slug
 	}
 	return "nikto-" + id
