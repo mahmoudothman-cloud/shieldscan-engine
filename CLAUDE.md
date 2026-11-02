@@ -34,7 +34,7 @@ pinning, etc.), the parent CLAUDE.md still applies.
 Beyond the parent checklist:
 
 ```
-[ ] Verify Go version: go version → expect go1.26.2
+[ ] Verify Go version: go version → expect go1.26.10 (see check-toolchain.sh)
 [ ] Verify lint version: golangci-lint --version → expect v2.11.4
 [ ] go mod tidy && go test -race ./... — confirm clean baseline
 [ ] Read the ADRs above for any task touching state-bearing code
