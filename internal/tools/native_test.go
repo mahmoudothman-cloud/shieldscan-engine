@@ -732,3 +732,91 @@ func TestNativeRunner_NilPreflightIsANoOp(t *testing.T) {
 	require.Len(t, findings, 1)
 	assert.Equal(t, "ok", findings[0].Title)
 }
+
+// TestNativeRunner_PostProcessCanRemoveFindingsBeforeEnrichment pins the
+// hook's position in Run. It must see PARSED findings (so it can select
+// by FindingType) and run BEFORE enrichment, so a finding it removes
+// never has a fingerprint computed for it.
+func TestNativeRunner_PostProcessCanRemoveFindingsBeforeEnrichment(t *testing.T) {
+	var sawFingerprint, sawToolName string
+	var sawTarget Target
+
+	r := &NativeRunner{
+		ToolName:     "posttool",
+		ToolCategory: "infrastructure",
+		BinaryPath:   "/bin/true",
+		BuildArgs:    func(Target, ScanConfig) []string { return nil },
+		ParseOutput: func([]byte) ([]events.RawFinding, error) {
+			return []events.RawFinding{
+				{FindingType: "keep", TargetURL: "https://h/a"},
+				{FindingType: "drop", TargetURL: "https://h/b"},
+			}, nil
+		},
+		PostProcess: func(_ context.Context, target Target, _ ScanConfig, in []events.RawFinding) []events.RawFinding {
+			sawTarget = target
+			sawFingerprint, sawToolName = in[0].Fingerprint, in[0].ToolName
+			out := in[:0:0]
+			for _, f := range in {
+				if f.FindingType != "drop" {
+					out = append(out, f)
+				}
+			}
+			return out
+		},
+	}
+
+	got, err := r.Run(t.Context(), Target{URL: "https://h/"}, ScanConfig{})
+	require.NoError(t, err)
+
+	require.Len(t, got, 1, "PostProcess must be able to remove a finding")
+	assert.Equal(t, "keep", got[0].FindingType)
+	assert.Equal(t, "https://h/", sawTarget.URL, "PostProcess receives the target so it can probe it")
+	assert.Empty(t, sawFingerprint,
+		"PostProcess runs before enrichment, so a dropped finding is never fingerprinted")
+	assert.Empty(t, sawToolName, "likewise ToolName is applied after the hook")
+
+	// Survivors are still enriched normally.
+	assert.Equal(t, "posttool", got[0].ToolName)
+	assert.NotEmpty(t, got[0].Fingerprint)
+}
+
+// TestNativeRunner_NilPostProcessIsSkipped keeps the hook opt-in: the
+// eight other native tools set nothing and must be unaffected.
+func TestNativeRunner_NilPostProcessIsSkipped(t *testing.T) {
+	r := &NativeRunner{
+		ToolName:     "nohook",
+		ToolCategory: "infrastructure",
+		BinaryPath:   "/bin/true",
+		BuildArgs:    func(Target, ScanConfig) []string { return nil },
+		ParseOutput: func([]byte) ([]events.RawFinding, error) {
+			return []events.RawFinding{{FindingType: "x", TargetURL: "https://h/a"}}, nil
+		},
+	}
+	got, err := r.Run(t.Context(), Target{URL: "https://h/"}, ScanConfig{})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.NotEmpty(t, got[0].Fingerprint)
+}
+
+// TestNativeRunner_PostProcessDoesNotRunWhenParseFails guards the
+// ordering that matters for a security tool: the hook refines a scan that
+// succeeded, so it must not see the output of one that did not.
+func TestNativeRunner_PostProcessDoesNotRunWhenParseFails(t *testing.T) {
+	called := false
+	r := &NativeRunner{
+		ToolName:     "failparse",
+		ToolCategory: "infrastructure",
+		BinaryPath:   "/bin/true",
+		BuildArgs:    func(Target, ScanConfig) []string { return nil },
+		ParseOutput: func([]byte) ([]events.RawFinding, error) {
+			return nil, errors.New("malformed report")
+		},
+		PostProcess: func(_ context.Context, _ Target, _ ScanConfig, in []events.RawFinding) []events.RawFinding {
+			called = true
+			return in
+		},
+	}
+	_, err := r.Run(t.Context(), Target{URL: "https://h/"}, ScanConfig{})
+	require.Error(t, err)
+	assert.False(t, called, "a failed parse must not reach PostProcess")
+}

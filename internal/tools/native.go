@@ -161,6 +161,38 @@ type NativeRunner struct {
 	// defer handles cleanup symmetrically across success and error paths.
 	ParseOutputFile func(outputFilePath string) ([]events.RawFinding, error)
 
+	// PostProcess, when set, runs AFTER parsing and BEFORE enrichment,
+	// and may remove findings the parsed output cannot by itself be
+	// trusted about. It receives ctx, so unlike ParseOutput /
+	// ParseOutputFile it can talk to the target.
+	//
+	// IT CANNOT FAIL THE JOB, by construction: there is no error return.
+	// That is the whole point of the signature. A post-processing step
+	// is a refinement of a scan that has already succeeded, so the
+	// failure mode of the step itself must be "changed nothing", never
+	// "discarded a completed scan". Anything that should be able to fail
+	// the job belongs in ParseOutput, which can.
+	//
+	// The ctx is the run context — already bounded by the effective tool
+	// timeout and cancelled when the caller cancels. An implementation
+	// that finds it expired must return its input unchanged rather than
+	// treat the expiry as a result.
+	//
+	// Nikto is the motivating case (see verify.go in the nikto package).
+	// Nikto's file-existence checks assert a path exists from a 200
+	// response, and a single-page app with a catch-all route returns 200
+	// with the app shell for every path, so a handful of checks report
+	// files that are not there. Deciding that requires a control request
+	// to the live target, which neither the XML report (it carries no
+	// response bodies) nor the parser (it has no ctx and no target) can
+	// perform.
+	//
+	// Use it for "the report says X and only the target can confirm X",
+	// not as a general filter — a rule that can be decided from the
+	// report alone belongs in the parser, where it is testable against a
+	// fixture and costs no requests.
+	PostProcess func(ctx context.Context, target Target, cfg ScanConfig, findings []events.RawFinding) []events.RawFinding
+
 	// OutputFileExtension optionally overrides the suffix of the minted
 	// output tempfile. Empty (the default) yields ".out".
 	//
@@ -326,6 +358,15 @@ func (n *NativeRunner) Run(ctx context.Context, target Target, cfg ScanConfig) (
 	if err != nil {
 		return nil, fmt.Errorf("%s parse failed: %w (stderr: %s)",
 			n.ToolName, err, truncate(stderr.String(), 512))
+	}
+
+	// PostProcess runs before enrichment so a dropped finding never gets
+	// a fingerprint computed for it. It takes runCtx rather than ctx so
+	// it shares the tool's timeout budget: a tool that consumed almost
+	// all of it leaves the hook a ctx that is about to expire, which the
+	// hook must handle by changing nothing.
+	if n.PostProcess != nil {
+		findings = n.PostProcess(runCtx, target, cfg, findings)
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)

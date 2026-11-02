@@ -162,6 +162,9 @@ const outputFilePlaceholder = "{{outputFile}}"
 //   - OutputFilePlaceholder="{{outputFile}}"; ParseOutputFile set
 //   - OutputFileExtension=".xml" (Nikto's XML plugin infers format from
 //     the -o extension and rejects the framework-default ".out")
+//   - PostProcess=verifySoftNotFound — drops file-existence findings a
+//     catch-all route manufactured (see verify.go). It can only remove
+//     findings, never fail the scan.
 //
 // ExitCodeLenient is true because Nikto 2.5.0's exit status is inverted
 // relative to every other tool in the engine. nikto.pl:189 does:
@@ -208,6 +211,7 @@ func NewNiktoRunner(cfg Config, log zerolog.Logger) *tools.NativeRunner {
 		Preflight:           preflight(cfg),
 		BuildArgs:           buildArgs(cfg),
 		ParseOutputFile:     parseOutputFile(log),
+		PostProcess:         verifySoftNotFound(log),
 	}
 }
 

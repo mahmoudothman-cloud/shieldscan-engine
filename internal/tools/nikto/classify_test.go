@@ -572,3 +572,68 @@ func TestBuildArgs_PlainHTTPKeepsTheHostportForm(t *testing.T) {
 		tools.Target{URL: "http://example.com:8080/x"}, tools.ScanConfig{})
 	assert.Contains(t, strings.Join(args, " "), "-h example.com:8080")
 }
+
+// TestExistenceCheckFindingTypes_AreDisjointFromCuratedClasses is the
+// forcing function behind the soft-404 pass's eligibility rule.
+//
+// The pass (verify.go) selects candidates by FindingType, because that is
+// all a RawFinding still carries once the parser has run — the Nikto item
+// id is gone by then. That works only while the three existence-check
+// slugs are reachable ONLY from db_tests tuning 1/2/3. A curated plugin
+// class that happened to use one of them would silently become
+// probe-eligible, and a curated class is by definition not an
+// existence check, so it would be probed against a control it has no
+// relationship to and could be dropped on a coincidence.
+func TestExistenceCheckFindingTypes_AreDisjointFromCuratedClasses(t *testing.T) {
+	require.Len(t, existenceCheckFindingTypes, 3,
+		"expected exactly the tuning 1/2/3 classes: %v", existenceCheckFindingTypes)
+
+	for _, c := range classifications {
+		assert.False(t, isExistenceCheck("nikto-"+c.slug),
+			"curated class %q (id %s) shares a slug with an existence-check category; "+
+				"the soft-404 pass keys on FindingType and would start probing it",
+			c.slug, c.id)
+	}
+	for _, h := range disclosedHeaders {
+		assert.False(t, isExistenceCheck("nikto-disclosed-header-"+h),
+			"disclosed-header class for %q collides with an existence-check category", h)
+	}
+}
+
+// TestExistenceCheckFindingTypes_TrackTheTuningTable pins the derivation
+// itself: the set must be exactly what tuning 1, 2 and 3 name, so
+// renaming a slug in tuningClassSlug moves both halves or neither.
+func TestExistenceCheckFindingTypes_TrackTheTuningTable(t *testing.T) {
+	for _, ch := range []byte{'1', '2', '3'} {
+		slug, ok := tuningClassSlug[ch]
+		require.True(t, ok, "tuning %q must be named", ch)
+		assert.True(t, isExistenceCheck("nikto-"+slug),
+			"tuning %q (%s) is an existence check and must be probe-eligible", ch, slug)
+	}
+	// Every other category asserts something about response CONTENT and
+	// carries its own evidence, so it is deliberately never probed.
+	for ch, slug := range tuningClassSlug {
+		if strings.IndexByte(existenceCheckTuning, ch) >= 0 {
+			continue
+		}
+		assert.False(t, isExistenceCheck("nikto-"+slug),
+			"tuning %q (%s) is not an existence check and must not be probed", ch, slug)
+	}
+}
+
+// TestFindingTypeFor_ExistenceCheckIdsResolveToProbeEligibleClasses ties
+// the three live false positives to the eligibility rule, using the ids
+// the real scan reported.
+func TestFindingTypeFor_ExistenceCheckIdsResolveToProbeEligibleClasses(t *testing.T) {
+	for id, want := range map[string]string{
+		"001675": "nikto-interesting-file", // /ftp/    — genuine, must survive the pass
+		"001811": "nikto-interesting-file", // /public/ — catch-all artefact
+		"002739": "nikto-info-disclosure",  // /.htpasswd — catch-all artefact
+		"007226": "nikto-misconfiguration", // /.env — Nikto's own filter already suppresses it
+	} {
+		got := findingTypeFor(id, "irrelevant")
+		assert.Equal(t, want, got, "id %s", id)
+		assert.True(t, isExistenceCheck(got),
+			"id %s resolved to %s, which the soft-404 pass must be willing to verify", id, got)
+	}
+}

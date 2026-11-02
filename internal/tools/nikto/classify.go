@@ -278,6 +278,59 @@ var tuningClassSlug = map[byte]string{
 	'f': "xml-injection",
 }
 
+// existenceCheckTuning lists the Nikto categories whose tests assert
+// that a PATH EXISTS, which is the class of check a catch-all route can
+// fool. It is the input to the soft-404 verification pass (verify.go).
+//
+//	1  interesting-file   "Interesting File / Seen in logs"
+//	2  misconfiguration   "Misconfiguration / Default File"
+//	3  info-disclosure    "Information Disclosure"
+//
+// All three are answered by "I requested this path and got a page", so a
+// server that answers every path with the same page satisfies them
+// everywhere. Measured: 3008 of the 6951 tests in Nikto 2.5.0's database
+// fall in these three categories.
+//
+// The other 13 categories are deliberately excluded. Injection,
+// command-execution, sql-injection and the rest assert something about
+// the CONTENT of the response — an error string, an echoed payload, a
+// stack trace — so they carry their own evidence and a control request
+// adds nothing a matched regex has not already established. Probing them
+// would spend requests to second-guess a check that did not rely on mere
+// existence in the first place.
+const existenceCheckTuning = "123"
+
+// existenceCheckFindingTypes is the set of FindingType values produced
+// by existence-based checks.
+//
+// It is DERIVED from tuningClassSlug rather than written out, because
+// the verification pass keys on FindingType (which is all a RawFinding
+// carries by the time it reaches PostProcess — the Nikto item id is
+// gone) and a literal list here would silently stop matching if a slug
+// above were ever renamed. Deriving it means a rename moves both halves
+// together or neither.
+//
+// TestExistenceCheckFindingTypes_AreDisjointFromCuratedClasses is the
+// other half of that guard: because the key is a FindingType and not an
+// id, a CURATED class that happened to use one of these three slugs
+// would quietly become probe-eligible.
+var existenceCheckFindingTypes = buildExistenceCheckFindingTypes()
+
+func buildExistenceCheckFindingTypes() map[string]struct{} {
+	m := make(map[string]struct{}, len(existenceCheckTuning))
+	for i := 0; i < len(existenceCheckTuning); i++ {
+		m["nikto-"+tuningClassSlug[existenceCheckTuning[i]]] = struct{}{}
+	}
+	return m
+}
+
+// isExistenceCheck reports whether a FindingType came from a category
+// whose finding rests on a path existing.
+func isExistenceCheck(findingType string) bool {
+	_, ok := existenceCheckFindingTypes[findingType]
+	return ok
+}
+
 // itemClass is the resolved identity of one Nikto item.
 //
 // slug empty means unresolved — neither a curated plugin class nor a
