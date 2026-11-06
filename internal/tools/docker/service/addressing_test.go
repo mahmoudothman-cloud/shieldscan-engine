@@ -33,7 +33,7 @@ func TestServiceAddressing_ProxyMode(t *testing.T) {
 	require.NotNil(t, transport)
 	require.NotNil(t, transport.Proxy, "transport must carry a Proxy resolver")
 
-	req, err := http.NewRequest(http.MethodGet, "http://zap/JSON/core/view/version/", nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://zap/JSON/core/view/version/", nil)
 	require.NoError(t, err)
 	proxyURL, err := transport.Proxy(req)
 	require.NoError(t, err)

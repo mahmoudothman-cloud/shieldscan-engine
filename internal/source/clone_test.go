@@ -94,7 +94,7 @@ func TestCloneRepo_WrapsGitFailureWithOutputTail(t *testing.T) {
 	// Verify the underlying *exec.ExitError unwraps cleanly so callers
 	// can inspect the exit code if they need to (Drift #51-style
 	// integration discipline).
-	var unwrapped error = err
+	unwrapped := err
 	for unwrapped != nil {
 		unwrapped = errors.Unwrap(unwrapped)
 	}

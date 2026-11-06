@@ -245,7 +245,7 @@ func (c *Client) applyAuth(req *http.Request) {
 // do executes the request, drains the body, and categorizes non-2xx
 // responses as *HTTPError.
 func (c *Client) do(req *http.Request) ([]byte, error) {
-	resp, err := c.HTTPClient.Do(req)
+	resp, err := c.HTTPClient.Do(req) //nolint:gosec // G704: URL is the in-process service-container address, not caller input
 	if err != nil {
 		return nil, fmt.Errorf("client: do request: %w", err)
 	}

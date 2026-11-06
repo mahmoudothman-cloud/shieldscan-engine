@@ -32,7 +32,7 @@ func TestParseSQLMapOutput_DVWAInjections(t *testing.T) {
 
 	// Separate by FindingType
 	var injections []int
-	var dbmsIdx int = -1
+	dbmsIdx := -1
 	for i, f := range findings {
 		switch f.FindingType {
 		case "sql_injection":
@@ -301,7 +301,7 @@ func TestMapSqlmapSeverity(t *testing.T) {
 		{"boolean-based blind", "high"},
 		{"error-based", "high"},
 		{"UNION query", "high"},
-		{"union query", "high"},          // case-insensitive
+		{"union query", "high"}, // case-insensitive
 		{"stacked queries", "high"},
 		{"time-based blind", "medium"},
 		{"  time-based blind  ", "medium"}, // whitespace tolerance

@@ -72,7 +72,7 @@ func CloneRepo(ctx context.Context, gitURL, stagingDir string) error {
 	if parsed.Host == "" {
 		return fmt.Errorf("source.CloneRepo: hostless URL %q", gitURL)
 	}
-	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
+	if err := os.MkdirAll(stagingDir, 0o750); err != nil {
 		return fmt.Errorf(
 			"source.CloneRepo: mkdir %q: %w", stagingDir, err,
 		)
@@ -80,7 +80,7 @@ func CloneRepo(ctx context.Context, gitURL, stagingDir string) error {
 	// --depth=1 per Q-DEPTH lock (Phase 0 v2 empirically bounded
 	// at 3.3M total / 1.2M .git for NodeGoat). exec.CommandContext
 	// per ADR-021 Rule 1.
-	cmd := exec.CommandContext(
+	cmd := exec.CommandContext( //nolint:gosec // G204: fixed argv; gitURL scheme+host validated above
 		ctx, "git", "clone", "--depth=1", gitURL, stagingDir,
 	)
 	output, runErr := cmd.CombinedOutput()

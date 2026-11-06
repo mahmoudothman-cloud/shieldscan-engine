@@ -509,7 +509,7 @@ var dylibSubChecks = []string{
 }
 
 type dylibEntry struct {
-	Name string                    `json:"name"`
+	Name string                     `json:"name"`
 	Raw  map[string]json.RawMessage `json:"-"`
 }
 

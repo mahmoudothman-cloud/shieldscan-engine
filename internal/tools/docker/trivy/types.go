@@ -23,9 +23,9 @@ package trivy
 // against v0.70.0; SchemaVersion 2 confirmed.
 type TrivyOutput struct {
 	SchemaVersion int            `json:"SchemaVersion"`
-	ArtifactName  string         `json:"ArtifactName"`           // scan target identifier (image ref or fs path)
-	ArtifactType  string         `json:"ArtifactType"`           // "container_image" | "filesystem"
-	Metadata      *TrivyMetadata `json:"Metadata,omitempty"`     // image-mode populated; fs-mode absent
+	ArtifactName  string         `json:"ArtifactName"`       // scan target identifier (image ref or fs path)
+	ArtifactType  string         `json:"ArtifactType"`       // "container_image" | "filesystem"
+	Metadata      *TrivyMetadata `json:"Metadata,omitempty"` // image-mode populated; fs-mode absent
 	Results       []TrivyResult  `json:"Results"`
 }
 
@@ -62,9 +62,9 @@ type TrivyLayer struct {
 // Type enumeration (Phase 0 v2): "alpine" | "debian" | "bundler" |
 // "npm" | "pip" | etc. (forward-additive; not enumerated exhaustively).
 type TrivyResult struct {
-	Target          string              `json:"Target"`              // e.g. "alpine:3.10 (alpine 3.10.9)" or "Gemfile.lock"
-	Class           string              `json:"Class"`
-	Type            string              `json:"Type"`
+	Target          string               `json:"Target"` // e.g. "alpine:3.10 (alpine 3.10.9)" or "Gemfile.lock"
+	Class           string               `json:"Class"`
+	Type            string               `json:"Type"`
 	Vulnerabilities []TrivyVulnerability `json:"Vulnerabilities,omitempty"`
 }
 
@@ -72,23 +72,23 @@ type TrivyResult struct {
 // Per Phase 0 v2 V2: per-vuln field set verified against alpine:3.10
 // + fs-mode multi-manifest fixtures.
 type TrivyVulnerability struct {
-	VulnerabilityID  string              `json:"VulnerabilityID"`    // e.g. "CVE-2021-36159"
-	PkgID            string              `json:"PkgID,omitempty"`    // e.g. "apk-tools@2.10.6-r0"
-	PkgName          string              `json:"PkgName"`            // populates ComponentName per Q6 typed-field reuse
-	PkgIdentifier    TrivyPkgIdentifier  `json:"PkgIdentifier"`      // PURL + UID per DRIFT-B1 X1 PURL-parse disposition
-	InstalledVersion string              `json:"InstalledVersion,omitempty"`
-	FixedVersion     string              `json:"FixedVersion,omitempty"`
-	Status           string              `json:"Status,omitempty"`   // "fixed" | "affected" | ...
-	Layer            *TrivyLayer         `json:"Layer,omitempty"`    // image-mode populated; fs-mode absent
-	SeveritySource   string              `json:"SeveritySource,omitempty"`
-	PrimaryURL       string              `json:"PrimaryURL,omitempty"` // per X3 Phase 0 v2 NEW Metadata key
-	DataSource       *TrivyDataSource    `json:"DataSource,omitempty"`
-	Title            string              `json:"Title,omitempty"`
-	Description      string              `json:"Description,omitempty"`
-	Severity         string              `json:"Severity"`           // UPPERCASE: UNKNOWN|LOW|MEDIUM|HIGH|CRITICAL
-	CweIDs           []string            `json:"CweIDs,omitempty"`   // first → CWEID typed field; remainder → AdditionalCWEs per Q6
-	CVSS             map[string]TrivyCVSS `json:"CVSS,omitempty"`    // vendor-keyed map per DRIFT-B2 X2 vendor-priority chain
-	References       []string            `json:"References,omitempty"` // typed RawFinding.References per Y3 typed-field expansion
+	VulnerabilityID  string               `json:"VulnerabilityID"` // e.g. "CVE-2021-36159"
+	PkgID            string               `json:"PkgID,omitempty"` // e.g. "apk-tools@2.10.6-r0"
+	PkgName          string               `json:"PkgName"`         // populates ComponentName per Q6 typed-field reuse
+	PkgIdentifier    TrivyPkgIdentifier   `json:"PkgIdentifier"`   // PURL + UID per DRIFT-B1 X1 PURL-parse disposition
+	InstalledVersion string               `json:"InstalledVersion,omitempty"`
+	FixedVersion     string               `json:"FixedVersion,omitempty"`
+	Status           string               `json:"Status,omitempty"` // "fixed" | "affected" | ...
+	Layer            *TrivyLayer          `json:"Layer,omitempty"`  // image-mode populated; fs-mode absent
+	SeveritySource   string               `json:"SeveritySource,omitempty"`
+	PrimaryURL       string               `json:"PrimaryURL,omitempty"` // per X3 Phase 0 v2 NEW Metadata key
+	DataSource       *TrivyDataSource     `json:"DataSource,omitempty"`
+	Title            string               `json:"Title,omitempty"`
+	Description      string               `json:"Description,omitempty"`
+	Severity         string               `json:"Severity"`             // UPPERCASE: UNKNOWN|LOW|MEDIUM|HIGH|CRITICAL
+	CweIDs           []string             `json:"CweIDs,omitempty"`     // first → CWEID typed field; remainder → AdditionalCWEs per Q6
+	CVSS             map[string]TrivyCVSS `json:"CVSS,omitempty"`       // vendor-keyed map per DRIFT-B2 X2 vendor-priority chain
+	References       []string             `json:"References,omitempty"` // typed RawFinding.References per Y3 typed-field expansion
 }
 
 // TrivyPkgIdentifier carries the package URL + unique ID. PURL is
@@ -120,4 +120,3 @@ type TrivyDataSource struct {
 	Name string `json:"Name,omitempty"`
 	URL  string `json:"URL,omitempty"`
 }
-

@@ -162,8 +162,8 @@ func TestMapTrivySeverity(t *testing.T) {
 		{"LOW", "low"},
 		{"UNKNOWN", "info"},
 		{"", "info"},
-		{"  critical  ", "critical"},      // whitespace + lowercase tolerance
-		{"FutureSeverity", "info"},        // forward-compat defensive fallback
+		{"  critical  ", "critical"}, // whitespace + lowercase tolerance
+		{"FutureSeverity", "info"},   // forward-compat defensive fallback
 	}
 	for _, c := range cases {
 		got := mapTrivySeverity(c.in)

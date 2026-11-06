@@ -65,10 +65,10 @@ type reportV4 struct {
 	// iOS-specific sections per Task 7.4 V10 Phase 0 v2 empirical
 	// findings (DVIA-v2-swift v2.0 scan). Routed at parseReport
 	// platform-gated invocation block per Q1 (γ) lock.
-	InfoPlist      string                `json:"info_plist"`
-	ATSAnalysis    atsAnalysisSection    `json:"ats_analysis"`
-	DylibAnalysis  []dylibEntry          `json:"dylib_analysis"`
-	BundleURLTypes []bundleURLTypeEntry  `json:"bundle_url_types"`
+	InfoPlist      string               `json:"info_plist"`
+	ATSAnalysis    atsAnalysisSection   `json:"ats_analysis"`
+	DylibAnalysis  []dylibEntry         `json:"dylib_analysis"`
+	BundleURLTypes []bundleURLTypeEntry `json:"bundle_url_types"`
 }
 
 type codeAnalysisSection struct {

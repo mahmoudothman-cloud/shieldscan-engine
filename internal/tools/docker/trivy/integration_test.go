@@ -30,14 +30,14 @@
 // 2093 anticipated framework-gap escape hatch: this is a legitimate
 // additive framework change candidate. Resolution paths:
 //
-//   (α) Extend DockerRunner.Config OR add per-consumer ContainerFactory
-//       override accepting Mounts + HostConfig customization (Task 7.5b
-//       ContainerFactory hook is the natural extension point).
-//   (β) Add Trivy-specific ContainerFactory override in trivy.NewPool
-//       that mounts /var/run/docker.sock and accepts a host-path-mount
-//       parameter for fs-mode scan targets.
-//   (γ) Defer to a v1.1+ framework task; integration tests stay in
-//       this file marked t.Skip with rationale.
+//	(α) Extend DockerRunner.Config OR add per-consumer ContainerFactory
+//	    override accepting Mounts + HostConfig customization (Task 7.5b
+//	    ContainerFactory hook is the natural extension point).
+//	(β) Add Trivy-specific ContainerFactory override in trivy.NewPool
+//	    that mounts /var/run/docker.sock and accepts a host-path-mount
+//	    parameter for fs-mode scan targets.
+//	(γ) Defer to a v1.1+ framework task; integration tests stay in
+//	    this file marked t.Skip with rationale.
 //
 // Current commit chooses (γ): tests defined but t.Skip on framework
 // gap. When framework extension lands, remove t.Skip + tests become
