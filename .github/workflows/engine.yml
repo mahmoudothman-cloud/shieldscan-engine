@@ -28,6 +28,6 @@ jobs:
       - name: go build worker binary
         run: go build -o /tmp/worker ./cmd/worker/
 
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v9
         with:
           version: 'v2.11.4'
