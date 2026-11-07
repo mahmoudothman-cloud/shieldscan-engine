@@ -97,14 +97,20 @@ func runMainFixture(t *testing.T) (runMainDeps, *miniredis.Miniredis, *redis.Cli
 // TestRunMain_HappyPathStartsWorker pins the canonical assembly:
 // runMain starts the worker; ctx cancel exits cleanly with exit code 0.
 func TestRunMain_HappyPathStartsWorker(t *testing.T) {
-	deps, _, _ := runMainFixture(t)
+	deps, _, client := runMainFixture(t)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	exitCh := make(chan int, 1)
 	go func() { exitCh <- runMain(ctx, deps) }()
 
-	// Let startup complete.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for startup on its own signal (the Phase 4 worker key), not a
+	// fixed sleep: under -race with the whole module testing in parallel
+	// 100ms was not always enough, cancel() landed mid-startup and runMain
+	// returned 1 (DRIFT-LOG 2026-11-07).
+	require.Eventually(t, func() bool {
+		keys, err := client.Keys(t.Context(), "shieldscan:workers:*").Result()
+		return err == nil && len(keys) > 0
+	}, 5*time.Second, 25*time.Millisecond, "worker key should appear in Redis after Phase 4")
 	cancel()
 
 	select {
