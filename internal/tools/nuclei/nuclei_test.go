@@ -105,6 +105,24 @@ func TestBuildArgs_StandardDepth(t *testing.T) {
 	assert.Contains(t, strings.Join(args, " "), "-severity medium,high,critical")
 }
 
+func TestBuildArgs_TemplateCategories_AddsTagsFlag(t *testing.T) {
+	args := buildArgs(Config{TemplatesDir: "/tpl"})(
+		tools.Target{URL: "https://x.test"},
+		tools.ScanConfig{Depth: "deep", TemplateCategories: []string{"misconfig", " exposure ", "", "ssl"}},
+	)
+	joined := strings.Join(args, " ")
+	assert.Contains(t, joined, "-tags misconfig,exposure,ssl")
+	assert.NotContains(t, joined, "-severity")
+}
+
+func TestBuildArgs_NoTemplateCategories_NoTagsFlag(t *testing.T) {
+	args := buildArgs(Config{TemplatesDir: "/tpl"})(
+		tools.Target{URL: "https://x.test"},
+		tools.ScanConfig{Depth: "quick"},
+	)
+	assert.NotContains(t, strings.Join(args, " "), "-tags")
+}
+
 func TestBuildArgs_DeepDepth(t *testing.T) {
 	args := buildArgs(testConfig())(
 		tools.Target{URL: "https://app.example.com"},

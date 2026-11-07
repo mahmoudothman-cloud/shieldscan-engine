@@ -27,6 +27,7 @@ package nuclei
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/odyssey/shieldscan-engine/internal/events"
@@ -103,10 +104,13 @@ func NewNucleiRunner(cfg Config, log zerolog.Logger) *tools.NativeRunner {
 //     still invoked without auth flags; M6.1 does NOT error on this
 //     path because Target.AuthConfig is reserved for future use and
 //     the processor does not yet populate it.
-//   - The template categories field on ScanConfig (TemplateCategories)
-//     is reserved for an extension; M6.1 ignores it and relies on
-//     -severity for depth tuning. Trigger to use: customer ask for
-//     OWASP-only or CVE-only template scoping.
+//   - ScanConfig.TemplateCategories (wire: config.template_categories)
+//     maps to "-tags a,b,c" — Nuclei's template tag filter. Empty means
+//     no tag filter (the M6.1 behaviour). First user: public quick scans
+//     (api M11 pre-work) restrict to passive misconfiguration / exposure
+//     / ssl / dns / tech templates so a free scan stays read-only and
+//     fast while still surfacing low- and medium-severity header and
+//     cookie findings that the "quick" severity filter would drop.
 func buildArgs(cfg Config) func(tools.Target, tools.ScanConfig) []string {
 	return func(target tools.Target, scanCfg tools.ScanConfig) []string {
 		args := []string{
@@ -134,9 +138,25 @@ func buildArgs(cfg Config) func(tools.Target, tools.ScanConfig) []string {
 		case "standard":
 			args = append(args, "-severity", "medium,high,critical")
 		}
+		// Template tag filter (see package notes). Tags are passed
+		// through verbatim; Nuclei ignores unknown tags.
+		if tags := joinTags(scanCfg.TemplateCategories); tags != "" {
+			args = append(args, "-tags", tags)
+		}
 
 		return args
 	}
+}
+
+// joinTags trims, drops empty entries and joins template tags for -tags.
+func joinTags(tags []string) string {
+	out := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if t = strings.TrimSpace(t); t != "" {
+			out = append(out, t)
+		}
+	}
+	return strings.Join(out, ",")
 }
 
 // Compile-time assertion: nucleiRunnerType signals that NewNucleiRunner
