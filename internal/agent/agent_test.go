@@ -183,7 +183,17 @@ func job(id, engine string) events.JobDispatch {
 	}
 }
 
+// noTools makes the inventory independent of what the test host has
+// installed: an empty PATH and no SHIELDSCAN_*_BINARY overrides.
+func noTools(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	for _, s := range toolSpecs {
+		t.Setenv(s.EnvVar, "")
+	}
+}
+
 func runUntil(t *testing.T, g *gateway, reg *worker.Registry, until func(ctx context.Context, cancel context.CancelFunc)) error {
+	noTools(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
@@ -379,10 +389,7 @@ func TestEnroll_WritesStateFileWithMode0600(t *testing.T) {
 }
 
 func TestInventory_ReportsMissingToolsWithoutFailing(t *testing.T) {
-	t.Setenv("PATH", t.TempDir()) // nothing installed
-	for _, s := range toolSpecs {
-		t.Setenv(s.EnvVar, "")
-	}
+	noTools(t)
 	inv := Inventory(context.Background())
 	for _, name := range ToolNames() {
 		assert.Equal(t, "missing", inv[name].Status, name)

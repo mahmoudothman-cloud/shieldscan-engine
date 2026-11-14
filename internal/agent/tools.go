@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -70,11 +71,27 @@ func PrependToolsDir(dir string) {
 }
 
 // Inventory probes every tool: where it is and what version it reports.
-// Each probe is bounded (5 s) so a hung binary cannot stall a heartbeat.
+// Probes run in parallel and each is bounded (5 s), so a heartbeat is
+// never more than one slow binary late, not seven.
 func Inventory(ctx context.Context) map[string]ToolHealth {
-	out := make(map[string]ToolHealth, len(toolSpecs))
+	type result struct {
+		name string
+		h    ToolHealth
+	}
+	results := make(chan result, len(toolSpecs))
+	var wg sync.WaitGroup
 	for _, s := range toolSpecs {
-		out[s.Name] = probe(ctx, s)
+		wg.Add(1)
+		go func(s toolSpec) {
+			defer wg.Done()
+			results <- result{s.Name, probe(ctx, s)}
+		}(s)
+	}
+	wg.Wait()
+	close(results)
+	out := make(map[string]ToolHealth, len(toolSpecs))
+	for r := range results {
+		out[r.name] = r.h
 	}
 	return out
 }
