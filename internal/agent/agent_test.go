@@ -398,4 +398,6 @@ func TestFirstVersionLine(t *testing.T) {
 	assert.Equal(t, "Current Version: 3.4.0",
 		firstVersionLine("\x1b[34m\n   __     _\x1b[0m\n\x1b[1mCurrent Version: 3.4.0\x1b[0m\n"))
 	assert.Equal(t, "", firstVersionLine("no number here"))
+	assert.Equal(t, "SSLyze version 6.1.0",
+		firstVersionLine("usage: sslyze [-h] [--update_trust_stores]\n  --json_out JSON_FILE\nSSLyze version 6.1.0\n"))
 }

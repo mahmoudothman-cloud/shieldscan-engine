@@ -39,7 +39,7 @@ type toolSpec struct {
 
 var toolSpecs = []toolSpec{
 	{"nuclei", "nuclei", "SHIELDSCAN_NUCLEI_BINARY", []string{"-version"}, true},
-	{"sslyze", "sslyze", "SHIELDSCAN_SSLYZE_BINARY", []string{"--version"}, true},
+	{"sslyze", "sslyze", "SHIELDSCAN_SSLYZE_BINARY", []string{"--help"}, true}, // no --version; --help prints "SSLyze version x"
 	{"nikto", "nikto", "SHIELDSCAN_NIKTO_BINARY", []string{"-Version"}, true},
 	{"wapiti", "wapiti", "SHIELDSCAN_WAPITI_BINARY", []string{"--version"}, true},
 	{"nmap", "nmap", "SHIELDSCAN_NMAP_BINARY", []string{"--version"}, true},
@@ -109,10 +109,21 @@ func probe(ctx context.Context, s toolSpec) ToolHealth {
 	return ToolHealth{Status: "ok", Path: path, Version: version}
 }
 
-// firstVersionLine picks the first line that carries a digit — the
-// tools print banners, warnings and update nags around the number.
+// firstVersionLine prefers a line that says "version" and carries a
+// digit, else the first line with a digit — the tools print banners,
+// warnings and update nags around the number.
 func firstVersionLine(out string) string {
-	for _, line := range strings.Split(out, "\n") {
+	lines := strings.Split(out, "\n")
+	for _, line := range lines {
+		clean := strings.TrimSpace(stripANSI(line))
+		if strings.Contains(strings.ToLower(clean), "version") && strings.ContainsAny(clean, "0123456789") {
+			if len(clean) > 80 {
+				clean = clean[:80]
+			}
+			return clean
+		}
+	}
+	for _, line := range lines {
 		line = strings.TrimSpace(stripANSI(line))
 		if line == "" || !strings.ContainsAny(line, "0123456789") {
 			continue
