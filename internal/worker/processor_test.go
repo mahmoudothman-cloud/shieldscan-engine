@@ -21,6 +21,7 @@ import (
 	"github.com/odyssey/shieldscan-engine/internal/events"
 	rdsh "github.com/odyssey/shieldscan-engine/internal/redis"
 	"github.com/odyssey/shieldscan-engine/internal/tools"
+	"github.com/odyssey/shieldscan-engine/internal/tools/recon"
 )
 
 // TestMain wires goleak.VerifyTestMain — load-bearing here because
@@ -110,7 +111,7 @@ func processorFixture(t *testing.T, runner *testRunner) (*Processor, *goredis.Cl
 		// Concrete recon publishers per ADR-028 Phase-1 + Drift #62 (B);
 		// miniredis-backed per Sub-Decision 2 (B.i). Harmless for
 		// non-recon dispatch tests (fields sit unused).
-		ReconProgressPubFn:  func(scanID string) *rdsh.ProgressPublisher { return rdsh.NewProgressPublisher(client, scanID) },
+		ReconProgressPubFn:  func(scanID string) recon.ProgressPublisher { return rdsh.NewProgressPublisher(client, scanID) },
 		ReconCompletionsPub: rdsh.NewCompletionsPublisher(client),
 	})
 	return p, client, mr

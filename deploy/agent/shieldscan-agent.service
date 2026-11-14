@@ -1,0 +1,39 @@
+# systemd unit for the ShieldScan on-prem agent (M14).
+#
+#   sudo install -m 0755 shieldscan-agent /usr/local/bin/
+#   sudo install -m 0644 shieldscan-agent.service /etc/systemd/system/
+#   sudo useradd --system --home /var/lib/shieldscan-agent --shell /usr/sbin/nologin shieldscan-agent
+#   sudo -u shieldscan-agent SHIELDSCAN_AGENT_STATE_DIR=/var/lib/shieldscan-agent \
+#        shieldscan-agent enroll --api https://app.example.com --token ss_enrol_…
+#   sudo systemctl enable --now shieldscan-agent
+#
+# The agent only makes outbound HTTPS calls; it opens no ports.
+
+[Unit]
+Description=ShieldScan on-prem scanning agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shieldscan-agent
+Group=shieldscan-agent
+StateDirectory=shieldscan-agent
+Environment=SHIELDSCAN_AGENT_STATE_DIR=/var/lib/shieldscan-agent
+# Where the scanners live if not on the default PATH:
+# Environment=SHIELDSCAN_TOOLS_DIR=/opt/shieldscan-tools
+# Environment=SHIELDSCAN_NUCLEI_TEMPLATES=/var/lib/shieldscan-agent/nuclei-templates
+ExecStart=/usr/local/bin/shieldscan-agent run
+Restart=always
+RestartSec=5
+# Exit 3 = revoked; do not loop on it.
+RestartPreventExitStatus=3
+TimeoutStopSec=90
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/shieldscan-agent
+
+[Install]
+WantedBy=multi-user.target

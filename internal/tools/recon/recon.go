@@ -34,7 +34,6 @@ import (
 	"time"
 
 	"github.com/odyssey/shieldscan-engine/internal/events"
-	"github.com/odyssey/shieldscan-engine/internal/redis"
 	"github.com/rs/zerolog"
 )
 
@@ -42,6 +41,21 @@ import (
 // Matches TOOL-ARCH §8.1 (max 100 subdomains per scan, configurable
 // per tier).
 const defaultLimit = 100
+
+// ProgressPublisher is the progress surface RunRecon writes to. The
+// worker passes *redis.ProgressPublisher (XADD to the scan's stream);
+// the on-prem agent (M14, cmd/agent) passes an HTTPS publisher that
+// posts the same events to the API gateway. Interface so the recon
+// phase can run on either side without a second code path.
+type ProgressPublisher interface {
+	Publish(ctx context.Context, eventType events.EventType, payload events.ProgressEvent) (string, error)
+}
+
+// AttackSurfacePublisher is the completions-channel surface RunRecon
+// emits EventAttackSurface on. Same two implementations as above.
+type AttackSurfacePublisher interface {
+	PublishAttackSurface(ctx context.Context, ev events.EventAttackSurface) error
+}
 
 // ReconResult is the canonical output of RunRecon, consumed by M8
 // (Recon-First Pipeline) as the basis of per-target scan job
@@ -137,8 +151,8 @@ func RunRecon(
 	ctx context.Context,
 	domain string,
 	limit int,
-	publisher *redis.ProgressPublisher,
-	completionsPub *redis.CompletionsPublisher,
+	publisher ProgressPublisher,
+	completionsPub AttackSurfacePublisher,
 	scanID string,
 	orgID string,
 	log zerolog.Logger,
@@ -288,7 +302,7 @@ func probeSet(domain string, subs []string) []string {
 // POSTURE b). Drift #58 Layer A repair helper.
 func publishAttackSurfaceIfReady(
 	ctx context.Context,
-	completionsPub *redis.CompletionsPublisher,
+	completionsPub AttackSurfacePublisher,
 	scanID string,
 	orgID string,
 	domain string,
@@ -349,7 +363,7 @@ func statusFromStatusCode(code int) string {
 // Publish errors are intentionally swallowed — recon should not
 // fail because progress publishing failed. Per ADR-021 fail-soft
 // posture.
-func publishIfNotNil(ctx context.Context, publisher *redis.ProgressPublisher, eventType events.EventType, payload events.ProgressEvent) {
+func publishIfNotNil(ctx context.Context, publisher ProgressPublisher, eventType events.EventType, payload events.ProgressEvent) {
 	if publisher == nil {
 		return
 	}

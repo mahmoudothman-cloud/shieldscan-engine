@@ -18,6 +18,23 @@ import (
 // Hostname targets pass through (rely on Layer 1 trust + DNS rebinding
 // mitigation forward-pinned to platform team).
 func validateTarget(target tools.Target, cfg tools.ScanConfig) error {
+	return validateTargetOpts(target, cfg, validateOpts{})
+}
+
+// validateOpts widens validateTarget for a deployment where the usual
+// cloud rejections do not apply. The on-prem agent (M14) scans the
+// customer's own network from inside it, so RFC1918 is the normal case
+// and loopback is legitimate (a service bound to the agent host). The
+// cloud worker never sets either.
+type validateOpts struct {
+	allowPrivate  bool
+	allowLoopback bool
+}
+
+func validateTargetOpts(target tools.Target, cfg tools.ScanConfig, opts validateOpts) error {
+	if opts.allowPrivate {
+		cfg.AllowPrivateTargets = true
+	}
 	addr := target.URL
 	if addr == "" {
 		return errors.New("target URL is empty")
@@ -30,6 +47,9 @@ func validateTarget(target tools.Target, cfg tools.ScanConfig) error {
 	addr = normalizeTarget(addr)
 
 	if ip := net.ParseIP(addr); ip != nil {
+		if opts.allowLoopback && ip.IsLoopback() {
+			return nil
+		}
 		return validateIPTarget(ip, cfg)
 	}
 

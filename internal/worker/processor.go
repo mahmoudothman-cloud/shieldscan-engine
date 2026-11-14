@@ -45,6 +45,18 @@ type publishMarker interface {
 	MarkPublished(ctx context.Context, idempotencyKey string) error
 }
 
+// Exported names for the dependency surfaces above, so a second binary
+// in this module (cmd/agent, M14) can wire ProcessorDeps with its own
+// implementations — the field types stay the package-private
+// interfaces; these are aliases, not new types.
+type (
+	ProgressPublisher    = progressPublisher
+	CancelSubscriber     = cancelSubscriber
+	CompletionsPublisher = completionsPublisher
+	IdempotencyClaim     = idempotencyClaim
+	PublishMarker        = publishMarker
+)
+
 // ErrJobNotTerminal marks a Process failure that left the job WITHOUT a
 // published terminal completion event — a Redis error on the
 // idempotency claim, or a publish that did not land.
@@ -97,8 +109,12 @@ type ProcessorDeps struct {
 	// singleton (the completions channel is global). Both nil disables
 	// recon dispatch (an engine="recon" job arriving without wiring
 	// fails loud per ADR-021).
-	ReconProgressPubFn  func(scanID string) *rdsh.ProgressPublisher
-	ReconCompletionsPub *rdsh.CompletionsPublisher
+	//
+	// M14: typed as the recon package's interfaces (satisfied by the
+	// concrete Redis publishers and by the agent's HTTPS publishers), so
+	// the on-prem agent reuses this processor unchanged.
+	ReconProgressPubFn  func(scanID string) recon.ProgressPublisher
+	ReconCompletionsPub recon.AttackSurfacePublisher
 }
 
 // Processor handles a single job from JobDispatch through to
@@ -113,8 +129,8 @@ type Processor struct {
 	completionsPub      completionsPublisher
 	marker              publishMarker
 	log                 zerolog.Logger
-	reconProgressPubFn  func(string) *rdsh.ProgressPublisher
-	reconCompletionsPub *rdsh.CompletionsPublisher
+	reconProgressPubFn  func(string) recon.ProgressPublisher
+	reconCompletionsPub recon.AttackSurfacePublisher
 }
 
 // NewProcessorFromRedis is a convenience constructor that wires a
@@ -142,7 +158,7 @@ func NewProcessorFromRedis(registry *Registry, client *goredis.Client, log zerol
 		PublishMarker:        rdsh.NewPublishGuard(client),
 		Logger:               log,
 		// Concrete recon publishers per ADR-028 Phase-1 + Drift #62 (B).
-		ReconProgressPubFn:  func(scanID string) *rdsh.ProgressPublisher { return rdsh.NewProgressPublisher(client, scanID) },
+		ReconProgressPubFn:  func(scanID string) recon.ProgressPublisher { return rdsh.NewProgressPublisher(client, scanID) },
 		ReconCompletionsPub: rdsh.NewCompletionsPublisher(client),
 	})
 }

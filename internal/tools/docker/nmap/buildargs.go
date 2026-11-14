@@ -26,7 +26,11 @@ import (
 //
 //	nmap -sT -sV -oX - -T4 --host-timeout 25m [-p <range>] <target>
 func buildArgs(target tools.Target, cfg tools.ScanConfig) ([]string, error) {
-	if err := validateTarget(target, cfg); err != nil {
+	return buildArgsOpts(target, cfg, validateOpts{})
+}
+
+func buildArgsOpts(target tools.Target, cfg tools.ScanConfig, opts validateOpts) ([]string, error) {
+	if err := validateTargetOpts(target, cfg, opts); err != nil {
 		return nil, fmt.Errorf("nmap: target validation: %w", err)
 	}
 
