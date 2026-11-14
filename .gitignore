@@ -20,3 +20,6 @@ coverage.html
 
 # OS
 .DS_Store
+
+# goreleaser output
+dist/

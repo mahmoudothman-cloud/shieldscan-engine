@@ -1,0 +1,81 @@
+# goreleaser v2 — the on-prem agent (M14; On-Prem Agent Design v1.0 A3).
+#
+# Runs on `agent/v*` tags (see .github/workflows/agent-release.yml) and
+# publishes BINARIES ONLY into the public repo
+# mahmoudothman-cloud/shieldscan-agent: archives for linux/darwin ×
+# amd64/arm64, checksums.txt, and a keyless cosign signature of the
+# checksums. The engine source stays in this private repo; the
+# changelog is disabled so no commit message of ours travels with the
+# release.
+#
+# The git tag carries an `agent/` prefix because this module also ships
+# the worker; goreleaser wants a bare semver tag, so the workflow mirrors
+# `agent/vX.Y.Z` to a local `vX.Y.Z` and points GORELEASER_CURRENT_TAG at
+# it before running. Templates here therefore see the plain version.
+version: 2
+
+project_name: shieldscan-agent
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: shieldscan-agent
+    main: ./cmd/agent
+    binary: shieldscan-agent
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version=v{{ .Version }}
+
+archives:
+  - id: tarballs
+    formats: [tar.gz]
+    name_template: "shieldscan-agent_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - src: deploy/agent/shieldscan-agent.service
+        dst: shieldscan-agent.service
+      - src: deploy/agent/LICENSE
+        dst: LICENSE
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+signs:
+  # Keyless (Sigstore / GitHub OIDC) signature of checksums.txt. Verify:
+  #   cosign verify-blob --certificate checksums.txt.pem --signature checksums.txt.sig \
+  #     --certificate-identity-regexp 'github.com/mahmoudothman-cloud/shieldscan-engine' \
+  #     --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+  - id: checksums
+    cmd: cosign
+    certificate: "${artifact}.pem"
+    signature: "${artifact}.sig"
+    args: [sign-blob, --yes, --output-certificate, "${certificate}", --output-signature, "${signature}", "${artifact}"]
+    artifacts: checksum
+    output: true
+
+changelog:
+  disable: true
+
+release:
+  github:
+    owner: mahmoudothman-cloud
+    name: shieldscan-agent
+  name_template: "shieldscan-agent v{{ .Version }}"
+  draft: false
+  prerelease: auto
+  header: |
+    ShieldScan on-prem agent `v{{ .Version }}` — one static binary, outbound HTTPS only.
+
+    ```sh
+    curl -fsSL https://raw.githubusercontent.com/mahmoudothman-cloud/shieldscan-agent/main/install.sh | sh -s -- v{{ .Version }}
+    ```
+    Then `shieldscan-agent doctor`, and `shieldscan-agent enroll --api <your ShieldScan URL> --token <one-time token>` from Settings → Agents.
+  footer: |
+    `checksums.txt` is signed with Sigstore (keyless); `checksums.txt.pem` + `checksums.txt.sig` are beside it. See the README for the `cosign verify-blob` line.

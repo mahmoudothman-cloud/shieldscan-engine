@@ -1,0 +1,51 @@
+# Release the on-prem agent (M14, design A3): on an `agent/vX.Y.Z` tag,
+# build linux/darwin × amd64/arm64 with goreleaser and publish the
+# archives + signed checksums as a release of the PUBLIC repo
+# mahmoudothman-cloud/shieldscan-agent. Source never leaves this repo.
+#
+# Needs the repo secret AGENT_RELEASE_TOKEN: a fine-grained PAT with
+# `contents: write` on shieldscan-agent only.
+name: agent-release
+
+on:
+  push:
+    tags: ["agent/v*"]
+
+permissions:
+  contents: read
+  id-token: write # Sigstore keyless signing of checksums.txt
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.10"
+          cache: true
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Tests for what we ship
+        run: go vet ./cmd/agent/... ./internal/agent/... && go test -race -count=1 ./internal/agent/... ./cmd/agent/...
+
+      - name: Mirror agent/vX.Y.Z to a bare semver tag for goreleaser
+        id: ver
+        run: |
+          VERSION="${GITHUB_REF_NAME#agent/}"
+          case "$VERSION" in v[0-9]*) ;; *) echo "tag must look like agent/vX.Y.Z, got $GITHUB_REF_NAME"; exit 1;; esac
+          git tag -f "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GORELEASER_CURRENT_TAG: ${{ steps.ver.outputs.version }}
+          GITHUB_TOKEN: ${{ secrets.AGENT_RELEASE_TOKEN }}
