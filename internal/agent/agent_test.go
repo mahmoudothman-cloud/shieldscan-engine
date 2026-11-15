@@ -394,7 +394,7 @@ func TestInventory_ReportsMissingToolsWithoutFailing(t *testing.T) {
 	for _, name := range ToolNames() {
 		assert.Equal(t, "missing", inv[name].Status, name)
 	}
-	reg, missing := BuildRegistry(zerolog.Nop())
+	reg, missing := BuildRegistry(context.Background(), zerolog.Nop())
 	assert.Empty(t, reg.Engines())
 	assert.ElementsMatch(t, []string{"nuclei", "sslyze", "nikto", "wapiti", "nmap"}, missing)
 }
@@ -407,4 +407,16 @@ func TestFirstVersionLine(t *testing.T) {
 	assert.Equal(t, "", firstVersionLine("no number here"))
 	assert.Equal(t, "SSLyze version 6.1.0",
 		firstVersionLine("usage: sslyze [-h] [--update_trust_stores]\n  --json_out JSON_FILE\nSSLyze version 6.1.0\n"))
+}
+
+func TestNiktoTLSCapable(t *testing.T) {
+	t.Setenv("SHIELDSCAN_NIKTO_TLS_CAPABLE", "")
+	assert.True(t, niktoTLSCapable(zerolog.Nop(), ToolHealth{Status: "ok", Version: "Nikto 2.6.1 (LW 2.5)"}))
+	assert.True(t, niktoTLSCapable(zerolog.Nop(), ToolHealth{Status: "ok", Version: "Nikto 2.5.0"}))
+	assert.False(t, niktoTLSCapable(zerolog.Nop(), ToolHealth{Status: "ok", Version: "Nikto 2.1.5"}))
+	assert.False(t, niktoTLSCapable(zerolog.Nop(), ToolHealth{Status: "error"}))
+	t.Setenv("SHIELDSCAN_NIKTO_TLS_CAPABLE", "0")
+	assert.False(t, niktoTLSCapable(zerolog.Nop(), ToolHealth{Status: "ok", Version: "Nikto 2.6.1"}), "explicit env wins")
+	t.Setenv("SHIELDSCAN_NIKTO_TLS_CAPABLE", "1")
+	assert.True(t, niktoTLSCapable(zerolog.Nop(), ToolHealth{Status: "ok", Version: "Nikto 2.1.5"}), "explicit env wins")
 }

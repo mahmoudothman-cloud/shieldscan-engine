@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -182,7 +184,7 @@ func stripANSI(s string) string {
 // installed. Returns the registry and the names it could not register.
 // Agent-side nmap allows RFC1918 and loopback targets: the agent is
 // inside the network it scans, which is the whole point (design A5).
-func BuildRegistry(log zerolog.Logger) (*worker.Registry, []string) {
+func BuildRegistry(ctx context.Context, log zerolog.Logger) (*worker.Registry, []string) {
 	runners := map[string]tools.ToolRunner{}
 	var missing []string
 	for _, s := range toolSpecs {
@@ -206,7 +208,7 @@ func BuildRegistry(log zerolog.Logger) (*worker.Registry, []string) {
 		case "nikto":
 			runners[s.Name] = nikto.NewNiktoRunner(nikto.Config{
 				BinaryPath: path,
-				TLSCapable: envEnabled("SHIELDSCAN_NIKTO_TLS_CAPABLE"),
+				TLSCapable: niktoTLSCapable(log, probe(ctx, s)),
 			}, log)
 		case "wapiti":
 			runners[s.Name] = wapiti.NewWapitiRunner(wapiti.Config{BinaryPath: path}, log)
@@ -218,6 +220,26 @@ func BuildRegistry(log zerolog.Logger) (*worker.Registry, []string) {
 	}
 	return worker.NewRegistry(runners), missing
 }
+
+// niktoTLSCapable: SHIELDSCAN_NIKTO_TLS_CAPABLE wins when set; otherwise
+// Nikto 2.5+ (the from-source releases) is TLS-capable and the apt 2.1.x
+// is not. Unknown versions are treated as not capable, as the worker does.
+func niktoTLSCapable(log zerolog.Logger, h ToolHealth) bool {
+	if v := os.Getenv("SHIELDSCAN_NIKTO_TLS_CAPABLE"); v != "" {
+		return envEnabled("SHIELDSCAN_NIKTO_TLS_CAPABLE")
+	}
+	m := niktoVersion.FindStringSubmatch(h.Version)
+	if m == nil {
+		return false
+	}
+	major, _ := strconv.Atoi(m[1])
+	minor, _ := strconv.Atoi(m[2])
+	capable := major > 2 || (major == 2 && minor >= 5)
+	log.Info().Str("version", h.Version).Bool("tls_capable", capable).Msg("nikto TLS capability inferred from version")
+	return capable
+}
+
+var niktoVersion = regexp.MustCompile(`Nikto (\d+)\.(\d+)`)
 
 func nucleiTemplatesDir() string {
 	if d := os.Getenv("SHIELDSCAN_NUCLEI_TEMPLATES"); d != "" {

@@ -49,7 +49,7 @@ func Run(ctx context.Context, cfg RunConfig) error {
 		cfg.Client = NewClient(cfg.State.APIBase, cfg.State.AgentKey, cfg.Version, log)
 	}
 	if cfg.Registry == nil {
-		cfg.Registry, cfg.Missing = BuildRegistry(log)
+		cfg.Registry, cfg.Missing = BuildRegistry(ctx, log)
 	}
 	if cfg.HeartbeatInterval <= 0 {
 		cfg.HeartbeatInterval = DefaultHeartbeatInterval
