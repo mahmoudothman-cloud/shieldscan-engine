@@ -131,12 +131,12 @@ func buildArgs(cfg Config) func(tools.Target, tools.ScanConfig) []string {
 			args = append(args, "-rl", strconv.Itoa(rps))
 		}
 
-		// Depth → severity filter. "deep" / unknown → no filter.
-		switch scanCfg.Depth {
-		case "quick":
+		// Depth → severity filter. Only the legacy "quick" depth filters
+		// (high/critical); "standard" and "deep" run every severity — a
+		// full scan must report at least what the quick (tag-bounded,
+		// unfiltered) scan reports. Benchmark 2026-11-16, DRIFT-LOG.
+		if scanCfg.Depth == "quick" {
 			args = append(args, "-severity", "high,critical")
-		case "standard":
-			args = append(args, "-severity", "medium,high,critical")
 		}
 		// Template tag filter (see package notes). Tags are passed
 		// through verbatim; Nuclei ignores unknown tags.

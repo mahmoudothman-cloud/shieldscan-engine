@@ -97,12 +97,14 @@ func TestBuildArgs_QuickDepth(t *testing.T) {
 	assert.Contains(t, joined, "-u https://app.example.com")
 }
 
-func TestBuildArgs_StandardDepth(t *testing.T) {
+func TestBuildArgs_StandardDepth_NoSeverityFilter(t *testing.T) {
+	// A full scan reports every severity (the quick scan already does);
+	// only the legacy "quick" depth filters. Benchmark 2026-11-16.
 	args := buildArgs(testConfig())(
 		tools.Target{URL: "https://app.example.com"},
 		tools.ScanConfig{Depth: "standard"},
 	)
-	assert.Contains(t, strings.Join(args, " "), "-severity medium,high,critical")
+	assert.NotContains(t, strings.Join(args, " "), "-severity")
 }
 
 func TestBuildArgs_TemplateCategories_AddsTagsFlag(t *testing.T) {
