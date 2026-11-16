@@ -139,6 +139,16 @@ func NewBuildScan(cfg Config) func(context.Context, tools.Target, tools.ScanConf
 				return nil, err
 			}
 		case ScanModeFull:
+			// (d') Browser-driven crawl so an SPA's API endpoints exist
+			// for the active scan to attack (see ajaxspider.go).
+			if n, err := runAjaxSpider(ctx, client, target.URL, ajaxSpiderDuration(scanCfg.Depth)); err != nil {
+				if ctx.Err() != nil {
+					return nil, err
+				}
+				client.Log.Warn().Err(err).Msg("zap: ajax spider failed; active scan runs on the classic spider's URLs only")
+			} else {
+				client.Log.Info().Int("urls", n).Msg("zap: ajax spider finished")
+			}
 			// (e) Mode C — also run active scan.
 			ac := ascanConfig{
 				scanPolicyName: scanCfg.ExtraArgs["zap.scan_policy"],

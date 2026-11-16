@@ -36,6 +36,7 @@ type stubZAPServer struct {
 	createSessionCalls atomic.Int32
 	setTokenCalls      atomic.Int32
 	spiderScanCalls    atomic.Int32
+	ajaxSpiderCalls    atomic.Int32
 	ascanScanCalls     atomic.Int32
 	alertsCalls        atomic.Int32
 
@@ -49,13 +50,16 @@ type stubZAPServer struct {
 	lastPolicyArg string
 
 	// Configurable response state
-	spiderStatus      string // returned for /spider/view/status/
-	ascanStatus       string // returned for /ascan/view/status/
-	passiveRecords    string // returned for /pscan/view/recordsToScan/
-	alerts            []map[string]any
-	scanPolicyNames   []string
-	versionResponse   map[string]string
-	failNextEndpoints map[string]int // path → 5xx count remaining
+	ajaxSpiderFails    bool // /ajaxSpider/action/scan/ answers an error body
+	lastAjaxURL        string
+	lastAjaxMaxMinutes string
+	spiderStatus       string // returned for /spider/view/status/
+	ascanStatus        string // returned for /ascan/view/status/
+	passiveRecords     string // returned for /pscan/view/recordsToScan/
+	alerts             []map[string]any
+	scanPolicyNames    []string
+	versionResponse    map[string]string
+	failNextEndpoints  map[string]int // path → 5xx count remaining
 }
 
 func newStubZAPServer(t *testing.T) *stubZAPServer {
@@ -118,6 +122,27 @@ func (s *stubZAPServer) handle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"status": s.spiderStatus})
 	case strings.HasPrefix(r.URL.Path, "/JSON/pscan/view/recordsToScan/"):
 		writeJSON(w, map[string]string{"recordsToScan": s.passiveRecords})
+	case strings.HasPrefix(r.URL.Path, "/JSON/ajaxSpider/action/setOptionMaxDuration/"):
+		s.mu.Lock()
+		s.lastAjaxMaxMinutes = r.URL.Query().Get("Integer")
+		s.mu.Unlock()
+		writeJSON(w, map[string]string{"Result": "OK"})
+	case strings.HasPrefix(r.URL.Path, "/JSON/ajaxSpider/action/scan/"):
+		s.ajaxSpiderCalls.Add(1)
+		s.mu.Lock()
+		s.lastAjaxURL = r.URL.Query().Get("url")
+		s.mu.Unlock()
+		if s.ajaxSpiderFails {
+			writeJSON(w, map[string]string{"code": "bad_action", "message": "ajaxSpider add-on not installed"})
+			return
+		}
+		writeJSON(w, map[string]string{"Result": "OK"})
+	case strings.HasPrefix(r.URL.Path, "/JSON/ajaxSpider/view/status/"):
+		writeJSON(w, map[string]string{"status": "stopped"})
+	case strings.HasPrefix(r.URL.Path, "/JSON/ajaxSpider/view/numberOfResults/"):
+		writeJSON(w, map[string]string{"numberOfResults": "42"})
+	case strings.HasPrefix(r.URL.Path, "/JSON/ajaxSpider/action/stop/"):
+		writeJSON(w, map[string]string{"Result": "OK"})
 	case strings.HasPrefix(r.URL.Path, "/JSON/ascan/action/scan/"):
 		s.ascanScanCalls.Add(1)
 		s.mu.Lock()

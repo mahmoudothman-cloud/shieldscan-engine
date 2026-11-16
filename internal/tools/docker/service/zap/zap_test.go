@@ -44,6 +44,7 @@ func TestNewBuildScan_ModeQuick_EndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, findings, 2, "False Positive dropped; CSP + XSS retained")
 	assert.Equal(t, int32(1), stub.spiderScanCalls.Load())
+	assert.Equal(t, int32(0), stub.ajaxSpiderCalls.Load(), "Mode B (quick) — no browser crawl")
 	assert.Equal(t, int32(0), stub.ascanScanCalls.Load(), "Mode B (quick) — ascan must NOT run")
 	assert.Equal(t, int32(1), stub.alertsCalls.Load())
 }
@@ -58,7 +59,27 @@ func TestNewBuildScan_ModeFull_RunsActiveScan(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, findings, 2)
 	assert.Equal(t, int32(1), stub.spiderScanCalls.Load())
+	assert.Equal(t, int32(1), stub.ajaxSpiderCalls.Load(), "Mode C — AJAX spider runs before the active scan (benchmark 2026-11-16)")
+	assert.Equal(t, "https://example.com/", stub.lastAjaxURL)
+	assert.Equal(t, "8", stub.lastAjaxMaxMinutes, "standard depth: 8-minute browser crawl")
 	assert.Equal(t, int32(1), stub.ascanScanCalls.Load(), "Mode C — ascan MUST run")
+}
+
+func TestNewBuildScan_ModeFull_AjaxSpiderFailureIsTolerated(t *testing.T) {
+	// No add-on / no browser in the container: the active scan still runs
+	// on what the classic spider found.
+	stub := newStubZAPServer(t)
+	stub.ajaxSpiderFails = true
+	bs := NewBuildScan(Config{APIKey: stubAPIKey})
+	findings, err := bs(context.Background(),
+		tools.Target{URL: "https://example.com/"},
+		tools.ScanConfig{Depth: "deep"},
+		newRunnerClient(t, stub))
+	require.NoError(t, err)
+	require.Len(t, findings, 2)
+	assert.Equal(t, int32(1), stub.ajaxSpiderCalls.Load())
+	assert.Equal(t, "15", stub.lastAjaxMaxMinutes, "deep depth: 15-minute browser crawl")
+	assert.Equal(t, int32(1), stub.ascanScanCalls.Load())
 }
 
 func TestNewBuildScan_ModeFull_PolicyFromExtraArgs(t *testing.T) {
